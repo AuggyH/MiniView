@@ -97,14 +97,14 @@ void App::open_image(const std::wstring& path) {
         uint32_t iw, ih;
         m_renderer.image_size(iw, ih);
         wchar_t title[256];
-        swprintf_s(title, L"MinView — %s (%u×%u) [%lldms]",
+        swprintf_s(title, L"MinView \u2014 %ls (%u\u00d7%u) [%lldms]",
             filename.c_str(), iw, ih, total_ms);
         SetWindowTextW(m_window.handle(), title);
 
         m_window.invalidate();
     } catch (const std::exception& e) {
         wchar_t title[512];
-        swprintf_s(title, L"MinView — Error: %hs", e.what());
+        swprintf_s(title, L"MinView \u2014 Error: %hs", e.what());
         SetWindowTextW(m_window.handle(), title);
     }
 }
