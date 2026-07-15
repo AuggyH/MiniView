@@ -35,6 +35,8 @@ target_link_libraries(MinView
     d2d1
     dwrite
     windowscodecs
+    d3d11
+    dxgi
     dxguid
     ole32
     comctl32
@@ -44,6 +46,9 @@ target_link_libraries(MinView
 
 # MSVC warnings
 target_compile_options(MinView PRIVATE /W4 /utf-8)
+
+# Disable Windows min/max macros (conflict with std::min/std::max)
+target_compile_definitions(MinView PRIVATE NOMINMAX)
 
 # Enable manifest for DPI awareness
 set_target_properties(MinView PROPERTIES

@@ -63,7 +63,7 @@ bool Renderer::create_device_resources(HWND hwnd) {
     if (FAILED(hr)) return false;
 
     // ── Direct2D factory + device ──
-    hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &m_d2d_factory);
+    hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_PPV_ARGS(&m_d2d_factory));
     if (FAILED(hr)) return false;
 
     hr = m_d2d_factory->CreateDevice(dxgi_device.Get(), &m_d2d_device);

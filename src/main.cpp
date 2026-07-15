@@ -3,7 +3,7 @@
 
 #include "app.h"
 
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
+int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE, PWSTR, int /*nCmdShow*/) {
     // Initialize COM (required for WIC)
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) return 1;

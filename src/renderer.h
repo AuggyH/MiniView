@@ -2,6 +2,8 @@
 #include <d2d1_3.h>
 #include <dwrite.h>
 #include <wincodec.h>
+#include <d3d11_1.h>
+#include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <memory>
 #include <optional>

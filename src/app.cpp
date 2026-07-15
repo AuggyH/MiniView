@@ -82,9 +82,6 @@ void App::open_image(const std::wstring& path) {
         // Decode full resolution via WIC
         auto bitmap = m_decoder.decode(path);
 
-        auto t1 = std::chrono::high_resolution_clock::now();
-        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-
         // Upload to GPU at full resolution
         m_renderer.upload_image(bitmap.Get());
 
