@@ -1,0 +1,2 @@
+STATIC class window: [HELLO_STATIC_WINDOW]
+Dialog class found: 0000000000000000
