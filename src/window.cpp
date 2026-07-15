@@ -4,7 +4,6 @@
 namespace mv {
 
 constexpr const wchar_t* CLASS_NAME = L"MinViewWindow";
-constexpr const wchar_t* WINDOW_TITLE = L"MinView";
 
 Window::~Window() {
     if (m_hwnd) {
@@ -27,7 +26,6 @@ bool Window::create(const std::wstring& title, int width, int height) {
 
     RegisterClassExW(&wc);
 
-    // Calculate window rect for desired client area
     RECT rect = {0, 0, width, height};
     AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE,
         WS_EX_APPWINDOW | WS_EX_WINDOWEDGE);
@@ -78,37 +76,28 @@ Window* Window::get_this(HWND hwnd) {
 }
 
 LRESULT Window::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    // Store this pointer on create
+    // WM_NCCREATE: store this pointer, return TRUE to continue
     if (msg == WM_NCCREATE) {
         auto* cs = reinterpret_cast<CREATESTRUCT*>(lp);
         auto* w  = static_cast<Window*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(w));
         w->m_hwnd = hwnd;
-        return DefWindowProc(hwnd, msg, wp, lp);
+        return TRUE;
     }
 
     auto* w = get_this(hwnd);
-    if (!w) return DefWindowProc(hwnd, msg, wp, lp);
+
+    // WM_DESTROY: post quit
+    if (msg == WM_DESTROY) {
+        PostQuitMessage(0);
+        if (w) w->m_hwnd = nullptr;
+        return 0;
+    }
 
     // Custom callback
-    if (w->m_callback) {
+    if (w && w->m_callback) {
         LRESULT result = w->m_callback(hwnd, msg, wp, lp);
-        // Return 0 means "handled internally", -1 means "use default"
         if (result != -1) return result;
-    }
-
-    switch (msg) {
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        w->m_hwnd = nullptr;
-        return 0;
-
-    case WM_SIZE: {
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        // Handled by callback
-        break;
-    }
     }
 
     return DefWindowProc(hwnd, msg, wp, lp);
