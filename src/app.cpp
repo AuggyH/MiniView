@@ -1,5 +1,6 @@
 #include "app.h"
 #include <stdexcept>
+#include <Windows.h>
 #include <filesystem>
 #include <algorithm>
 #include <windowsx.h>
