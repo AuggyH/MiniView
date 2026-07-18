@@ -149,6 +149,13 @@ void Renderer::resize(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) return;
     m_target_size = {width, height};
 
+    // Recalculate fit scale if we have an image loaded
+    if (m_img_width > 0 && m_img_height > 0) {
+        float sx = static_cast<float>(width)  / m_img_width;
+        float sy = static_cast<float>(height) / m_img_height;
+        m_fit_scale = std::min(sx, sy);
+    }
+
     if (m_swap_chain && m_d2d_context) {
         m_d2d_context->SetTarget(nullptr);
         HRESULT hr = m_swap_chain->ResizeBuffers(
@@ -186,6 +193,7 @@ void Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
     float sx = static_cast<float>(m_target_size.width)  / w;
     float sy = static_cast<float>(m_target_size.height) / h;
     m_scale = std::min(sx, sy);
+    m_fit_scale = m_scale;
     m_offset_x = 0;
     m_offset_y = 0;
     m_scroll_y = 0;

@@ -49,6 +49,7 @@ public:
     void  set_offset(float x, float y);
     void  set_scroll_y(float y);
     float scale()    const { return m_scale; }
+    float fit_scale() const { return m_fit_scale; }
     float offset_x() const { return m_offset_x; }
     float offset_y() const { return m_offset_y; }
     float scroll_y() const { return m_scroll_y; }
@@ -78,6 +79,7 @@ private:
     uint32_t    m_img_width = 0;
     uint32_t    m_img_height = 0;
     float       m_scale = 1.0f;
+    float       m_fit_scale = 1.0f;
     float       m_offset_x = 0.0f;
     float       m_offset_y = 0.0f;
     float       m_scroll_y = 0.0f;

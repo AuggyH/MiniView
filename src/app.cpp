@@ -355,9 +355,29 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 new_img_x - (ts.width  - iw * new_scale) / 2.0f,
                 new_img_y - (ts.height - ih * new_scale) / 2.0f);
         } else {
-            // Plain wheel = vertical scroll (for tall images)
-            float sy = m_renderer.scroll_y() - delta * 40.0f;
-            m_renderer.set_scroll_y(sy);
+            uint32_t iw, ih; m_renderer.image_size(iw, ih);
+            if (iw == 0 || ih == 0) return 0;
+            float cur_scale = m_renderer.scale();
+            float fit = m_renderer.fit_scale();
+            bool zoomed = (cur_scale > fit * 1.02f);
+
+            if (zoomed) {
+                // Zoomed in: scroll vertically, clamped to image bounds
+                float scaled_h = ih * cur_scale;
+                float win_h = static_cast<float>(m_renderer.target_size().height);
+                float center_y = (win_h - scaled_h) / 2.0f + m_renderer.offset_y();
+                float sy = m_renderer.scroll_y() - delta * 50.0f;
+                // Clamp: image top <= window top, image bottom >= window bottom
+                float max_scroll = -center_y;           // image top at window top
+                float min_scroll = win_h - scaled_h - center_y; // image bottom at window bottom
+                if (sy > max_scroll) sy = max_scroll;
+                if (sy < min_scroll) sy = min_scroll;
+                m_renderer.set_scroll_y(sy);
+            } else {
+                // Not zoomed: flip images
+                navigate_to(m_current_idx + (delta > 0 ? 1 : -1));
+                return 0;
+            }
         }
         m_window.invalidate();
         return 0;
@@ -371,12 +391,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (!m_has_image) return -1;
-        m_drag_pending = true;
-        m_dragging = false;
         m_drag_start_x = GET_X_LPARAM(lp);
         m_drag_start_y = GET_Y_LPARAM(lp);
-        m_drag_offset_x = m_renderer.offset_x();
-        m_drag_offset_y = m_renderer.offset_y();
+        m_drag_pending = true;
         SetCapture(hwnd);
         return 0;
 
@@ -384,11 +401,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_drag_pending) {
             int dx = GET_X_LPARAM(lp) - m_drag_start_x;
             int dy = GET_Y_LPARAM(lp) - m_drag_start_y;
-            if (dx*dx + dy*dy >= 16) {  // 4px threshold
+            if (dx*dx + dy*dy >= 16) {
                 m_drag_pending = false;
-                bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-                if (ctrl && !m_current_path.empty()) {
-                    // OLE drag export
+                if (!m_current_path.empty()) {
                     ReleaseCapture();
                     FileDataObject* data = new FileDataObject(m_current_path);
                     SimpleDropSource* src = new SimpleDropSource();
@@ -397,27 +412,18 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     data->Release();
                     src->Release();
                     SetCursor(LoadCursor(nullptr, IDC_ARROW));
-                    return 0;
                 }
-                // Start pan
-                m_dragging = true;
-                SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
+                return 0;
             }
             return 0;
         }
-        if (!m_dragging) return -1;
-        m_renderer.set_offset(
-            m_drag_offset_x + GET_X_LPARAM(lp) - m_drag_start_x,
-            m_drag_offset_y + GET_Y_LPARAM(lp) - m_drag_start_y);
-        m_window.invalidate();
-        return 0;
+        return -1;
 
     case WM_LBUTTONUP:
-        m_drag_pending = false;
-        if (!m_dragging) return -1;
-        m_dragging = false;
-        ReleaseCapture();
-        SetCursor(LoadCursor(nullptr, IDC_ARROW));
+        if (m_drag_pending) {
+            m_drag_pending = false;
+            ReleaseCapture();
+        }
         return 0;
 
     case WM_LBUTTONDBLCLK:
@@ -509,6 +515,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
         case VK_RETURN:
             if (m_grid_mode && m_grid_sel >= 0) { toggle_grid(); navigate_to(m_grid_sel); return 0; }
+            if (m_has_image) { toggle_fullscreen(hwnd); return 0; }
             return -1;
         case VK_DELETE:
             if (m_grid_mode && has_selection()) {
@@ -876,6 +883,7 @@ void App::toggle_fullscreen(HWND hwnd) {
             mi.rcMonitor.right  - mi.rcMonitor.left,
             mi.rcMonitor.bottom - mi.rcMonitor.top,
             SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        fit_to_window();
     } else {
         SetWindowLongW(hwnd, GWL_STYLE,   m_saved_style);
         SetWindowLongW(hwnd, GWL_EXSTYLE, m_saved_exstyle);
