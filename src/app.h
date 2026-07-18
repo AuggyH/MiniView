@@ -125,9 +125,9 @@ private:
 
     // Transition animation
     bool  m_animating = false;
-    float m_anim_t = 0.0f;     // 0→1
-    int   m_anim_dir = 1;      // 1=fade in, -1=fade out
+    float m_anim_t = 0.0f;
     UINT_PTR m_anim_timer = 0;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_snapshot;  // pre-transition frame
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     int   m_toolbar_h = 28;

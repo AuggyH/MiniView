@@ -49,6 +49,8 @@ public:
     void draw_title_bar(float w, int hover_btn, int press_btn,
         const std::vector<std::wstring>& menu_items, int active_menu);
     void draw_fade_overlay(float t);  // t: 0→1 = black→clear
+    HRESULT capture_snapshot(ID2D1Bitmap1** out);
+    void draw_bitmap_alpha(ID2D1Bitmap1* bmp, float alpha);
     void push_clip_below(float y);
     void pop_clip();
     float measure_text(const std::wstring& text, float font_size);
