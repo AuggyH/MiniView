@@ -399,6 +399,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
             m_grid_scroll_y -= static_cast<int>(delta * 60);
             if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
+            int max_scroll = std::max(0, m_grid_total_h - (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h));
+            if (m_grid_scroll_y > max_scroll) m_grid_scroll_y = max_scroll;
             m_scroll_active = true;
             m_window.invalidate();
             return 0;
@@ -1048,7 +1050,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     HMENU popup = CreatePopupMenu();
     switch (idx) {
     case 0: // 文件
-        AppendMenuW(popup, MF_STRING, 1, L"打开文件...\tCtrl+O");
+        AppendMenuW(popup, MF_STRING, IDM_OPEN_FILE, L"打开文件...\tCtrl+O");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         {
             bool has_sel = !m_grid_mode || m_grid_sel >= 0;
@@ -1069,7 +1071,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         }
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING | (m_recursive ? MF_CHECKED : 0), 16, L"递归浏览子文件夹\tCtrl+R");
-        AppendMenuW(popup, MF_STRING, IDM_THUMB_SQUARE, L"方形缩略图\tA");
+        AppendMenuW(popup, MF_STRING, IDM_THUMB_SQUARE,
+            m_thumb_square ? L"原始比例网格\tA" : L"方形缩略图\tA");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING, 30, L"查看生成信息\tI");
         break;
@@ -1147,8 +1150,9 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     // Handle commands
     switch (cmd) {
-    case 1: case 2: case 3: case 10: case 16:
+    case 2: case 3: case 10: case 16:
     case 20: case 21: case 30: case 31:
+    case IDM_OPEN_FILE:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
     case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
     case IDM_THUMB_SQUARE:
@@ -1771,11 +1775,11 @@ void App::grid_render() {
     int label_def = m_show_labels ? static_cast<int>(42 * dpi_scale) : 0;
 
     if (m_thumb_square) {
-        // ── Square grid: fixed cells, center-crop ──
-        int cell_w = eff_cell;
-        int cols = std::max(1, (grid_area_w + gap_h) / (cell_w + gap_h));
+        // ── Square grid: cells stretch to fill width ──
+        int cols = std::max(1, (grid_area_w + gap_h) / (eff_cell + gap_h));
         m_grid_cols = cols;
-        int x0 = (grid_area_w - cols * cell_w - (cols - 1) * gap_h) / 2;  // center
+        int cell_w = std::max(eff_cell, (grid_area_w - (cols - 1) * gap_h) / cols);
+        int x0 = (grid_area_w - cols * cell_w - (cols - 1) * gap_h) / 2;
         if (x0 < 0) x0 = 0;
 
         int cur_y = m_thumb_pad;
