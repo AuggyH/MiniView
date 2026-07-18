@@ -341,7 +341,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             uint32_t iw, ih; m_renderer.image_size(iw, ih);
             if (iw == 0 || ih == 0) return 0;
             float old_scale = m_renderer.scale();
-            float new_scale = std::clamp(old_scale * factor, 0.01f, 100.0f);
+            float new_scale = std::clamp(old_scale * factor, m_renderer.fit_scale(), 100.0f);
             if (new_scale == old_scale) return 0;
             D2D1_SIZE_U ts = m_renderer.target_size();
             float img_x = (ts.width  - iw * old_scale) / 2.0f;
@@ -910,7 +910,7 @@ void App::zoom_at_center(float factor) {
     uint32_t iw, ih; m_renderer.image_size(iw, ih);
     if (iw == 0 || ih == 0) return;
     float old_scale = m_renderer.scale();
-    float new_scale = std::clamp(old_scale * factor, 0.01f, 100.0f);
+    float new_scale = std::clamp(old_scale * factor, m_renderer.fit_scale(), 100.0f);
     if (new_scale == old_scale) return;
 
     D2D1_SIZE_U ts = m_renderer.target_size();
