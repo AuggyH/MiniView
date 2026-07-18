@@ -242,6 +242,13 @@ int App::run(const std::wstring& initial_path) {
     // Set initial DPI from monitor
     m_renderer.set_dpi(dpi, dpi);
 
+    // Scale thumbnail cell size by DPI
+    float scale = dpi / 96.0f;
+    m_thumb_size = static_cast<int>(160 * scale);
+    m_thumb_gap  = static_cast<int>(6 * scale);
+    m_thumb_pad  = static_cast<int>(12 * scale);
+    m_cell_size  = m_thumb_size + m_thumb_gap;
+
     SetMenu(m_window.handle(), build_menu_bar());
 
     start_preloader();
@@ -1130,9 +1137,9 @@ void App::toggle_grid() {
         start_thumb_loader();
 
         // Request first visible page of thumbnails
-        int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - THUMB_PAD * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP));
+        int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - m_thumb_pad * 2 + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
         m_grid_cols = cols;
-        int rows = (static_cast<int>(m_renderer.target_size().height) - THUMB_PAD * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP);
+        int rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / (m_thumb_size + m_thumb_gap);
         for (int i = 0; i < std::min(n, cols * (rows + 2)); ++i)
             request_thumb(i);
 
@@ -1150,8 +1157,8 @@ void App::toggle_grid() {
 }
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int col = (x - THUMB_PAD) / (THUMB_SIZE + THUMB_GAP);
-    int row = (y - THUMB_PAD + m_grid_scroll_y) / (THUMB_SIZE + THUMB_GAP);
+    int col = (x - m_thumb_pad) / (m_thumb_size + m_thumb_gap);
+    int row = (y - m_thumb_pad + m_grid_scroll_y) / (m_thumb_size + m_thumb_gap);
     if (col < 0 || col >= m_grid_cols) return;
     int idx = row * m_grid_cols + col;
     if (idx < 0 || idx >= static_cast<int>(m_index.size())) return;
@@ -1202,16 +1209,16 @@ void App::grid_navigate(int dir, bool shift) {
 void App::grid_ensure_visible() {
     if (m_grid_cols == 0) return;
     int row = m_grid_sel / m_grid_cols;
-    int cell_h = THUMB_SIZE + THUMB_GAP;
-    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - THUMB_PAD * 2) / cell_h;
+    int cell_h = m_thumb_size + m_thumb_gap;
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2) / cell_h;
 
     int top_y = row * cell_h;
     int bot_y = top_y + cell_h;
     int view_top = m_grid_scroll_y;
     int view_bot = m_grid_scroll_y + visible_rows * cell_h;
 
-    if (top_y < view_top) m_grid_scroll_y = top_y - THUMB_PAD;
-    else if (bot_y > view_bot) m_grid_scroll_y = bot_y - visible_rows * cell_h + THUMB_PAD;
+    if (top_y < view_top) m_grid_scroll_y = top_y - m_thumb_pad;
+    else if (bot_y > view_bot) m_grid_scroll_y = bot_y - visible_rows * cell_h + m_thumb_pad;
     if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
 }
 
@@ -1319,10 +1326,11 @@ void App::grid_render() {
     m_renderer.clear();
 
     int total = static_cast<int>(m_index.size());
-    int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - THUMB_PAD * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP));
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int cols = std::max(1, (grid_area_w - m_thumb_pad * 2 + m_thumb_gap) / m_cell_size);
     m_grid_cols = cols;
-    int cell = THUMB_SIZE + THUMB_GAP;
-    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - THUMB_PAD * 2 + THUMB_GAP) / cell;
+    int cell = m_thumb_size + m_thumb_gap;
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
     int top_row = m_grid_scroll_y / cell;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
 
@@ -1361,8 +1369,8 @@ void App::grid_render() {
             int idx = r * cols + c;
             if (idx >= total) break;
 
-            float x = static_cast<float>(THUMB_PAD + c * cell);
-            float y = static_cast<float>(THUMB_PAD + r * cell - m_grid_scroll_y);
+            float x = static_cast<float>(m_thumb_pad + c * cell);
+            float y = static_cast<float>(m_thumb_pad + r * cell - m_grid_scroll_y);
 
             // Look up in D2D cache (already populated by batch above)
             auto dit = m_thumb_d2d.find(idx);
@@ -1370,14 +1378,14 @@ void App::grid_render() {
             bool sel = (idx == m_grid_sel) || (idx < static_cast<int>(m_selected.size()) && m_selected[idx]);
             if (dit != m_thumb_d2d.end() && dit->second) {
                 // Draw placeholder bg + thumbnail on top
-                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(THUMB_SIZE), L"", sel);
-                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(THUMB_SIZE), dit->second.Get(), m_thumb_square);
+                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(m_thumb_size), L"", sel);
+                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(m_thumb_size), dit->second.Get(), m_thumb_square);
             } else {
                 // Placeholder with filename
                 std::wstring name = m_index.path_at(idx);
                 size_t pos = name.find_last_of(L"\\/");
                 if (pos != std::wstring::npos) name = name.substr(pos + 1);
-                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(THUMB_SIZE), name, sel);
+                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(m_thumb_size), name, sel);
             }
         }
     }
