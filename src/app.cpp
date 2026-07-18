@@ -413,7 +413,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / 0.20f;  // 200ms total
+            m_anim_t = elapsed / 0.30f;  // 300ms total
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
@@ -759,10 +759,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 start_transition(hwnd, true);
                 toggle_grid();
                 navigate_to(m_grid_sel);
+                begin_animation(hwnd);
             }
             return 0;
         }
-        if (m_has_image) { start_transition(hwnd, false); toggle_grid(); return 0; }
+        if (m_has_image) { start_transition(hwnd, false); toggle_grid(); begin_animation(hwnd); return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -801,6 +802,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_temp_preview = false;
                 start_transition(hwnd, false);
                 toggle_grid();
+                begin_animation(hwnd);
                 m_window.invalidate();
                 return 0;
             }
@@ -813,6 +815,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_temp_preview = false;
                 start_transition(hwnd, false);
                 toggle_grid();
+                begin_animation(hwnd);
                 m_window.invalidate();
                 return 0;
             }
@@ -821,6 +824,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 open_image(m_index.path_at(m_grid_sel));
                 m_from_grid = true;
                 m_temp_preview = true;
+                begin_animation(hwnd);
                 m_window.invalidate();
                 return 0;
             }
@@ -1366,24 +1370,24 @@ void App::copy_to_clipboard() {
 
 void App::start_transition(HWND hwnd, bool forward) {
     if (m_animating) return;
-
     m_anim_forward = forward;
     m_anim_thumb.Reset();
-
     if (forward) {
         auto it = m_thumb_d2d.find(m_grid_sel);
         if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
     } else {
         m_anim_dst = m_anim_src;
     }
+}
 
+void App::begin_animation(HWND hwnd) {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     m_anim_start = now.QuadPart;
     m_animating = true;
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
-    m_anim_timer = SetTimer(hwnd, 4, 10, nullptr);  // 10ms → smooth
+    m_anim_timer = SetTimer(hwnd, 4, 10, nullptr);
 }
 
 void App::toggle_fullscreen(HWND hwnd) {
