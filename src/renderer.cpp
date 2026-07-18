@@ -581,10 +581,12 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
             D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
             out_clickable->push_back({cr, value});
             if (sel_idx == cur_idx) {
+                float tw = measure_text(value, 10.0f * dpi_s) + 8.0f * dpi_s;
+                if (tw > val_w) tw = val_w;
+                D2D1_RECT_F hr = {x + pad + lw + cgap, y, x + pad + lw + cgap + tw, y2};
                 ComPtr<ID2D1SolidColorBrush> sel_br;
                 m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
-                m_d2d_context->FillRectangle(&cr, sel_br.Get());
-                // Re-draw text on top of highlight
+                m_d2d_context->FillRectangle(&hr, sel_br.Get());
                 draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
             }
         }
@@ -618,9 +620,12 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
                 out_clickable->push_back({cr, value});
                 if (sel_idx == cur_idx) {
+                    float tw = measure_text(value, 10.0f * dpi_s) + 8.0f * dpi_s;
+                    if (tw > val_w) tw = val_w;
+                    D2D1_RECT_F hr = {x + pad + lw + cgap, y, x + pad + lw + cgap + tw, y2};
                     ComPtr<ID2D1SolidColorBrush> sel_br;
                     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
-                    m_d2d_context->FillRectangle(&cr, sel_br.Get());
+                    m_d2d_context->FillRectangle(&hr, sel_br.Get());
                     draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
                 }
             }
