@@ -449,6 +449,23 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc) {
     m_d2d_context->DrawRectangle(&rc, br.Get(), 2.0f);
 }
 
+void Renderer::draw_label(float x, float y, float w, const std::wstring& text) {
+    if (!m_dwrite_factory || !m_d2d_context || text.empty()) return;
+    ComPtr<IDWriteTextFormat> tf;
+    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        11.0f * m_dpi_y / 96.0f, L"en-US", &tf);
+    ComPtr<IDWriteTextLayout> layout;
+    m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
+        tf.Get(), w, 28.0f, &layout);
+    DWRITE_TEXT_METRICS m;
+    layout->GetMetrics(&m);
+    ComPtr<ID2D1SolidColorBrush> br;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.6f, 0.6f, 0.64f, 1.0f), &br);
+    D2D1_POINT_2F pt = {x, y};
+    m_d2d_context->DrawTextLayout(pt, layout.Get(), br.Get());
+}
+
 void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,

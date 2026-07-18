@@ -583,6 +583,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case 'A':
             if (m_grid_mode) { toggle_thumb_square(); return 0; }
             return -1;
+        case 'L':
+            if (m_grid_mode) { m_show_labels = !m_show_labels; m_window.invalidate(); return 0; }
+            return -1;
         case 'I':
             toggle_info(); return 0;
         case 'N':
@@ -1641,6 +1644,14 @@ void App::grid_render() {
             if (sel) {
                 D2D1_RECT_F sel_rc = {x - 2, row_y - 2, x + w + 2, row_y + ri.row_h + 2};
                 m_renderer.draw_selection_border(sel_rc);
+            }
+            // Labels
+            if (m_show_labels) {
+                auto& spath = m_index.path_at(idx2);
+                size_t pos2 = spath.find_last_of(L"\\/");
+                std::wstring fname = (pos2 != std::wstring::npos) ? spath.substr(pos2 + 1) : spath;
+                float ly = row_y + ri.row_h + 2;
+                m_renderer.draw_label(x, ly, w, fname);
             }
         }
     }
