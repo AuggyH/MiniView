@@ -330,31 +330,75 @@ ImageMeta parse_comfyui(const std::string& prompt_json, const std::string* workf
     if (workflow_json && !workflow_json->empty()) {
         const auto& wf = *workflow_json;
 
-        // Extract widget value by index from a node's widgets_values
-        auto wf_widget = [&](const std::string& node_type, int idx = 0) -> std::string {
+        // Extract first string from widgets_values of a node type
+        auto wf_widget = [&](const std::string& node_type) -> std::string {
             size_t pos = 0;
             while (true) {
                 std::string search = "\"type\": \"" + node_type + "\"";
                 pos = wf.find(search, pos);
                 if (pos == std::string::npos) return "";
-                if (idx-- > 0) { pos++; continue; } // skip to nth match
                 size_t wv = wf.find("\"widgets_values\"", pos);
                 if (wv == std::string::npos || wv > pos + 5000) { pos++; continue; }
                 size_t ws = wf.find('[', wv);
                 if (ws == std::string::npos || ws > wv + 30) { pos++; continue; }
                 ws++;
-                while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t')) ws++;
+                while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t' || wf[ws] == '\n')) ws++;
                 if (ws >= wf.size() || wf[ws] != '"') { pos++; continue; }
-                size_t we = wf.find('"', ws + 1);
-                if (we == std::string::npos) { pos++; continue; }
-                return wf.substr(ws + 1, we - ws - 1);
+                // Read JSON string with \" escaping
+                std::string val;
+                size_t i = ws + 1;
+                while (i < wf.size()) {
+                    if (wf[i] == '\\' && i + 1 < wf.size()) {
+                        val += wf[i+1]; i += 2; // unescape
+                    } else if (wf[i] == '"') {
+                        break; // end of string
+                    } else {
+                        val += wf[i]; i++;
+                    }
+                }
+                return val;
             }
         };
 
-        // Positive prompt: try first CLIPTextEncode widget value
+        // Positive prompt: try "easy positive", then "CLIPTextEncode" with positive title
         if (m.positive_prompt.empty()) {
-            std::string text = wf_widget("CLIPTextEncode", 0);
+            std::string text = wf_widget("easy positive");
             if (!text.empty()) m.positive_prompt = utf8_to_wstring(text);
+        }
+        if (m.positive_prompt.empty()) {
+            // Find CLIPTextEncode with "positive" in title, get its widget value
+            size_t cp = 0;
+            while ((cp = wf.find("\"type\": \"CLIPTextEncode\"", cp)) != std::string::npos) {
+                // Check title for "positive" or "正"
+                size_t tp = wf.find("\"title\": \"", cp);
+                if (tp != std::string::npos && tp < cp + 500) {
+                    tp += 10;
+                    size_t te = wf.find('"', tp);
+                    if (te != std::string::npos) {
+                        std::string title = wf.substr(tp, te - tp);
+                        if (title.find("\\u6b63") != std::string::npos || title.find("positive") != std::string::npos) {
+                            size_t wv = wf.find("\"widgets_values\"", cp);
+                            if (wv != std::string::npos && wv < cp + 5000) {
+                                size_t ws = wf.find('[', wv);
+                                if (ws != std::string::npos && ws < wv + 30) {
+                                    ws++;
+                                    while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t')) ws++;
+                                    if (ws < wf.size() && wf[ws] == '"') {
+                                        size_t we = wf.find('"', ws + 1);
+                                        if (we != std::string::npos) {
+                                            std::string t = wf.substr(ws + 1, we - ws - 1);
+                                            if (!t.empty() && t.find_first_not_of("0123456789., []") != std::string::npos) {
+                                                m.positive_prompt = utf8_to_wstring(t);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                cp += 20;
+            }
         }
 
         // ── LoRA extraction ──
