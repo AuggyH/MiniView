@@ -568,7 +568,7 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
             m_d2d_context->PopLayer();
         }
-        y += sec_gap;  // track from scrolled position
+        y += dh + sec_gap;  // track from scrolled position
     }
 
     // ── Info rows (label emphasized, value slightly dimmed) ──
