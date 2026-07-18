@@ -516,7 +516,7 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     float dpi_s = m_dpi_y / 96.0f;
     float pad   = 24.0f * dpi_s;
-    float gap   = 16.0f * dpi_s;
+    float gap   = 8.0f * dpi_s;
     float sec_gap = 24.0f * dpi_s;
 
     float y0 = y_off;
