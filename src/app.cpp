@@ -1387,8 +1387,19 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
     auto it = m_thumb_d2d.find(thumb_idx);
     if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
 
+    // Pre-store target image size from thumbnail metadata (avoids stale image_size())
+    if (forward && thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
+        m_anim_iw = static_cast<float>(m_thumbs[thumb_idx].orig_w);
+        m_anim_ih = static_cast<float>(m_thumbs[thumb_idx].orig_h);
+        if (m_anim_iw < 1) m_anim_iw = 1;
+        if (m_anim_ih < 1) m_anim_ih = 1;
+    } else if (!forward) {
+        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        m_anim_iw = static_cast<float>(iw);
+        m_anim_ih = static_cast<float>(ih);
+    }
+
     if (!forward) {
-        // Only use cached src if valid (non-zero area)
         if (m_anim_src.right > m_anim_src.left && m_anim_src.bottom > m_anim_src.top)
             m_anim_dst = m_anim_src;
     }
@@ -2332,7 +2343,8 @@ void App::grid_render() {
 
     m_renderer.pop_clip();
     if (m_animating) {
-        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        uint32_t iw = static_cast<uint32_t>(m_anim_iw);
+        uint32_t ih = static_cast<uint32_t>(m_anim_ih);
         if (iw > 0 && ih > 0) {
             float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
                                static_cast<float>(m_renderer.target_size().height) / ih);
@@ -2364,7 +2376,8 @@ void App::render_frame() {
             m_renderer.draw_overlay();
         }
         if (m_animating) {
-            uint32_t iw, ih; m_renderer.image_size(iw, ih);
+            uint32_t iw = static_cast<uint32_t>(m_anim_iw);
+            uint32_t ih = static_cast<uint32_t>(m_anim_ih);
             if (iw > 0 && ih > 0) {
                 float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
                                    static_cast<float>(m_renderer.target_size().height) / ih);
@@ -2447,7 +2460,8 @@ void App::render_frame() {
     }
     m_renderer.pop_clip();
     if (m_animating) {
-        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        uint32_t iw = static_cast<uint32_t>(m_anim_iw);
+        uint32_t ih = static_cast<uint32_t>(m_anim_ih);
         if (iw > 0 && ih > 0) {
             float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
                                static_cast<float>(m_renderer.target_size().height) / ih);
