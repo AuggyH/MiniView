@@ -31,12 +31,19 @@ bool Window::create(const std::wstring& title, int width, int height) {
     AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE,
         WS_EX_APPWINDOW | WS_EX_WINDOWEDGE);
 
+    // Center window on screen
+    int win_w = rect.right - rect.left;
+    int win_h = rect.bottom - rect.top;
+    int screen_w = GetSystemMetrics(SM_CXSCREEN);
+    int screen_h = GetSystemMetrics(SM_CYSCREEN);
+    int pos_x = (screen_w - win_w) / 2;
+    int pos_y = (screen_h - win_h) / 2;
+
     m_hwnd = CreateWindowExW(
         WS_EX_APPWINDOW | WS_EX_WINDOWEDGE,
         CLASS_NAME, title.c_str(),
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        rect.right - rect.left, rect.bottom - rect.top,
+        pos_x, pos_y, win_w, win_h,
         nullptr, nullptr, hinst, this);
 
     if (!m_hwnd) return false;
