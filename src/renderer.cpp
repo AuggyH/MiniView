@@ -514,7 +514,11 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
 {
     if (!m_d2d_context || !m_text_format) return;
 
-    float pad = 12.0f;
+    float dpi_s = m_dpi_y / 96.0f;
+    float pad   = 24.0f * dpi_s;
+    float gap   = 16.0f * dpi_s;
+    float sec_gap = 24.0f * dpi_s;
+
     float y0 = y_off;
     float y = y0 + pad;
 
@@ -531,48 +535,67 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     ComPtr<ID2D1SolidColorBrush> white, grey;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.9f, 0.9f, 0.9f, 1.0f), &white);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.5f, 0.5f, 0.55f, 1.0f), &grey);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.45f, 0.45f, 0.50f, 1.0f), &grey);
 
-    // Preview thumbnail
+    float content_w = w - pad * 2;
+
+    // Preview thumbnail — fill content width, taller
     if (preview && pw > 0 && ph > 0) {
-        float thumb_w = w - pad * 2;
-        float thumb_h = thumb_w * 0.75f;  // taller preview
+        float thumb_w = content_w;
+        float thumb_h = thumb_w * 0.9f;
         float scale = std::min(thumb_w / pw, thumb_h / ph);
         float dw = pw * scale, dh = ph * scale;
         float ox = x + pad + (thumb_w - dw) / 2.0f;
         float oy = y + (thumb_h - dh) / 2.0f;
         D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
-        m_d2d_context->DrawBitmap(preview, &dest, 1.0f,
-            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
-        y = y_off + pad + thumb_h + pad;
+        // Rounded corners on preview
+        {
+            float pr = 4.0f * dpi_s;
+            D2D1_ROUNDED_RECT prr = {{ox, oy, ox + dw, oy + dh}, pr, pr};
+            ComPtr<ID2D1RoundedRectangleGeometry> pgeo;
+            m_d2d_factory->CreateRoundedRectangleGeometry(&prr, &pgeo);
+            m_d2d_context->PushLayer(
+                D2D1::LayerParameters(D2D1::InfiniteRect(), pgeo.Get(),
+                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    D2D1::IdentityMatrix(), 1.0f, nullptr, D2D1_LAYER_OPTIONS_NONE),
+                nullptr);
+            m_d2d_context->DrawBitmap(preview, &dest, 1.0f,
+                D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+            m_d2d_context->PopLayer();
+        }
+        y = y_off + pad + thumb_h + sec_gap;
     }
 
-    // Info rows — 2-column layout with text measurement
-    float lw = 80.0f, col_gap = 4.0f;
-    for (size_t i = 0; i < info.size(); ++i) {
-        auto& [label, value] = info[i];
-        if (y + 20 > h) break;
-        // Labels: 12pt grey; values: first row (filename) 14pt white, rest 12pt white
-        bool is_filename = (i == 0);
-        float vsize = is_filename ? 14.0f : 12.0f;
-        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
-        float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap,
-                                  value, white.Get(), vsize);
-        y = std::max(y1, y2);
+    // ── Info rows (justified 2-column) ──
+    float lw = 90.0f * dpi_s;
+    float cgap = 8.0f * dpi_s;
+    float val_w = content_w - lw - cgap;
+
+    for (auto& [label, value] : info) {
+        if (y + gap > y_off + h) break;
+        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 14.0f);
+        float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
+                                  value, white.Get(), 14.0f);
+        y = std::max(y1, y2) + gap - 4.0f * dpi_s;  // draw_text_line already adds 4px
     }
 
-    // Generation info section
+    // ── Generation info section ──
     if (!gen_info.empty()) {
-        y += 8;
-        D2D1_RECT_F tr = {x + pad, y, x + w - pad, y + 20};
-        m_d2d_context->DrawText(L"\u751F\u6210\u4FE1\u606F", 4, m_text_format.Get(), &tr, grey.Get());
-        y += 30;
+        y += sec_gap * 0.5f;
+        // Section title
+        {
+            ComPtr<ID2D1SolidColorBrush> title_br;
+            m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.7f, 0.7f, 0.75f, 1.0f), &title_br);
+            float ty = draw_text_line(x + pad, y, content_w, L"\u751F\u6210\u4FE1\u606F",
+                                      title_br.Get(), 16.0f);
+            y = ty + gap * 0.5f;
+        }
         for (auto& [label, value] : gen_info) {
-            if (y + 20 > h) break;
-            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
-            float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap,
-                                      value, white.Get(), 12.0f);
-            y = std::max(y1, y2);
+            if (y + gap > y_off + h) break;
+            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 14.0f);
+            float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
+                                      value, white.Get(), 14.0f);
+            y = std::max(y1, y2) + gap - 4.0f * dpi_s;
         }
     }
 }
