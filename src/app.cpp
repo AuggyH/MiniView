@@ -1062,11 +1062,11 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         {
             bool has_sel = !m_grid_mode || m_grid_sel >= 0;
-            AppendMenuW(popup, MF_STRING | (has_sel ? 0 : MF_GRAYED), 4, L"在资源管理器中打开");
+            AppendMenuW(popup, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_EXPLORER, L"在资源管理器中打开");
         }
         break;
     case 1: // 查看
-        AppendMenuW(popup, MF_STRING, 10, L"全屏\tF11");
+        AppendMenuW(popup, MF_STRING, IDM_FULLSCREEN, L"全屏\tF11");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         {
             HMENU sort_menu = CreatePopupMenu();
@@ -1078,21 +1078,21 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
             AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"排序方式");
         }
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING | (m_recursive ? MF_CHECKED : 0), 16, L"递归浏览子文件夹\tCtrl+R");
+        AppendMenuW(popup, MF_STRING | (m_recursive ? MF_CHECKED : 0), IDM_RECURSIVE, L"递归浏览子文件夹\tCtrl+R");
         AppendMenuW(popup, MF_STRING, IDM_THUMB_SQUARE,
             m_thumb_square ? L"原始比例网格\tA" : L"方形缩略图\tA");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, 30, L"查看生成信息\tI");
+        AppendMenuW(popup, MF_STRING, IDM_INFO, L"查看生成信息\tI");
         break;
     case 2: // 编辑
-        AppendMenuW(popup, MF_STRING, 20, L"复制文件\tCtrl+C");
-        AppendMenuW(popup, MF_STRING, 21, L"复制图片数据");
+        AppendMenuW(popup, MF_STRING, IDM_COPY, L"复制文件\tCtrl+C");
+        AppendMenuW(popup, MF_STRING, IDM_COPY, L"复制图片数据");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, 2, L"移动到回收站\tDel");
-        AppendMenuW(popup, MF_STRING, 3, L"永久删除\tShift+Del");
+        AppendMenuW(popup, MF_STRING, IDM_DELETE, L"移动到回收站\tDel");
+        AppendMenuW(popup, MF_STRING, IDM_DELETE_PERM, L"永久删除\tShift+Del");
         break;
     case 3: // 帮助
-        AppendMenuW(popup, MF_STRING, 31, L"关于 MinView...");
+        AppendMenuW(popup, MF_STRING, IDM_ABOUT, L"关于 MinView...");
         break;
     }
 
@@ -1158,12 +1158,12 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     // Handle commands
     switch (cmd) {
-    case 2: case 3: case 10: case 16:
-    case 20: case 21: case 30: case 31:
-    case IDM_OPEN_FILE:
+    case IDM_OPEN_FILE: case IDM_FULLSCREEN: case IDM_RECURSIVE:
+    case IDM_THUMB_SQUARE: case IDM_INFO:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
     case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
-    case IDM_THUMB_SQUARE:
+    case IDM_COPY: case IDM_DELETE: case IDM_DELETE_PERM:
+    case IDM_EXPLORER: case IDM_ABOUT:
         SendMessageW(hwnd, WM_COMMAND, cmd, 0); break;
     }
 }
