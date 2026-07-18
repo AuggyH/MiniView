@@ -587,8 +587,8 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 if (hl_h < 10.0f * dpi_s) hl_h = 10.0f * dpi_s;
                 float tw = measure_text(value, 10.0f * dpi_s);
                 float hw = std::min(tw + 10.0f * dpi_s, val_w);
-                float hx = x + pad + lw + cgap - 5.0f * dpi_s;  // symmetric left+right padding
-                D2D1_RECT_F hr = {hx, py, hx + hw + 5.0f * dpi_s, py + hl_h};
+                float hx = x + pad + lw + cgap - 4.0f * dpi_s;
+                D2D1_RECT_F hr = {hx, py, hx + hw + 4.0f * dpi_s, py + hl_h};
                 D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                 ComPtr<ID2D1SolidColorBrush> sel_br;
                 m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
@@ -631,8 +631,8 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                     if (hl_h < 10.0f * dpi_s) hl_h = 10.0f * dpi_s;
                     float tw = measure_text(value, 10.0f * dpi_s);
                     float hw = std::min(tw + 10.0f * dpi_s, val_w);
-                    float hx = x + pad + lw + cgap - 5.0f * dpi_s;
-                    D2D1_RECT_F hr = {hx, py, hx + hw + 5.0f * dpi_s, py + hl_h};
+                    float hx = x + pad + lw + cgap - 4.0f * dpi_s;
+                    D2D1_RECT_F hr = {hx, py, hx + hw + 4.0f * dpi_s, py + hl_h};
                     D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                     ComPtr<ID2D1SolidColorBrush> sel_br;
                     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
