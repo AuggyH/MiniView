@@ -723,10 +723,7 @@ float Renderer::draw_text_line(float x, float y, float w,
         fmt, w, max_lines > 0 ? font_size * m_dpi_y / 96.0f * 1.4f * max_lines : 200.0f, &layout);
     if (FAILED(hr)) return y + 20;
 
-    DWRITE_TEXT_METRICS metrics;
-    layout->GetMetrics(&metrics);
-
-    // Ellipsis trimming when max_lines is set
+    // Set trimming before getting metrics
     if (max_lines > 0) {
         ComPtr<IDWriteTextLayout1> layout1;
         layout.As(&layout1);
@@ -735,8 +732,11 @@ float Renderer::draw_text_line(float x, float y, float w,
             ComPtr<IDWriteInlineObject> ellipsis;
             m_dwrite_factory->CreateEllipsisTrimmingSign(fmt, &ellipsis);
             layout1->SetTrimming(&trimming, ellipsis.Get());
-            }
+        }
     }
+
+    DWRITE_TEXT_METRICS metrics;
+    layout->GetMetrics(&metrics);
     if (out_width) *out_width = metrics.widthIncludingTrailingWhitespace;
     float h = metrics.height;
     if (max_lines > 0) {
