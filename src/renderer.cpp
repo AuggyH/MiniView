@@ -914,6 +914,24 @@ void Renderer::draw_fade_overlay(float t) {
     m_d2d_context->FillRectangle(&rc, br.Get());
 }
 
+HRESULT Renderer::capture_snapshot(ID2D1Bitmap1** out) {
+    if (!m_d2d_context) return E_FAIL;
+    D2D1_SIZE_U sz = m_target_size;
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    HRESULT hr = m_d2d_context->CreateBitmap(sz, nullptr, 0, &props, out);
+    if (FAILED(hr)) return hr;
+    return (*out)->CopyFromRenderTarget(nullptr, m_d2d_context.Get(), nullptr);
+}
+
+void Renderer::draw_bitmap_alpha(ID2D1Bitmap1* bmp, float alpha) {
+    if (!m_d2d_context || !bmp) return;
+    D2D1_SIZE_F sz = bmp->GetSize();
+    D2D1_RECT_F rc = {0, 0, sz.width, sz.height};
+    m_d2d_context->DrawBitmap(bmp, &rc, alpha, D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
+}
+
 void Renderer::push_clip_below(float y) {
     if (!m_d2d_context) return;
     D2D1_RECT_F clip = {0, y, static_cast<float>(m_target_size.width),
