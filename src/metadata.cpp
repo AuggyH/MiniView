@@ -243,8 +243,9 @@ ImageMeta extract_metadata(const std::wstring& path) {
 
     auto texts = read_png_texts(path);
 
-    // Check for ComfyUI workflow (keyword "prompt")
+    // Check for ComfyUI workflow (keywords: "prompt" or "workflow")
     auto it = texts.find("prompt");
+    if (it == texts.end()) it = texts.find("workflow");
     if (it != texts.end()) {
         return parse_comfyui(it->second);
     }
