@@ -825,7 +825,11 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     float pad = 12.0f * dpi_s;
     float btn_w = 46.0f * dpi_s;
 
-    // ── Background (fully immersive — no fill, content shows through) ──
+    // ── Subtle background (translucent, immersive but readable) ──
+    ComPtr<ID2D1SolidColorBrush> bg;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.04f, 0.04f, 0.06f, 0.55f), &bg);
+    D2D1_RECT_F rc = {0, 0, w, h};
+    m_d2d_context->FillRectangle(&rc, bg.Get());
 
     // ── Brushes ──
     ComPtr<ID2D1SolidColorBrush> title_br, menu_br, menu_hover_bg;
