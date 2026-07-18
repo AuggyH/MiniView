@@ -566,15 +566,15 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     }
 
     // ── Info rows (justified 2-column) ──
-    float lw = 90.0f * dpi_s;
+    float lw = 70.0f * dpi_s;
     float cgap = 8.0f * dpi_s;
     float val_w = content_w - lw - cgap;
 
     for (auto& [label, value] : info) {
         if (y + gap > y_off + h) break;
-        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 14.0f);
+        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
         float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                  value, white.Get(), 14.0f);
+                                  value, white.Get(), 12.0f);
         y = std::max(y1, y2) + gap - 4.0f * dpi_s;  // draw_text_line already adds 4px
     }
 
@@ -586,14 +586,14 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
             ComPtr<ID2D1SolidColorBrush> title_br;
             m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.7f, 0.7f, 0.75f, 1.0f), &title_br);
             float ty = draw_text_line(x + pad, y, content_w, L"\u751F\u6210\u4FE1\u606F",
-                                      title_br.Get(), 16.0f);
+                                      title_br.Get(), 12.0f);
             y = ty + gap * 0.5f;
         }
         for (auto& [label, value] : gen_info) {
             if (y + gap > y_off + h) break;
-            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 14.0f);
+            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
             float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                      value, white.Get(), 14.0f);
+                                      value, white.Get(), 12.0f);
             y = std::max(y1, y2) + gap - 4.0f * dpi_s;
         }
     }
