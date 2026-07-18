@@ -8,6 +8,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <uxtheme.h>
+#include <commctrl.h>
 #include <commdlg.h>
 #include <ole2.h>
 

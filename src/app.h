@@ -116,6 +116,7 @@ private:
     int   m_toolbar_h = 28;
     std::vector<std::wstring> m_toolbar_items = {L"文件", L"查看", L"编辑", L"帮助"};
     int   m_toolbar_active = -1;
+    HWND  m_tooltip = nullptr;
     bool  m_scroll_active = false;
     int   m_grid_scroll_saved = 0;
     int   m_grid_saved_idx = 0;
