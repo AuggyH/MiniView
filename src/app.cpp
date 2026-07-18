@@ -392,7 +392,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (ctrl) {
                 // Ctrl+Wheel = zoom thumbnail size
                 m_thumb_zoom = std::clamp(m_thumb_zoom + delta * 0.1f, 0.4f, 3.0f);
-                m_thumb_d2d.clear();  // force D2D bitmap recreate at new size
                 m_window.invalidate();
                 return 0;
             }
