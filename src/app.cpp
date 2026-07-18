@@ -256,6 +256,7 @@ int App::run(const std::wstring& initial_path) {
     SetMenu(m_window.handle(), build_menu_bar());
 
     SetWindowTheme(m_window.handle(), L"DarkMode_Explorer", nullptr);
+    DrawMenuBar(m_window.handle());
     SetWindowPos(m_window.handle(), nullptr, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
@@ -1443,6 +1444,9 @@ void App::grid_render() {
     m_grid_cols = cols;
     int cell = m_thumb_size + m_thumb_gap;
     int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
+    int grid_content_w = cols * m_cell_size - m_thumb_gap + m_thumb_pad * 2;
+    int extra = std::max(0, (grid_area_w - grid_content_w) / 2);
+    int tx = m_thumb_pad + extra;
     int top_row = m_grid_scroll_y / cell;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
 
@@ -1488,7 +1492,7 @@ void App::grid_render() {
             int idx = r * cols + c;
             if (idx >= total) break;
 
-            float x = static_cast<float>(m_thumb_pad + c * cell);
+            float x = static_cast<float>(tx + c * cell);
             float y = static_cast<float>(m_thumb_pad + r * cell - m_grid_scroll_y);
 
             // Look up in D2D cache (already populated by batch above)
@@ -1515,7 +1519,7 @@ void App::grid_render() {
     // Custom scrollbar (in grid area, left of panel)
     float total_content = static_cast<float>(m_grid_total_rows * (m_thumb_size + m_thumb_gap) + m_thumb_pad * 2);
     float view_h = static_cast<float>(m_renderer.target_size().height);
-    m_renderer.draw_scrollbar(px - 8.0f, 0, 8.0f, view_h,
+    m_renderer.draw_scrollbar(px - 14.0f, 0, 8.0f, view_h,
         total_content, view_h, static_cast<float>(m_grid_scroll_y));
     float pw = static_cast<float>(m_panel_width);
     float ph = static_cast<float>(m_renderer.target_size().height);

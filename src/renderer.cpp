@@ -488,8 +488,8 @@ void Renderer::draw_side_panel(float x, float w, float h,
     // Info rows
     for (auto& [label, value] : info) {
         if (y + 20 > h) break;
-        D2D1_RECT_F lr = {x + pad, y, x + 80, y + 22};
-        D2D1_RECT_F vr = {x + 84, y, x + w - pad, y + 22};
+        D2D1_RECT_F lr = {x + pad, y, x + 80, y + 26};
+        D2D1_RECT_F vr = {x + 84, y, x + w - pad, y + 26};
         m_d2d_context->DrawText(label.c_str(), static_cast<uint32_t>(label.size()),
             m_text_format.Get(), &lr, grey.Get());
         m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
@@ -505,8 +505,8 @@ void Renderer::draw_side_panel(float x, float w, float h,
         y += 30;
         for (auto& [label, value] : gen_info) {
             if (y + 20 > h) break;
-            D2D1_RECT_F lr = {x + pad, y, x + 80, y + 22};
-            D2D1_RECT_F vr = {x + 84, y, x + w - pad, y + 22};
+            D2D1_RECT_F lr = {x + pad, y, x + 80, y + 26};
+            D2D1_RECT_F vr = {x + 84, y, x + w - pad, y + 26};
             m_d2d_context->DrawText(label.c_str(), static_cast<uint32_t>(label.size()),
                 m_text_format.Get(), &lr, grey.Get());
             m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
