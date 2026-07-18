@@ -199,6 +199,10 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE, PWSTR, int /*nCmdShow*/)
         MessageBoxA(nullptr, e.what(), "MinView Fatal Error",
             MB_OK | MB_ICONERROR);
         exit_code = 1;
+    } catch (...) {
+        MessageBoxA(nullptr, "Unknown crash", "MinView",
+            MB_OK | MB_ICONERROR);
+        exit_code = 1;
     }
 
     CoUninitialize();

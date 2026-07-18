@@ -991,7 +991,7 @@ static void thumb_loader_worker(
 void App::start_thumb_loader() {
     m_thumb_running = true;
     m_thumb_threads.clear();
-    int num_threads = 3;
+    int num_threads = 1;  // single thread — multi-thread causes intermittent WIC init failures
     for (int i = 0; i < num_threads; ++i) {
         try {
             m_thumb_threads.emplace_back(thumb_loader_worker,
