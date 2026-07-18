@@ -238,11 +238,11 @@ int App::run(const std::wstring& initial_path) {
             return handle_message(hwnd, msg, wp, lp);
         });
 
+    // Set DPI before renderer init so fonts scale correctly
+    m_renderer.set_dpi(dpi, dpi);
+
     if (!m_renderer.init(m_window.handle()))
         throw std::runtime_error("Failed to init Direct2D renderer");
-
-    // Set initial DPI from monitor
-    m_renderer.set_dpi(dpi, dpi);
 
     // Scale thumbnail cell size by DPI
     float scale = dpi / 96.0f;
@@ -253,6 +253,20 @@ int App::run(const std::wstring& initial_path) {
     m_panel_width = static_cast<int>(280 * scale);
 
     SetMenu(m_window.handle(), build_menu_bar());
+
+    // Refresh dark mode now that menu bar exists
+    HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+    if (ux) {
+        auto pAllow = reinterpret_cast<BOOL(WINAPI*)(HWND, BOOL)>(
+            GetProcAddress(ux, MAKEINTRESOURCEA(133)));
+        auto pFlush = reinterpret_cast<void(WINAPI*)()>(
+            GetProcAddress(ux, MAKEINTRESOURCEA(136)));
+        if (pAllow) pAllow(m_window.handle(), TRUE);
+        if (pFlush) pFlush();
+        FreeLibrary(ux);
+    }
+    SetWindowPos(m_window.handle(), nullptr, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
     start_preloader();
 
@@ -1403,7 +1417,7 @@ void App::grid_render() {
     m_renderer.clear();
 
     int total = static_cast<int>(m_index.size());
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width);
     int cols = std::max(1, (grid_area_w - m_thumb_pad * 2 + m_thumb_gap) / m_cell_size);
     m_grid_cols = cols;
     int cell = m_thumb_size + m_thumb_gap;
@@ -1471,7 +1485,7 @@ void App::grid_render() {
     }
 
     // ── Side info panel ──
-    float px = static_cast<float>(grid_area_w);
+    float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
     float pw = static_cast<float>(m_panel_width);
     float ph = static_cast<float>(m_renderer.target_size().height);
 
