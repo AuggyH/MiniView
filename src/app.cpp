@@ -1587,13 +1587,13 @@ void App::grid_render() {
             x += img_w + gap;
         }
         rows.push_back(ri);
-        int label_extra = m_show_labels ? static_cast<int>(36 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
+        int label_extra = m_show_labels ? static_cast<int>(38 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
         cur_y += ri.row_h + gap + label_extra;
         idx = ri.end_idx;
     }
     m_grid_total_rows = static_cast<int>(rows.size());
     m_row_heights.clear();
-    int label_extra2 = m_show_labels ? static_cast<int>(36 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
+    int label_extra2 = m_show_labels ? static_cast<int>(38 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
     for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap + label_extra2);
     int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
 
@@ -1658,7 +1658,7 @@ void App::grid_render() {
                 float ly = row_y + ri.row_h + 4;
                 m_renderer.draw_label(x, ly, w, fname);
 
-                m_renderer.draw_label(x, ly + 16, w, std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h));
+                m_renderer.draw_label(x, ly + 18, w, std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h));
             }
         }
     }
