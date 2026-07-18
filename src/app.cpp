@@ -253,7 +253,11 @@ int App::run(const std::wstring& initial_path) {
     m_cell_size  = m_thumb_size + m_thumb_gap;
     m_panel_width = static_cast<int>(280 * scale);
 
-    SetMenu(m_window.handle(), nullptr);  // no native menu bar — use context menu + shortcuts
+    // Set dark theme BEFORE creating menu so it applies to menu bar
+    SetWindowTheme(m_window.handle(), L"DarkMode_Explorer", nullptr);
+
+    SetMenu(m_window.handle(), build_menu_bar());
+    DrawMenuBar(m_window.handle());
 
     start_preloader();
 
