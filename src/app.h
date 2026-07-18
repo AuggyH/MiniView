@@ -66,6 +66,7 @@ private:
     void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
     void    grid_render();
+    void    handle_scrollbar_click(HWND hwnd, int mx, int my);
     void    start_thumb_loader();
     void    stop_thumb_loader();
     void    request_thumb(int idx);
@@ -121,6 +122,10 @@ private:
     int   m_toolbar_active = -1;
     HWND  m_tooltip = nullptr;
     bool  m_scroll_active = false;
+    bool  m_scrollbar_dragging = false;  // scrollbar thumb drag active
+    int   m_scrollbar_drag_y = 0;        // mouse y when drag started
+    int   m_scrollbar_drag_pos = 0;      // scroll position when drag started
+    int   m_grid_total_h = 0;            // cached total grid content height
     int   m_grid_scroll_saved = 0;
     int   m_grid_saved_idx = 0;
     ImageMeta m_info_meta;
