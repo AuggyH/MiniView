@@ -185,12 +185,12 @@ ImageMeta parse_comfyui(const std::string& json) {
         m.height = json_int(latent, "height");
     }
 
-    // Extract prompts from CLIPTextEncode nodes — first is positive, second is negative
+    // Extract prompts — find all CLIPTextEncode texts, longest = positive, shortest = negative
     {
+        std::vector<std::string> texts;
         std::string search = "\"class_type\"";
-        size_t pos = 0, found = 0;
-        while (found < 2 && (pos = json.find(search, pos)) != std::string::npos) {
-            // Find value after colon
+        size_t pos = 0;
+        while ((pos = json.find(search, pos)) != std::string::npos) {
             size_t colon = json.find(':', pos + search.size());
             if (colon == std::string::npos) break;
             size_t vs = colon + 1;
@@ -202,7 +202,7 @@ ImageMeta parse_comfyui(const std::string& json) {
             pos = ve + 1;
             if (ct != "CLIPTextEncode") continue;
 
-            // Find text value within this node
+            // Find text value
             size_t inp = json.find("\"inputs\"", pos);
             if (inp == std::string::npos || inp > ve + 1000) continue;
             size_t ts = json.find("\"text\"", inp);
@@ -214,12 +214,19 @@ ImageMeta parse_comfyui(const std::string& json) {
             if (tvs >= json.size() || json[tvs] != '"') continue;
             size_t tve = json.find('"', tvs + 1);
             if (tve == std::string::npos) continue;
-            std::string txt = json.substr(tvs + 1, tve - tvs - 1);
-            if (found == 0)
-                m.positive_prompt = utf8_to_wstring(txt);
-            else
-                m.negative_prompt = utf8_to_wstring(txt);
-            found++;
+            texts.push_back(json.substr(tvs + 1, tve - tvs - 1));
+        }
+        if (!texts.empty()) {
+            std::sort(texts.begin(), texts.end(),
+                [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+            m.positive_prompt = utf8_to_wstring(texts[0]);
+            // Negative = shortest non-empty text (if more than one)
+            for (size_t i = texts.size() - 1; i > 0; --i) {
+                if (!texts[i].empty() && texts[i] != texts[0]) {
+                    m.negative_prompt = utf8_to_wstring(texts[i]);
+                    break;
+                }
+            }
         }
     }
 
