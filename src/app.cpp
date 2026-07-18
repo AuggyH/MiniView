@@ -2339,8 +2339,10 @@ void App::render_frame() {
                 auto full = get_preloaded(m_current_path);
                 if (full) { m_renderer.upload_image(full.Get()); m_using_thumb_preview = false; }
             }
-            m_renderer.draw_image();
-            m_renderer.draw_overlay();
+            if (!m_animating) {
+                m_renderer.draw_image();
+                m_renderer.draw_overlay();
+            }
         }
         if (m_animating) {
             uint32_t iw, ih; m_renderer.image_size(iw, ih);
@@ -2393,8 +2395,10 @@ void App::render_frame() {
         m_toolbar_items, m_toolbar_active);
     m_renderer.push_clip_below(title_h);
     if (m_has_image) {
-        m_renderer.draw_image();
-        m_renderer.draw_overlay();
+        if (!m_animating) {
+            m_renderer.draw_image();
+            m_renderer.draw_overlay();
+        }
         if (m_show_info) {
             std::vector<std::pair<std::wstring, std::wstring>> items;
             if (!m_info_meta.positive_prompt.empty())
