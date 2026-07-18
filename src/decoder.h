@@ -29,6 +29,9 @@ public:
     /// Returns the bitmap source ready for Direct2D conversion.
     ComPtr<IWICBitmapSource> decode(const std::wstring& path);
 
+    /// Decode and scale to fit within max_size (max dimension).
+    ComPtr<IWICBitmapSource> decode_scaled(const std::wstring& path, uint32_t max_size);
+
     /// Get image metadata (size, DPI) without full decode.
     std::optional<ImageInfo> probe(const std::wstring& path);
 
