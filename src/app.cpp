@@ -366,8 +366,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_window.invalidate();
         }
         if (wp == 2) {
-            m_panel_copied.clear();
+            m_panel_sel = -1;
             KillTimer(hwnd, 2);
+            m_sel_timer = 0;
+            m_window.invalidate();
+        }
+        if (wp == 3) {
+            m_panel_copied.clear();
+            KillTimer(hwnd, 3);
             m_toast_timer = 0;
             m_window.invalidate();
         }
@@ -500,20 +506,38 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        // Panel value click → select it
+        // Panel value click → copy + brief highlight + toast
         if (m_grid_mode && !m_panel_clickable.empty()) {
             int tx = GET_X_LPARAM(lp);
-            m_panel_sel = -1;
             for (int i = 0; i < static_cast<int>(m_panel_clickable.size()); ++i) {
                 auto& [rc, text] = m_panel_clickable[i];
                 if (tx >= static_cast<int>(rc.left) && tx < static_cast<int>(rc.right) &&
                     ty >= static_cast<int>(rc.top) && ty < static_cast<int>(rc.bottom)) {
+                    // Copy to clipboard
+                    if (OpenClipboard(hwnd)) {
+                        EmptyClipboard();
+                        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                        if (hMem) {
+                            auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
+                            wcscpy_s(dst, text.size() + 1, text.c_str());
+                            GlobalUnlock(hMem);
+                            SetClipboardData(CF_UNICODETEXT, hMem);
+                        }
+                        CloseClipboard();
+                    }
+                    // Brief highlight
                     m_panel_sel = i;
+                    if (m_sel_timer) KillTimer(hwnd, m_sel_timer);
+                    m_sel_timer = SetTimer(hwnd, 2, 400, nullptr);
+                    // Toast
+                    m_panel_copied = L"已复制: " + text;
+                    if (m_toast_timer) KillTimer(hwnd, m_toast_timer);
+                    m_toast_timer = SetTimer(hwnd, 3, 2000, nullptr);
                     m_window.invalidate();
                     return 0;
                 }
             }
-            m_window.invalidate();
         }
         // Scrollbar click in grid mode?
         if (m_grid_mode) {
@@ -653,27 +677,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             case 'C':
-                if (m_grid_mode && m_panel_sel >= 0 && m_panel_sel < static_cast<int>(m_panel_clickable.size())) {
-                    // Copy selected panel value
-                    auto& text = m_panel_clickable[m_panel_sel].second;
-                    if (OpenClipboard(hwnd)) {
-                        EmptyClipboard();
-                        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-                        if (hMem) {
-                            auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
-                            wcscpy_s(dst, text.size() + 1, text.c_str());
-                            GlobalUnlock(hMem);
-                            SetClipboardData(CF_UNICODETEXT, hMem);
-                        }
-                        CloseClipboard();
-                    }
-                    // Show toast
-                    m_panel_copied = L"已复制: " + text;
-                    if (m_toast_timer) KillTimer(hwnd, m_toast_timer);
-                    m_toast_timer = SetTimer(hwnd, 2, 2000, nullptr);
-                    m_window.invalidate();
-                } else if (m_grid_mode && has_selection()) copy_selected();
+                if (m_grid_mode && has_selection()) copy_selected();
                 else copy_to_clipboard();
                 return 0;
             case 'R': toggle_recursive(); return 0;
