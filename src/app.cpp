@@ -494,6 +494,28 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        // Panel value click → copy to clipboard
+        if (m_grid_mode && !m_panel_clickable.empty()) {
+            int tx = GET_X_LPARAM(lp);
+            for (auto& [rc, text] : m_panel_clickable) {
+                if (tx >= static_cast<int>(rc.left) && tx < static_cast<int>(rc.right) &&
+                    ty >= static_cast<int>(rc.top) && ty < static_cast<int>(rc.bottom)) {
+                    if (OpenClipboard(hwnd)) {
+                        EmptyClipboard();
+                        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                        if (hMem) {
+                            auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
+                            wcscpy_s(dst, text.size() + 1, text.c_str());
+                            GlobalUnlock(hMem);
+                            SetClipboardData(CF_UNICODETEXT, hMem);
+                        }
+                        CloseClipboard();
+                    }
+                    return 0;
+                }
+            }
+        }
         // Scrollbar click in grid mode?
         if (m_grid_mode) {
             int sb_zone2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
@@ -2085,7 +2107,8 @@ void App::grid_render() {
         } else {
             pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
         }
-        m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h, preview_bmp, pvw, pvh, pinfo, pgen);
+        m_panel_clickable.clear();
+        m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h, preview_bmp, pvw, pvh, pinfo, pgen, &m_panel_clickable);
     }
 
     m_renderer.end_frame();

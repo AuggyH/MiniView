@@ -134,6 +134,7 @@ private:
     int   m_grid_scroll_saved = 0;
     int   m_grid_saved_idx = 0;
     ImageMeta m_info_meta;
+    std::vector<std::pair<D2D1_RECT_F, std::wstring>> m_panel_clickable;
 
     // Multi-select (grid only)
     std::vector<bool> m_selected;

@@ -510,7 +510,8 @@ float Renderer::label_height(const std::wstring& text, float w, float font_size)
 void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,
-    const std::vector<std::pair<std::wstring, std::wstring>>& gen_info)
+    const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
+    std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable)
 {
     if (!m_d2d_context || !m_text_format) return;
 
@@ -574,18 +575,22 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
         float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
                                   value, value_br.Get(), 10.0f);
+        if (out_clickable && !value.empty()) {
+            D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
+            out_clickable->push_back({cr, value});
+        }
         y = std::max(y1, y2) + gap - 4.0f * dpi_s;
     }
 
     // ── Generation info section ──
     if (!gen_info.empty()) {
         float title_pad = 12.0f * dpi_s;
-        y += title_pad;
-        // Horizontal divider
+        y += title_pad * 0.5f;
+        // Horizontal divider (centered in gap)
         ComPtr<ID2D1SolidColorBrush> div_br;
         m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.24f, 1.0f), &div_br);
         m_d2d_context->DrawLine({x + pad, y}, {x + pad + content_w, y}, div_br.Get(), 1.0f);
-        y += title_pad;
+        y += title_pad * 0.5f;
         // Section title
         {
             ComPtr<ID2D1SolidColorBrush> title_br;
@@ -599,6 +604,10 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
             float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
             float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
                                       value, value_br.Get(), 10.0f);
+            if (out_clickable && !value.empty()) {
+                D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
+                out_clickable->push_back({cr, value});
+            }
             y = std::max(y1, y2) + gap - 4.0f * dpi_s;
         }
     }
