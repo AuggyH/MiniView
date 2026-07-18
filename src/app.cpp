@@ -367,6 +367,29 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 0;
 
+    case WM_VSCROLL:
+        if (m_grid_mode) {
+            SCROLLINFO si = {sizeof(SCROLLINFO), SIF_ALL};
+            GetScrollInfo(hwnd, SB_VERT, &si);
+            int pos = si.nPos, cell = m_thumb_size + m_thumb_gap;
+            switch (LOWORD(wp)) {
+                case SB_LINEUP:    pos -= cell; break;
+                case SB_LINEDOWN:  pos += cell; break;
+                case SB_PAGEUP:    pos -= static_cast<int>(si.nPage); break;
+                case SB_PAGEDOWN:  pos += static_cast<int>(si.nPage); break;
+                case SB_THUMBTRACK: pos = HIWORD(wp); break;
+                default: return 0;
+            }
+            int max_pos = si.nMax - static_cast<int>(si.nPage) + 1;
+            pos = std::max(0, std::min(pos, max_pos));
+            m_grid_scroll_y = pos;
+            si.nPos = pos;
+            SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+            m_window.invalidate();
+            return 0;
+        }
+        return -1;
+
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
             m_scroll_active = false;
@@ -1219,15 +1242,18 @@ void App::request_thumb(int idx) {
 }
 
 void App::toggle_grid() {
+    int saved_scroll = m_grid_scroll_y;
     m_grid_mode = !m_grid_mode;
 
     if (m_grid_mode) {
-        // Enter grid: init thumb cache
         int n = static_cast<int>(m_index.size());
-        m_thumbs.clear();
-        m_thumbs.resize(n);
-        m_thumb_d2d.clear();
-        m_grid_scroll_y = 0;
+        bool re_entry = (m_thumbs.size() == static_cast<size_t>(n));
+        if (!re_entry) {
+            m_thumbs.clear();
+            m_thumbs.resize(n);
+            m_thumb_d2d.clear();
+        }
+        m_grid_scroll_y = re_entry ? saved_scroll : 0;
         m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
         m_selected.clear();
         m_selected.resize(n, false);
@@ -1238,7 +1264,18 @@ void App::toggle_grid() {
         // Request first visible page of thumbnails
         int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - m_thumb_pad * 2 + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
         m_grid_cols = cols;
-        int rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / (m_thumb_size + m_thumb_gap);
+        int cell = m_thumb_size + m_thumb_gap;
+        int total_rows = (n + cols - 1) / cols;
+        m_grid_total_rows = total_rows;
+        int rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
+
+        // Setup scrollbar
+        SCROLLINFO si = {sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE};
+        si.nMin = 0;
+        si.nMax = total_rows * cell + m_thumb_pad * 2;
+        si.nPage = static_cast<UINT>(rows * cell + m_thumb_pad * 2);
+        SetScrollInfo(m_window.handle(), SB_VERT, &si, TRUE);
+
         for (int i = 0; i < std::min(n, cols * (rows + 2)); ++i)
             request_thumb(i);
 
@@ -1440,6 +1477,11 @@ void App::grid_render() {
     int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
     int top_row = m_grid_scroll_y / cell;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
+
+    // Sync scrollbar
+    SCROLLINFO si = {sizeof(SCROLLINFO), SIF_POS};
+    si.nPos = m_grid_scroll_y;
+    SetScrollInfo(m_window.handle(), SB_VERT, &si, TRUE);
 
     // (thumb requests handled by WM_TIMER for smooth scroll)
 
