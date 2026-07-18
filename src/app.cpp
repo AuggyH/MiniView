@@ -235,10 +235,6 @@ int App::run(const std::wstring& initial_path) {
     if (!m_renderer.init(m_window.handle()))
         throw std::runtime_error("Failed to init Direct2D renderer");
 
-    // Set initial DPI from monitor
-    float dpi = static_cast<float>(GetDpiForWindow(m_window.handle()));
-    m_renderer.set_dpi(dpi, dpi);
-
     SetMenu(m_window.handle(), build_menu_bar());
 
     start_preloader();
@@ -339,20 +335,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_ERASEBKGND:
         return 0;
-
-    case WM_DPICHANGED: {
-        float dpi = static_cast<float>(LOWORD(wp));
-        m_renderer.set_dpi(dpi, dpi);
-        // Resize to suggested rect
-        RECT* rc = reinterpret_cast<RECT*>(lp);
-        if (rc) {
-            SetWindowPos(hwnd, nullptr, rc->left, rc->top,
-                rc->right - rc->left, rc->bottom - rc->top,
-                SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        m_window.invalidate();
-        return 0;
-    }
 
     case WM_CONTEXTMENU:
         show_context_menu(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
@@ -588,28 +570,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 void App::open_image(const std::wstring& path) {
     try {
-        m_using_thumb_preview = false;
-
         // Try preload cache first
         auto cached = get_preloaded(path);
         if (cached) {
             m_renderer.upload_image(cached.Get());
         } else {
-            // Try thumbnail cache as instant preview
-            int thumb_idx = m_index.index_of(path);
-            bool used_thumb = false;
-            if (thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
-                std::lock_guard lock(m_thumb_mutex);
-                if (m_thumbs[thumb_idx].loaded && m_thumbs[thumb_idx].wic) {
-                    m_renderer.upload_image(m_thumbs[thumb_idx].wic.Get());
-                    used_thumb = true;
-                    m_using_thumb_preview = true;
-                }
-            }
-            if (!used_thumb) {
-                auto bitmap = m_decoder.decode(path);
-                m_renderer.upload_image(bitmap.Get());
-            }
+            auto bitmap = m_decoder.decode(path);
+            m_renderer.upload_image(bitmap.Get());
         }
         m_current_path = path;
         m_has_image = true;
@@ -626,11 +593,6 @@ void App::open_image(const std::wstring& path) {
         m_current_idx = m_index.index_of(path);
 
         update_title();
-
-        // Queue full decode if showing thumbnail preview
-        if (m_using_thumb_preview) {
-            request_preload(path);
-        }
 
         // Preload neighbors in background
         preload_neighbors();
@@ -1359,14 +1321,6 @@ void App::render_frame() {
     }
     m_renderer.clear();
     if (m_has_image) {
-        // Upgrade from thumbnail preview to full image when ready
-        if (m_using_thumb_preview) {
-            auto full = get_preloaded(m_current_path);
-            if (full) {
-                m_renderer.upload_image(full.Get());
-                m_using_thumb_preview = false;
-            }
-        }
         m_renderer.draw_image();
         m_renderer.draw_overlay();
         if (m_show_info) {

@@ -40,7 +40,6 @@ public:
 
     void clear(float r = 0.102f, float g = 0.102f, float b = 0.102f);
 
-    void set_dpi(float dpi_x, float dpi_y);
     D2D1_SIZE_U target_size() const { return m_target_size; }
     void image_size(uint32_t& w, uint32_t& h) const {
         w = m_img_width; h = m_img_height;
@@ -84,8 +83,6 @@ private:
     float       m_offset_x = 0.0f;
     float       m_offset_y = 0.0f;
     float       m_scroll_y = 0.0f;
-    float       m_dpi_x = 96.0f;
-    float       m_dpi_y = 96.0f;
 };
 
 } // namespace mv
