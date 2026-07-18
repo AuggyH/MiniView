@@ -7,6 +7,7 @@
 #include <windowsx.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <uxtheme.h>
 #include <commdlg.h>
 #include <ole2.h>
 
@@ -254,21 +255,7 @@ int App::run(const std::wstring& initial_path) {
 
     SetMenu(m_window.handle(), build_menu_bar());
 
-    // Enable dark mode for menus
-    {
-        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
-        auto pAllow = reinterpret_cast<BOOL(WINAPI*)(HWND, BOOL)>(ux
-            ? GetProcAddress(ux, MAKEINTRESOURCEA(133)) : nullptr);
-        auto pFlush = reinterpret_cast<void(WINAPI*)()>(ux
-            ? GetProcAddress(ux, MAKEINTRESOURCEA(136)) : nullptr);
-        if (pAllow) {
-            pAllow(m_window.handle(), TRUE);
-            HWND mb = FindWindowExW(m_window.handle(), nullptr, L"#32768", nullptr);
-            if (mb) pAllow(mb, TRUE);
-        }
-        if (pFlush) pFlush();
-        if (ux) FreeLibrary(ux);
-    }
+    SetWindowTheme(m_window.handle(), L"DarkMode_Explorer", nullptr);
     SetWindowPos(m_window.handle(), nullptr, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
