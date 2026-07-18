@@ -1306,12 +1306,14 @@ void App::toggle_grid() {
         if (!re_entry) start_thumb_loader();
 
         // Request first visible page of thumbnails
-        int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - m_thumb_pad * 2 + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
+        int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+        int cols = std::max(1, (gw + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
         m_grid_cols = cols;
-        int cell = m_thumb_size + m_thumb_gap;
+        int thumb_w = (gw - (cols - 1) * m_thumb_gap) / cols;
+        int cell = thumb_w + m_thumb_gap;
         int total_rows = (n + cols - 1) / cols;
         m_grid_total_rows = total_rows;
-        int rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
+        int rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell;
 
         for (int i = 0; i < std::min(n, cols * (rows + 2)); ++i)
             request_thumb(i);
@@ -1334,13 +1336,12 @@ void App::toggle_grid() {
 }
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int cell_y = m_thumb_size + m_thumb_gap;
     int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
-    int total_gap_w = grid_area_w - m_grid_cols * m_thumb_size;
-    int gap_w = (m_grid_cols > 1) ? total_gap_w / (m_grid_cols - 1) : 0;
-    int cell_x = m_thumb_size + std::max(gap_w, m_thumb_gap);
-    int col = (x - m_thumb_pad) / cell_x;
-    int row = (y - m_thumb_pad + m_grid_scroll_y) / cell_y;
+    int thumb_w = (grid_area_w - (m_grid_cols - 1) * m_thumb_gap) / m_grid_cols;
+    int cell_w = thumb_w + m_thumb_gap;
+    int cell_h = thumb_w + m_thumb_gap;
+    int col = x / cell_w;
+    int row = (y - m_toolbar_h + m_grid_scroll_y) / cell_h;
     if (col < 0 || col >= m_grid_cols) return;
     int idx = row * m_grid_cols + col;
     if (idx < 0 || idx >= static_cast<int>(m_index.size())) return;
@@ -1391,8 +1392,10 @@ void App::grid_navigate(int dir, bool shift) {
 void App::grid_ensure_visible() {
     if (m_grid_cols == 0) return;
     int row = m_grid_sel / m_grid_cols;
-    int cell_h = m_thumb_size + m_thumb_gap;
-    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2) / cell_h;
+    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap) / m_grid_cols;
+    int cell_h = thumb_w + m_thumb_gap;
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell_h;
 
     int top_y = row * cell_h;
     int bot_y = top_y + cell_h;
@@ -1517,14 +1520,14 @@ void App::grid_render() {
 
     int total = static_cast<int>(m_index.size());
     int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
-    int cols = std::max(1, (grid_area_w - m_thumb_pad * 2 + m_thumb_gap) / m_cell_size);
+    int cols = std::max(1, (grid_area_w + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
     m_grid_cols = cols;
-    // Distribute leftover width as extra gap between columns
-    int cell_h = m_thumb_size + m_thumb_gap;
-    int total_gap_w = grid_area_w - cols * m_thumb_size;
-    int gap_w = (cols > 1) ? total_gap_w / (cols - 1) : 0;
-    int cell_w = m_thumb_size + std::max(gap_w, m_thumb_gap);
-    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h - m_thumb_pad * 2 + m_thumb_gap) / cell_h;
+    // Adaptive thumb width: fill columns evenly with fixed gap
+    int thumb_w = (grid_area_w - (cols - 1) * m_thumb_gap) / cols;
+    int thumb_h = thumb_w;  // square cell
+    int cell_h = thumb_h + m_thumb_gap;  // row height
+    int cell_w = thumb_w + m_thumb_gap;  // column width
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell_h + 1;
     int tx = 0;
     int top_row = m_grid_scroll_y / cell_h;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
@@ -1579,15 +1582,11 @@ void App::grid_render() {
 
             bool sel = (idx == m_grid_sel) || (idx < static_cast<int>(m_selected.size()) && m_selected[idx]);
             if (dit != m_thumb_d2d.end() && dit->second) {
-                // Draw placeholder bg + thumbnail on top
-                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(m_thumb_size), L"", sel);
-                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(m_thumb_size), dit->second.Get(), m_thumb_square);
+                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(thumb_w), dit->second.Get(), m_thumb_square);
+                if (sel) m_renderer.draw_grid_placeholder(x, y, static_cast<float>(thumb_w), L"", sel);
             } else {
-                // Placeholder with filename
-                std::wstring name = m_index.path_at(idx);
-                size_t pos = name.find_last_of(L"\\/");
-                if (pos != std::wstring::npos) name = name.substr(pos + 1);
-                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(m_thumb_size), name, sel);
+                // No placeholder background — just show filename when selected
+                if (sel) m_renderer.draw_grid_placeholder(x, y, static_cast<float>(thumb_w), L"", sel);
             }
         }
     }
@@ -1596,7 +1595,7 @@ void App::grid_render() {
     float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
 
     // Custom scrollbar (in grid area, left of panel)
-    float total_content = static_cast<float>(m_grid_total_rows * (m_thumb_size + m_thumb_gap) + m_thumb_pad * 2);
+    float total_content = static_cast<float>(m_grid_total_rows * cell_h + m_thumb_pad * 2);
     float view_h = static_cast<float>(m_renderer.target_size().height);
     m_renderer.draw_scrollbar(px - 14.0f, static_cast<float>(m_toolbar_h), 8.0f, view_h - m_toolbar_h,
         total_content, view_h, static_cast<float>(m_grid_scroll_y));
