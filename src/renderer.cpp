@@ -284,9 +284,7 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
     std::vector<float> heights;
     heights.reserve(items.size());
     for (auto& [label, value] : items) {
-        float h = label_height(value, value_w, font_size);
-        float capped = max_lines * font_size * dpi_s * 1.44f;
-        if (h > capped) h = capped;
+        float h = label_height(value, value_w, font_size, max_lines);
         if (h < min_h) h = min_h;
         heights.push_back(h);
     }
@@ -491,7 +489,7 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
     m_d2d_context->DrawTextLayout(pt, layout.Get(), br.Get());
 }
 
-float Renderer::label_height(const std::wstring& text, float w, float font_size) {
+float Renderer::label_height(const std::wstring& text, float w, float font_size, int max_lines) {
     if (!m_dwrite_factory || text.empty()) return 0;
     ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
@@ -499,14 +497,18 @@ float Renderer::label_height(const std::wstring& text, float w, float font_size)
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     ComPtr<IDWriteTextLayout> layout;
-    float max_h = fs * 3.0f;  // 2 lines max
+    float max_h = (max_lines > 0) ? fs * 1.4f * max_lines : 1000.0f;
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
         tf.Get(), w, max_h, &layout);
-    DWRITE_TRIMMING trim = {};
-    trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
-    ComPtr<IDWriteInlineObject> ellipsis;
-    m_dwrite_factory->CreateEllipsisTrimmingSign(tf.Get(), &ellipsis);
-    layout->SetTrimming(&trim, ellipsis.Get());
+    if (max_lines > 0) {
+        DWRITE_TRIMMING trim = {};
+        trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+        ComPtr<IDWriteInlineObject> ellipsis;
+        m_dwrite_factory->CreateEllipsisTrimmingSign(tf.Get(), &ellipsis);
+        ComPtr<IDWriteTextLayout1> layout1;
+        layout.As(&layout1);
+        if (layout1) layout1->SetTrimming(&trim, ellipsis.Get());
+    }
     DWRITE_TEXT_METRICS m;
     layout->GetMetrics(&m);
     return m.height;
