@@ -254,16 +254,20 @@ int App::run(const std::wstring& initial_path) {
 
     SetMenu(m_window.handle(), build_menu_bar());
 
-    // Refresh dark mode now that menu bar exists
-    HMODULE ux = LoadLibraryW(L"uxtheme.dll");
-    if (ux) {
-        auto pAllow = reinterpret_cast<BOOL(WINAPI*)(HWND, BOOL)>(
-            GetProcAddress(ux, MAKEINTRESOURCEA(133)));
-        auto pFlush = reinterpret_cast<void(WINAPI*)()>(
-            GetProcAddress(ux, MAKEINTRESOURCEA(136)));
-        if (pAllow) pAllow(m_window.handle(), TRUE);
+    // Enable dark mode for menus
+    {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        auto pAllow = reinterpret_cast<BOOL(WINAPI*)(HWND, BOOL)>(ux
+            ? GetProcAddress(ux, MAKEINTRESOURCEA(133)) : nullptr);
+        auto pFlush = reinterpret_cast<void(WINAPI*)()>(ux
+            ? GetProcAddress(ux, MAKEINTRESOURCEA(136)) : nullptr);
+        if (pAllow) {
+            pAllow(m_window.handle(), TRUE);
+            HWND mb = FindWindowExW(m_window.handle(), nullptr, L"#32768", nullptr);
+            if (mb) pAllow(mb, TRUE);
+        }
         if (pFlush) pFlush();
-        FreeLibrary(ux);
+        if (ux) FreeLibrary(ux);
     }
     SetWindowPos(m_window.handle(), nullptr, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
@@ -366,29 +370,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_ERASEBKGND:
         return 0;
-
-    case WM_VSCROLL:
-        if (m_grid_mode) {
-            SCROLLINFO si = {sizeof(SCROLLINFO), SIF_ALL};
-            GetScrollInfo(hwnd, SB_VERT, &si);
-            int pos = si.nPos, cell = m_thumb_size + m_thumb_gap;
-            switch (LOWORD(wp)) {
-                case SB_LINEUP:    pos -= cell; break;
-                case SB_LINEDOWN:  pos += cell; break;
-                case SB_PAGEUP:    pos -= static_cast<int>(si.nPage); break;
-                case SB_PAGEDOWN:  pos += static_cast<int>(si.nPage); break;
-                case SB_THUMBTRACK: pos = HIWORD(wp); break;
-                default: return 0;
-            }
-            int max_pos = si.nMax - static_cast<int>(si.nPage) + 1;
-            pos = std::max(0, std::min(pos, max_pos));
-            m_grid_scroll_y = pos;
-            si.nPos = pos;
-            SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
-            m_window.invalidate();
-            return 0;
-        }
-        return -1;
 
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
@@ -1249,8 +1230,17 @@ void App::toggle_grid() {
         m_thumbs.clear();
         m_thumbs.resize(n);
         m_thumb_d2d.clear();
-        m_grid_scroll_y = m_grid_scroll_saved;
-        m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
+
+        // Smart scroll restoration
+        if (m_current_idx == m_grid_saved_idx) {
+            // User didn't navigate: restore original scroll
+            m_grid_scroll_y = m_grid_scroll_saved;
+            m_grid_sel = m_grid_saved_idx;
+        } else {
+            // User navigated: center on current image
+            m_grid_sel = m_current_idx;
+            m_grid_scroll_y = 0;  // grid_ensure_visible will set correct position
+        }
         m_selected.clear();
         m_selected.resize(n, false);
         if (m_grid_sel < n) m_selected[m_grid_sel] = true;
@@ -1265,13 +1255,6 @@ void App::toggle_grid() {
         m_grid_total_rows = total_rows;
         int rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
 
-        // Setup scrollbar
-        SCROLLINFO si = {sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE};
-        si.nMin = 0;
-        si.nMax = total_rows * cell + m_thumb_pad * 2;
-        si.nPage = static_cast<UINT>(rows * cell + m_thumb_pad * 2);
-        SetScrollInfo(m_window.handle(), SB_VERT, &si, TRUE);
-
         for (int i = 0; i < std::min(n, cols * (rows + 2)); ++i)
             request_thumb(i);
 
@@ -1282,8 +1265,9 @@ void App::toggle_grid() {
         // 100ms timer for lazy thumbnail loading (fires even when unfocused)
         m_grid_timer = SetTimer(m_window.handle(), 1, 100, nullptr);
     } else {
-        // Exit grid — save scroll position
+        // Exit grid — save position and selected index
         m_grid_scroll_saved = m_grid_scroll_y;
+        m_grid_saved_idx = m_grid_sel;
         if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
         stop_thumb_loader();
         m_thumbs.clear();
@@ -1475,11 +1459,6 @@ void App::grid_render() {
     int top_row = m_grid_scroll_y / cell;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
 
-    // Sync scrollbar
-    SCROLLINFO si = {sizeof(SCROLLINFO), SIF_POS};
-    si.nPos = m_grid_scroll_y;
-    SetScrollInfo(m_window.handle(), SB_VERT, &si, TRUE);
-
     // (thumb requests handled by WM_TIMER for smooth scroll)
 
     // Request visible thumbs (skip during active scroll)
@@ -1545,6 +1524,12 @@ void App::grid_render() {
 
     // ── Side info panel ──
     float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
+
+    // Custom scrollbar (in grid area, left of panel)
+    float total_content = static_cast<float>(m_grid_total_rows * (m_thumb_size + m_thumb_gap) + m_thumb_pad * 2);
+    float view_h = static_cast<float>(m_renderer.target_size().height);
+    m_renderer.draw_scrollbar(px - 8.0f, 0, 8.0f, view_h,
+        total_content, view_h, static_cast<float>(m_grid_scroll_y));
     float pw = static_cast<float>(m_panel_width);
     float ph = static_cast<float>(m_renderer.target_size().height);
 

@@ -114,6 +114,7 @@ private:
     UINT_PTR m_grid_timer = 0;
     bool  m_scroll_active = false;
     int   m_grid_scroll_saved = 0;
+    int   m_grid_saved_idx = 0;
     ImageMeta m_info_meta;
 
     // Multi-select (grid only)

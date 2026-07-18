@@ -34,6 +34,8 @@ public:
         ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
         const std::vector<std::pair<std::wstring, std::wstring>>& info,
         const std::vector<std::pair<std::wstring, std::wstring>>& gen_info);
+    void draw_scrollbar(float x, float y, float w, float h,
+        float total, float view, float pos);
 
     // Create a D2D bitmap from a WIC source (for grid thumbnails)
     HRESULT create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** out);
