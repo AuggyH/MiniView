@@ -452,13 +452,19 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc) {
 void Renderer::draw_label(float x, float y, float w, const std::wstring& text, float font_size) {
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return;
     ComPtr<IDWriteTextFormat> tf;
+    float fs = font_size * m_dpi_y / 96.0f;
     m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        font_size * m_dpi_y / 96.0f, L"en-US", &tf);
+        fs, L"en-US", &tf);
     tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
+    float max_h = fs * 2.7f;  // 2 lines max
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
-        tf.Get(), w, 80.0f * m_dpi_y / 96.0f, &layout);
+        tf.Get(), w, max_h, &layout);
+    // Truncate with ellipsis after 2 lines
+    DWRITE_TRIMMING trim = {};
+    trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+    layout->SetTrimming(&trim, nullptr);
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.6f, 0.6f, 0.64f, 1.0f), &br);
     D2D1_POINT_2F pt = {x, y};
@@ -468,12 +474,17 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
 float Renderer::label_height(const std::wstring& text, float w, float font_size) {
     if (!m_dwrite_factory || text.empty()) return 0;
     ComPtr<IDWriteTextFormat> tf;
+    float fs = font_size * m_dpi_y / 96.0f;
     m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        font_size * m_dpi_y / 96.0f, L"en-US", &tf);
+        fs, L"en-US", &tf);
     ComPtr<IDWriteTextLayout> layout;
+    float max_h = fs * 2.7f;  // 2 lines max
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
-        tf.Get(), w, 100.0f, &layout);
+        tf.Get(), w, max_h, &layout);
+    DWRITE_TRIMMING trim = {};
+    trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+    layout->SetTrimming(&trim, nullptr);
     DWRITE_TEXT_METRICS m;
     layout->GetMetrics(&m);
     return m.height;
