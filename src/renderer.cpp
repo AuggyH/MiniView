@@ -921,17 +921,16 @@ void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F d
     if (dst.right <= dst.left || dst.bottom <= dst.top) return;
     // Ease-out quartic
     float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t) * (1.0f - t);
-    // Lock to bitmap aspect ratio → interpolated to dest aspect
+    // Always preserve bitmap's native aspect ratio
     D2D1_SIZE_F bmp_sz = bmp->GetSize();
-    float src_aspect = bmp_sz.width / bmp_sz.height;
+    float bmp_aspect = bmp_sz.width / bmp_sz.height;
     float dst_w = dst.right - dst.left, dst_h = dst.bottom - dst.top;
-    float dst_aspect = dst_w / dst_h;
-    float cur_aspect = src_aspect + (dst_aspect - src_aspect) * et;
+    // Interpolate area
     float src_area = (src.right - src.left) * (src.bottom - src.top);
     float dst_area = dst_w * dst_h;
     float cur_area = src_area + (dst_area - src_area) * et;
-    float cur_w = std::sqrt(cur_area * cur_aspect);
-    float cur_h = cur_w / cur_aspect;
+    float cur_w = std::sqrt(cur_area * bmp_aspect);
+    float cur_h = cur_w / bmp_aspect;
     // Interpolate center position
     float src_cx = (src.left + src.right) * 0.5f;
     float src_cy = (src.top + src.bottom) * 0.5f;
