@@ -1813,7 +1813,7 @@ void App::grid_render() {
                 float res_h = 0;
                 if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].orig_w > 0) {
                     res_h = m_renderer.label_height(
-                        std::to_wstring(m_thumbs[i].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[i].orig_h),
+                        std::to_wstring(m_thumbs[i].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[i].orig_h),
                         img_w, 10.0f);
                 }
                 float total_label = 4.0f * dpi_label + fn_h + 3.0f * dpi_label + res_h + 2.0f * dpi_label;
@@ -1896,7 +1896,7 @@ void App::grid_render() {
                 if (m_thumbs[idx2].orig_w > 0) {
                     float label_gap = 3.0f * dpi_s;
                     m_renderer.draw_label(x, ly + name_h + label_gap, w,
-                        std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f);
+                        std::to_wstring(m_thumbs[idx2].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f);
                 }
         }
     }
@@ -1938,7 +1938,7 @@ void App::grid_render() {
             auto probe = m_decoder.probe(selpath);
             if (probe) {
                 pvw = probe->width; pvh = probe->height;
-                pinfo.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(pvw) + L"\u00D7" + std::to_wstring(pvh)});
+                pinfo.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(pvw) + L" \u00D7 " + std::to_wstring(pvh)});
             }
 
             auto dit2 = m_thumb_d2d.find(m_grid_sel);
@@ -2025,7 +2025,7 @@ void App::render_frame() {
             if (!m_info_meta.vae.empty())
                 items.push_back({L"VAE", m_info_meta.vae});
             if (m_info_meta.width > 0 && m_info_meta.height > 0)
-                items.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(m_info_meta.width) + L"\u00D7" + std::to_wstring(m_info_meta.height)});
+                items.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(m_info_meta.width) + L" \u00D7 " + std::to_wstring(m_info_meta.height)});
             if (m_info_meta.seed >= 0)
                 items.push_back({L"Seed", std::to_wstring(m_info_meta.seed)});
             if (m_info_meta.steps > 0)
