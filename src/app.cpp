@@ -783,6 +783,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_ESCAPE:
             if (m_from_grid) {
                 m_from_grid = false;
+                m_temp_preview = false;
                 toggle_grid();
                 m_window.invalidate();
                 return 0;
@@ -793,6 +794,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_SPACE:
             if (m_from_grid) {
                 m_from_grid = false;
+                m_temp_preview = false;
                 toggle_grid();
                 m_window.invalidate();
                 return 0;
@@ -800,6 +802,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_mode && m_grid_sel >= 0) {
                 open_image(m_index.path_at(m_grid_sel));
                 m_from_grid = true;
+                m_temp_preview = true;
                 m_window.invalidate();
                 return 0;
             }
@@ -2253,7 +2256,7 @@ void App::grid_render() {
 }
 
 void App::render_frame() {
-    if (m_from_grid) {
+    if (m_temp_preview) {
         if (!m_renderer.begin_frame()) return;
         m_renderer.clear();
         if (m_has_image) {
