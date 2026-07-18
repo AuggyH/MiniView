@@ -663,7 +663,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
     m_d2d_context->PopAxisAlignedClip();
 
     // Scrollbar on panel right edge
-    float total_h = y - y0 - pad + scroll_y;
+    float total_h = y - y0 + scroll_y;  // bottom margin via initial +pad
     if (total_h > h) {
         float sb_w = 6.0f * dpi_s;
         draw_scrollbar(x + w - sb_w - 2.0f * dpi_s, y_off, sb_w, h, total_h, h, scroll_y);
