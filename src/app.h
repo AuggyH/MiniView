@@ -68,9 +68,10 @@ private:
     void    stop_thumb_loader();
     void    request_thumb(int idx);
 
-    static constexpr int THUMB_SIZE = 160;
-    static constexpr int THUMB_GAP   = 6;
-    static constexpr int THUMB_PAD   = 12;
+    int m_thumb_size = 160;
+    int m_thumb_gap  = 6;
+    int m_thumb_pad  = 12;
+    int m_cell_size  = 166;  // size + gap
 
     Window     m_window;
     Renderer   m_renderer;
@@ -108,6 +109,8 @@ private:
     bool  m_thumb_square = false;
     bool  m_show_info = false;
     bool  m_using_thumb_preview = false;
+    bool  m_temp_preview = false;
+    int   m_panel_width = 280;
     ImageMeta m_info_meta;
 
     // Multi-select (grid only)

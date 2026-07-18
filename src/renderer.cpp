@@ -446,4 +446,74 @@ void Renderer::draw_grid_thumbnail(float x, float y, float size, ID2D1Bitmap1* t
     }
 }
 
+void Renderer::draw_side_panel(float x, float w, float h,
+    ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
+    const std::vector<std::pair<std::wstring, std::wstring>>& info,
+    const std::vector<std::pair<std::wstring, std::wstring>>& gen_info)
+{
+    if (!m_d2d_context || !m_text_format) return;
+
+    float pad = 12.0f;
+    float y = pad;
+
+    // Panel background
+    ComPtr<ID2D1SolidColorBrush> bg;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.10f, 0.10f, 0.12f, 0.95f), &bg);
+    D2D1_RECT_F rc = {x, 0, x + w, h};
+    m_d2d_context->FillRectangle(&rc, bg.Get());
+
+    // Divider line
+    ComPtr<ID2D1SolidColorBrush> line;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.24f, 1.0f), &line);
+    m_d2d_context->DrawLine({x, 0}, {x, h}, line.Get(), 1.0f);
+
+    ComPtr<ID2D1SolidColorBrush> white, grey;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.9f, 0.9f, 0.9f, 1.0f), &white);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.5f, 0.5f, 0.55f, 1.0f), &grey);
+
+    // Preview thumbnail
+    if (preview && pw > 0 && ph > 0) {
+        float thumb_w = w - pad * 2;
+        float thumb_h = thumb_w * 0.6f;
+        float scale = std::min(thumb_w / pw, thumb_h / ph);
+        float dw = pw * scale, dh = ph * scale;
+        float ox = x + pad + (thumb_w - dw) / 2.0f;
+        float oy = pad + (thumb_h - dh) / 2.0f;
+        D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
+        m_d2d_context->DrawBitmap(preview, &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+        y = pad + thumb_h + pad;
+    }
+
+    // Info rows
+    for (auto& [label, value] : info) {
+        if (y + 20 > h) break;
+        D2D1_RECT_F lr = {x + pad, y, x + 60, y + 20};
+        D2D1_RECT_F vr = {x + 64, y, x + w - pad, y + 20};
+        m_d2d_context->DrawText(label.c_str(), static_cast<uint32_t>(label.size()),
+            m_text_format.Get(), &lr, grey.Get());
+        m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
+            m_text_format.Get(), &vr, white.Get());
+        y += 24;
+    }
+
+    // Generation info section
+    if (!gen_info.empty()) {
+        y += 8;
+        D2D1_RECT_F tr = {x + pad, y, x + w - pad, y + 20};
+        m_d2d_context->DrawText(L"\u751F\u6210\u4FE1\u606F", 4, m_text_format.Get(), &tr, grey.Get());
+        y += 24;
+        for (auto& [label, value] : gen_info) {
+            if (y + 20 > h) break;
+            D2D1_RECT_F lr = {x + pad, y, x + 60, y + 20};
+            D2D1_RECT_F vr = {x + 64, y, x + w - pad, y + 20};
+            m_d2d_context->DrawText(label.c_str(), static_cast<uint32_t>(label.size()),
+                m_text_format.Get(), &lr, grey.Get());
+            m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
+                m_text_format.Get(), &vr, white.Get());
+            y += 24;
+        }
+    }
+}
+
 } // namespace mv
