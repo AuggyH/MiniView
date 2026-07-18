@@ -6,8 +6,108 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <commdlg.h>
+#include <ole2.h>
 
 namespace mv {
+
+// ── OLE Drag source helpers ──────────────────────────────────
+
+// Simple IDataObject that holds a single file path as CF_HDROP
+class FileDataObject : public IDataObject {
+public:
+    FileDataObject(const std::wstring& path) : m_ref(1) {
+        // Build DROPFILES + path
+        int offset = sizeof(DROPFILES);
+        int path_bytes = static_cast<int>((path.size() + 1) * sizeof(wchar_t));
+        m_data_size = offset + path_bytes;
+        m_data = GlobalAlloc(GMEM_MOVEABLE, m_data_size);
+        if (m_data) {
+            auto* df = static_cast<DROPFILES*>(GlobalLock(m_data));
+            df->pFiles = offset;
+            df->fWide  = TRUE;
+            auto* dst = reinterpret_cast<wchar_t*>(reinterpret_cast<char*>(df) + offset);
+            wcscpy_s(dst, path.size() + 1, path.c_str());
+            GlobalUnlock(m_data);
+        }
+    }
+    ~FileDataObject() { if (m_data) GlobalFree(m_data); }
+
+    // IUnknown
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_IDataObject) {
+            *ppv = static_cast<IDataObject*>(this);
+            AddRef(); return S_OK;
+        }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override {
+        ULONG c = InterlockedDecrement(&m_ref);
+        if (c == 0) delete this;
+        return c;
+    }
+
+    // IDataObject
+    STDMETHODIMP GetData(FORMATETC* fe, STGMEDIUM* sm) override {
+        if (!fe || !sm) return E_INVALIDARG;
+        if (fe->cfFormat != CF_HDROP || !(fe->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
+        sm->tymed = TYMED_HGLOBAL;
+        sm->hGlobal = GlobalAlloc(GMEM_MOVEABLE, m_data_size);
+        if (!sm->hGlobal) return E_OUTOFMEMORY;
+        void* src = GlobalLock(m_data);
+        void* dst = GlobalLock(sm->hGlobal);
+        memcpy(dst, src, m_data_size);
+        GlobalUnlock(sm->hGlobal);
+        GlobalUnlock(m_data);
+        sm->pUnkForRelease = nullptr;
+        return S_OK;
+    }
+    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return DV_E_FORMATETC; }
+    STDMETHODIMP QueryGetData(FORMATETC* fe) override {
+        if (!fe) return E_INVALIDARG;
+        return (fe->cfFormat == CF_HDROP && (fe->tymed & TYMED_HGLOBAL)) ? S_OK : DV_E_FORMATETC;
+    }
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC*) override { return DV_E_FORMATETC; }
+    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    STDMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return OLE_S_USEREG; }
+    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+
+private:
+    ULONG   m_ref;
+    HGLOBAL m_data = nullptr;
+    SIZE_T  m_data_size = 0;
+};
+
+// Minimal IDropSource
+class SimpleDropSource : public IDropSource {
+public:
+    SimpleDropSource() : m_ref(1) {}
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_IDropSource) {
+            *ppv = static_cast<IDropSource*>(this);
+            AddRef(); return S_OK;
+        }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override {
+        ULONG c = InterlockedDecrement(&m_ref);
+        if (c == 0) delete this;
+        return c;
+    }
+    STDMETHODIMP QueryContinueDrag(BOOL escape, DWORD keys) override {
+        if (escape) return DRAGDROP_S_CANCEL;
+        if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP;
+        return S_OK;
+    }
+    STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
+
+private:
+    ULONG m_ref;
+};
 
 // ── Preloader worker (runs on background thread) ─────────────
 
@@ -127,16 +227,40 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDOWN:
         if (!m_has_image) return -1;
-        m_dragging = true;
+        m_drag_pending = true;
+        m_dragging = false;
         m_drag_start_x = GET_X_LPARAM(lp);
         m_drag_start_y = GET_Y_LPARAM(lp);
         m_drag_offset_x = m_renderer.offset_x();
         m_drag_offset_y = m_renderer.offset_y();
         SetCapture(hwnd);
-        SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
         return 0;
 
     case WM_MOUSEMOVE:
+        if (m_drag_pending) {
+            int dx = GET_X_LPARAM(lp) - m_drag_start_x;
+            int dy = GET_Y_LPARAM(lp) - m_drag_start_y;
+            if (dx*dx + dy*dy >= 16) {  // 4px threshold
+                m_drag_pending = false;
+                bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                if (ctrl && !m_current_path.empty()) {
+                    // OLE drag export
+                    ReleaseCapture();
+                    FileDataObject* data = new FileDataObject(m_current_path);
+                    SimpleDropSource* src = new SimpleDropSource();
+                    DWORD effect;
+                    DoDragDrop(data, src, DROPEFFECT_COPY, &effect);
+                    data->Release();
+                    src->Release();
+                    SetCursor(LoadCursor(nullptr, IDC_ARROW));
+                    return 0;
+                }
+                // Start pan
+                m_dragging = true;
+                SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
+            }
+            return 0;
+        }
         if (!m_dragging) return -1;
         m_renderer.set_offset(
             m_drag_offset_x + GET_X_LPARAM(lp) - m_drag_start_x,
@@ -145,6 +269,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_LBUTTONUP:
+        m_drag_pending = false;
         if (!m_dragging) return -1;
         m_dragging = false;
         ReleaseCapture();
