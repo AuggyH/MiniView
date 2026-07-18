@@ -1539,14 +1539,17 @@ void App::toggle_grid() {
 }
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int cols = m_grid_cols, gap = m_thumb_gap_h;
-    int sbz = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
-    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz;
-    int usable_w = gw - (cols - 1) * gap;
+    int cols = m_grid_cols, gap_h = m_thumb_gap_h, gap_v = m_thumb_gap_v;
     int total = static_cast<int>(m_index.size());
+    if (cols == 0 || total == 0) return;
 
-    // Find row
-    int ty = y - m_toolbar_h + m_grid_scroll_y;
+    // Match grid_render's layout: grid_area_w = window - panel - sb_zone - pad
+    float dpi_s = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    int sb_zone = static_cast<int>(20 * dpi_s);
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone - m_thumb_pad;
+
+    // Find row (account for m_thumb_pad offset)
+    int ty = y - m_toolbar_h - m_thumb_pad + m_grid_scroll_y;
     int row = -1, row_y = 0;
     for (int r = 0; r < static_cast<int>(m_row_heights.size()); ++r) {
         if (ty < row_y + m_row_heights[r]) { row = r; break; }
@@ -1554,37 +1557,63 @@ void App::grid_click(int x, int y, bool shift, bool ctrl) {
     }
     if (row < 0) return;
 
-    // Recompute row layout to find clicked column
+    if (m_thumb_square) {
+        // Square grid: uniform cells centered
+        int cell_w = std::max(static_cast<int>(m_thumb_cell * m_thumb_zoom),
+                              (grid_area_w - (cols - 1) * gap_h) / cols);
+        int x0 = (grid_area_w - cols * cell_w - (cols - 1) * gap_h) / 2;
+        if (x0 < 0) x0 = 0;
+        int col = (x - m_thumb_pad - x0) / (cell_w + gap_h);
+        if (col < 0 || col >= cols) return;
+        int idx = row * cols + col;
+        if (idx < 0 || idx >= total) return;
+        select_item(idx, shift, ctrl);
+        return;
+    }
+
+    // Justified layout: recompute row
+    int usable_w = grid_area_w - (cols - 1) * gap_h;
     int start = row * cols;
     int end = std::min(start + cols, total);
     float H = 120.0f;
     double tw = 0;
     for (int i = start; i < end; ++i) {
         uint32_t iw = 1, ih = 1;
-        if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
+        if (i < static_cast<int>(m_thumbs.size())) {
+            if (m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
+            else if (m_thumbs[i].orig_w > 0) { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
+        }
         if (iw == 0) iw = 1; if (ih == 0) ih = 1;
         tw += (double)H * iw / ih;
     }
     float scale = (tw > 0) ? static_cast<float>(usable_w / tw) : 1.0f;
     int row_h = std::max(40, static_cast<int>(H * scale));
-    float cx = 0;
+    float cx = static_cast<float>(m_thumb_pad);
+    int tx = x;
     for (int i = start; i < end; ++i) {
         uint32_t iw = 1, ih = 1;
-        if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
+        if (i < static_cast<int>(m_thumbs.size())) {
+            if (m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
+            else if (m_thumbs[i].orig_w > 0) { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
+        }
         if (iw == 0) iw = 1; if (ih == 0) ih = 1;
-        float iw2 = static_cast<float>(row_h) * iw / ih;
-        if (x >= static_cast<int>(cx) && x < static_cast<int>(cx + iw2)) {
-            int idx = i;
-            if (idx < 0 || idx >= total) return;
-            if (shift && m_sel_anchor >= 0) select_range(m_sel_anchor, idx);
-            else if (ctrl) { if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = !m_selected[idx]; m_sel_anchor = idx; }
-            else { clear_selection(); if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = true; m_sel_anchor = idx; }
-            m_grid_sel = idx;
-            m_window.invalidate();
+        float img_w = static_cast<float>(row_h) * iw / ih;
+        if (tx >= static_cast<int>(cx) && tx < static_cast<int>(cx + img_w)) {
+            select_item(i, shift, ctrl);
             return;
         }
-        cx += iw2 + gap;
+        cx += img_w + gap_h;
     }
+}
+
+void App::select_item(int idx, bool shift, bool ctrl) {
+    int total = static_cast<int>(m_index.size());
+    if (idx < 0 || idx >= total) return;
+    if (shift && m_sel_anchor >= 0) select_range(m_sel_anchor, idx);
+    else if (ctrl) { if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = !m_selected[idx]; m_sel_anchor = idx; }
+    else { clear_selection(); if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = true; m_sel_anchor = idx; }
+    m_grid_sel = idx;
+    m_window.invalidate();
 }
 
 void App::handle_scrollbar_click(HWND hwnd, int /*mx*/, int my) {
