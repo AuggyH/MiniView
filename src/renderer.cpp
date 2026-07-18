@@ -427,7 +427,7 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
 
     // Rounded corner clip
-    float radius = 8.0f * m_dpi_y / 96.0f;
+    float radius = 4.0f * m_dpi_y / 96.0f;
     D2D1_ROUNDED_RECT rr = {{x, y, x + w, y + h}, radius, radius};
     ComPtr<ID2D1RoundedRectangleGeometry> geo;
     m_d2d_factory->CreateRoundedRectangleGeometry(&rr, &geo);

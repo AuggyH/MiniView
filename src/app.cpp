@@ -251,9 +251,10 @@ int App::run(const std::wstring& initial_path) {
     float scale = dpi / 96.0f;
     m_thumb_cell  = static_cast<int>(200 * scale);  // display cell → columns (~5/row)
     m_thumb_size  = static_cast<int>(400 * scale);  // decode res (2x supersampling)
-    m_thumb_gap   = static_cast<int>(6 * scale);
-    m_thumb_pad   = static_cast<int>(0);      // zero padding — grid flush with edges
-    m_cell_size   = m_thumb_cell + m_thumb_gap;
+    m_thumb_gap_h = static_cast<int>(8 * scale);
+    m_thumb_gap_v = static_cast<int>(16 * scale);
+    m_thumb_pad   = static_cast<int>(8 * scale);   // uniform padding
+    m_cell_size   = m_thumb_cell + m_thumb_gap_h;
     m_panel_width = static_cast<int>(280 * scale);
     m_toolbar_h  = static_cast<int>(28 * scale);
 
@@ -1483,10 +1484,10 @@ void App::toggle_grid() {
         // Request first visible page of thumbnails
         int sb_zone3 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
         int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone3;
-        int cols = std::max(1, (gw + m_thumb_gap) / (m_thumb_cell + m_thumb_gap));
+        int cols = std::max(1, (gw + m_thumb_gap_h) / (m_thumb_cell + m_thumb_gap_h));
         m_grid_cols = cols;
-        int thumb_w = (gw - (cols - 1) * m_thumb_gap) / cols;
-        int cell = thumb_w + m_thumb_gap;
+        int thumb_w = (gw - (cols - 1) * m_thumb_gap_h) / cols;
+        int cell = thumb_w + m_thumb_gap_h;
         int total_rows = (n + cols - 1) / cols;
         m_grid_total_rows = total_rows;
         int rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell;
@@ -1512,7 +1513,7 @@ void App::toggle_grid() {
 }
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int cols = m_grid_cols, gap = m_thumb_gap;
+    int cols = m_grid_cols, gap = m_thumb_gap_h;
     int sbz = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
     int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz;
     int usable_w = gw - (cols - 1) * gap;
@@ -1630,8 +1631,8 @@ void App::grid_ensure_visible() {
     int row = m_grid_sel / m_grid_cols;
     int sbz2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
     int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz2;
-    int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap) / m_grid_cols;
-    int cell_h = thumb_w + m_thumb_gap;
+    int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap_h) / m_grid_cols;
+    int cell_h = thumb_w + m_thumb_gap_h;
     int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell_h;
 
     int top_y = row * cell_h;
@@ -1755,17 +1756,18 @@ void App::grid_render() {
 
     int total = static_cast<int>(m_index.size());
     int sb_zone = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone;
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone - m_thumb_pad;
     int eff_cell = static_cast<int>(m_thumb_cell * m_thumb_zoom);
-    int cols = std::max(1, (grid_area_w + m_thumb_gap) / (eff_cell + m_thumb_gap));
+    int cols = std::max(1, (grid_area_w + m_thumb_gap_h) / (eff_cell + m_thumb_gap_h));
     m_grid_cols = cols;
-    int gap = m_thumb_gap;
-    int usable_w = grid_area_w - (cols - 1) * gap;
+    int gap_h = m_thumb_gap_h;
+    int gap_v = m_thumb_gap_v;
+    int usable_w = grid_area_w - (cols - 1) * gap_h;
 
     // --- First pass: justified row heights ---
     struct RowInfo { int start_idx, end_idx, row_h, row_y, label_extra; std::vector<float> img_x, img_w; };
     std::vector<RowInfo> rows;
-    int cur_y = 0, idx = 0;
+    int cur_y = m_thumb_pad, idx = 0;
     float dpi_label = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
 
     while (idx < total) {
@@ -1800,7 +1802,7 @@ void App::grid_render() {
             float img_w = static_cast<float>(ri.row_h) * iw / ih;
             ri.img_x.push_back(x);
             ri.img_w.push_back(img_w);
-            x += img_w + gap;
+            x += img_w + gap_h;
 
             // Measure actual label height for this image
             if (m_show_labels) {
@@ -1820,12 +1822,12 @@ void App::grid_render() {
         }
         ri.label_extra = std::max(ri.label_extra, m_show_labels ? static_cast<int>(42 * dpi_label) : 0);
         rows.push_back(ri);
-        cur_y += ri.row_h + gap + ri.label_extra;
+        cur_y += ri.row_h + gap_v + ri.label_extra;
         idx = ri.end_idx;
     }
     m_grid_total_rows = static_cast<int>(rows.size());
     m_row_heights.clear();
-    for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap + ri.label_extra);
+    for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap_v + ri.label_extra);
     int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
 
     // --- Scroll calc ---
@@ -1870,7 +1872,7 @@ void App::grid_render() {
         for (int j = 0; j < ri.end_idx - ri.start_idx; ++j) {
             int idx2 = ri.start_idx + j;
             if (idx2 >= total) break;
-            float x = ri.img_x[j];
+            float x = ri.img_x[j] + m_thumb_pad;
             float w = ri.img_w[j];
             bool sel = (idx2 == m_grid_sel) || (idx2 < static_cast<int>(m_selected.size()) && m_selected[idx2]);
             auto dit = m_thumb_d2d.find(idx2);
@@ -1892,8 +1894,8 @@ void App::grid_render() {
                 float name_h = m_renderer.label_height(fname, w, 12.0f);
 
                 if (m_thumbs[idx2].orig_w > 0) {
-                    float gap_h = 3.0f * dpi_s;
-                    m_renderer.draw_label(x, ly + name_h + gap_h, w,
+                    float label_gap = 3.0f * dpi_s;
+                    m_renderer.draw_label(x, ly + name_h + label_gap, w,
                         std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f);
                 }
         }
@@ -1907,7 +1909,7 @@ void App::grid_render() {
 
     // Scrollbar — centered in sb_zone between grid area and panel
     int total_h = 0;
-    for (auto& ri : rows) total_h += ri.row_h + gap + ri.label_extra;
+    for (auto& ri : rows) total_h += ri.row_h + gap_v + ri.label_extra;
     m_grid_total_h = total_h;  // cache for scrollbar interaction
     float sb_x = static_cast<float>(m_renderer.target_size().width) - m_panel_width - static_cast<float>(sb_zone);
     float sb_w = static_cast<float>(sb_zone) * 0.6f;  // 60% of zone = actual bar

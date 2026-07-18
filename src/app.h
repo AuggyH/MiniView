@@ -74,9 +74,10 @@ private:
     int m_thumb_size = 160;   // decode resolution (WIC)
     int m_thumb_cell  = 160;  // display cell size for column calc
     float m_thumb_zoom = 1.0f; // Ctrl+wheel zoom factor
-    int m_thumb_gap  = 6;
-    int m_thumb_pad  = 12;
-    int m_cell_size  = 166;  // size + gap
+    int m_thumb_gap_h = 8;    // horizontal gap
+    int m_thumb_gap_v = 16;   // vertical gap
+    int m_thumb_pad  = 8;     // uniform padding (all sides)
+    int m_cell_size  = 168;   // size + gap_h
 
     Window     m_window;
     Renderer   m_renderer;
