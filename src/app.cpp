@@ -827,13 +827,15 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_mode) { m_grid_sel = static_cast<int>(m_index.size()) - 1; grid_ensure_visible(); m_window.invalidate(); return 0; }
             navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
         case VK_SPACE:
+            if (m_temp_preview) {
+                m_temp_preview = false;
+                toggle_grid();
+                m_window.invalidate();
+                return 0;
+            }
             if (m_grid_mode && m_grid_sel >= 0) {
-                if (m_temp_preview) {
-                    m_temp_preview = false;
-                } else {
-                    open_image(m_index.path_at(m_grid_sel));
-                    m_temp_preview = true;
-                }
+                open_image(m_index.path_at(m_grid_sel));
+                m_temp_preview = true;
                 m_window.invalidate();
                 return 0;
             }
