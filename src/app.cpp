@@ -530,7 +530,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 {
                     m_panel_sel = i;
                     if (m_sel_timer) KillTimer(hwnd, m_sel_timer);
-                    m_sel_timer = SetTimer(hwnd, 2, 400, nullptr);
+                    m_sel_timer = SetTimer(hwnd, 2, 1000, nullptr);
                     // Copy to clipboard
                     if (OpenClipboard(hwnd)) {
                         EmptyClipboard();
