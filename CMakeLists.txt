@@ -59,6 +59,22 @@ target_compile_options(MinView PRIVATE /W4 /utf-8)
 # Disable Windows min/max macros (conflict with std::min/std::max)
 target_compile_definitions(MinView PRIVATE NOMINMAX)
 
+# ── Test: dump metadata ───────────────────────────────────────
+add_executable(test_meta
+    test_meta.cpp
+    src/metadata.cpp
+)
+target_include_directories(test_meta PRIVATE src)
+target_compile_options(test_meta PRIVATE /W4 /utf-8)
+target_compile_definitions(test_meta PRIVATE NOMINMAX)
+target_link_libraries(test_meta PRIVATE
+    shlwapi
+)
+set_target_properties(test_meta PROPERTIES
+    WIN32_EXECUTABLE FALSE
+)
+target_link_options(test_meta PRIVATE /SUBSYSTEM:CONSOLE)
+
 # Enable manifest for DPI awareness
 set_target_properties(MinView PROPERTIES
     WIN32_EXECUTABLE TRUE
