@@ -408,6 +408,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_toast_timer = 0;
             m_window.invalidate();
         }
+        if (wp == 4) {
+            m_anim_t += 0.08f;  // ~16ms/200ms
+            if (m_anim_t >= 1.0f) {
+                m_anim_t = 1.0f;
+                m_animating = false;
+                KillTimer(hwnd, 4);
+                m_anim_timer = 0;
+            }
+            m_window.invalidate();
+        }
         return 0;
 
     case WM_DPICHANGED: {
@@ -739,15 +749,15 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDBLCLK:
         if (m_grid_mode) {
-            // Only open if clicking on a thumbnail
             if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
-                m_from_grid = true;  // Esc will return to grid
+                m_from_grid = true;
+                start_transition(hwnd);
                 toggle_grid();
                 navigate_to(m_grid_sel);
             }
             return 0;
         }
-        if (m_has_image) { toggle_grid(); return 0; }
+        if (m_has_image) { start_transition(hwnd); toggle_grid(); return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -784,6 +794,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
+                start_transition(hwnd);
                 toggle_grid();
                 m_window.invalidate();
                 return 0;
@@ -795,11 +806,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
+                start_transition(hwnd);
                 toggle_grid();
                 m_window.invalidate();
                 return 0;
             }
             if (m_grid_mode && m_grid_sel >= 0) {
+                start_transition(hwnd);
                 open_image(m_index.path_at(m_grid_sel));
                 m_from_grid = true;
                 m_temp_preview = true;
@@ -1345,6 +1358,13 @@ void App::copy_to_clipboard() {
 }
 
 // ── Fullscreen ───────────────────────────────────────────────
+
+void App::start_transition(HWND hwnd) {
+    m_animating = true;
+    m_anim_t = 0.0f;
+    if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
+    m_anim_timer = SetTimer(hwnd, 4, 16, nullptr);
+}
 
 void App::toggle_fullscreen(HWND hwnd) {
     m_fullscreen = !m_fullscreen;
@@ -2245,6 +2265,7 @@ void App::grid_render() {
     }
 
     m_renderer.pop_clip();
+    if (m_animating) m_renderer.draw_fade_overlay(m_anim_t);
     m_renderer.end_frame();
 }
 
@@ -2260,6 +2281,7 @@ void App::render_frame() {
             m_renderer.draw_image();
             m_renderer.draw_overlay();
         }
+        if (m_animating) m_renderer.draw_fade_overlay(m_anim_t);
         m_renderer.end_frame();
         return;
     }
@@ -2326,6 +2348,7 @@ void App::render_frame() {
         m_renderer.draw_hint(L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6");
     }
     m_renderer.pop_clip();
+    if (m_animating) m_renderer.draw_fade_overlay(m_anim_t);
     m_renderer.end_frame();
 }
 

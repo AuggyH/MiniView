@@ -902,6 +902,18 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     draw_btn(w - btn_w * 3, 0, L"\u2014");            // minimize
 }
 
+void Renderer::draw_fade_overlay(float t) {
+    if (!m_d2d_context) return;
+    float alpha = 1.0f - t;
+    if (alpha <= 0.0f) return;
+    ComPtr<ID2D1SolidColorBrush> br;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.0f, 0.0f, 0.0f, std::clamp(alpha, 0.0f, 1.0f)), &br);
+    D2D1_RECT_F rc = {0, 0, static_cast<float>(m_target_size.width),
+                      static_cast<float>(m_target_size.height)};
+    m_d2d_context->FillRectangle(&rc, br.Get());
+}
+
 void Renderer::push_clip_below(float y) {
     if (!m_d2d_context) return;
     D2D1_RECT_F clip = {0, y, static_cast<float>(m_target_size.width),

@@ -48,6 +48,7 @@ public:
         int active_idx, float y = 0);
     void draw_title_bar(float w, int hover_btn, int press_btn,
         const std::vector<std::wstring>& menu_items, int active_menu);
+    void draw_fade_overlay(float t);  // t: 0→1 = black→clear
     void push_clip_below(float y);
     void pop_clip();
     float measure_text(const std::wstring& text, float font_size);
