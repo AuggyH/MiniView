@@ -931,7 +931,10 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
 
 void App::open_in_explorer() {
     if (m_current_path.empty()) return;
-    std::wstring args = L"/select," + m_current_path;
+    std::wstring path = m_current_path;
+    // Convert forward slashes to backslashes
+    for (auto& c : path) if (c == L'/') c = L'\\';
+    std::wstring args = L"/select,\"" + path + L"\"";
     ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOW);
 }
 
