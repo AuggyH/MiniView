@@ -825,11 +825,7 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     float pad = 12.0f * dpi_s;
     float btn_w = 46.0f * dpi_s;
 
-    // ── Subtle background (translucent, immersive but readable) ──
-    ComPtr<ID2D1SolidColorBrush> bg;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.04f, 0.04f, 0.06f, 0.55f), &bg);
-    D2D1_RECT_F rc = {0, 0, w, h};
-    m_d2d_context->FillRectangle(&rc, bg.Get());
+    // ── No background — fully immersive, clip keeps content below ──
 
     // ── Brushes ──
     ComPtr<ID2D1SolidColorBrush> title_br, menu_br, menu_hover_bg;
@@ -904,6 +900,18 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     draw_btn(w - btn_w, 2, L"\u2715");                // close
     draw_btn(w - btn_w * 2, 1, L"\u25A1");            // maximize
     draw_btn(w - btn_w * 3, 0, L"\u2014");            // minimize
+}
+
+void Renderer::push_clip_below(float y) {
+    if (!m_d2d_context) return;
+    D2D1_RECT_F clip = {0, y, static_cast<float>(m_target_size.width),
+                        static_cast<float>(m_target_size.height)};
+    m_d2d_context->PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+}
+
+void Renderer::pop_clip() {
+    if (!m_d2d_context) return;
+    m_d2d_context->PopAxisAlignedClip();
 }
 
 } // namespace mv
