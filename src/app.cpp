@@ -190,27 +190,30 @@ static void preload_worker(
     // COM must be initialized on every thread that uses WIC
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-    Decoder decoder;  // each thread gets its own WIC factory
-    while (running) {
-        std::wstring path;
-        {
-            std::unique_lock lock(mtx);
-            cv.wait(lock, [&] { return !running || !queue.empty(); });
-            if (!running) return;
-            if (queue.empty()) continue;
-            path = std::move(queue.back());
-            queue.pop_back();
-        }
+    try {
+        Decoder decoder;  // each thread gets its own WIC factory
+        while (running) {
+            std::wstring path;
+            {
+                std::unique_lock lock(mtx);
+                cv.wait(lock, [&] { return !running || !queue.empty(); });
+                if (!running) break;
+                if (queue.empty()) continue;
+                path = std::move(queue.back());
+                queue.pop_back();
+            }
 
-        try {
-            auto bitmap = decoder.decode(path);
-            std::lock_guard lock(mtx);
-            // Simple LRU: keep at most 6 entries
-            if (cache.size() >= 6) cache.clear();
-            cache[std::move(path)] = bitmap;
-        } catch (...) {
-            // decode failed — skip
+            try {
+                auto bitmap = decoder.decode(path);
+                std::lock_guard lock(mtx);
+                if (cache.size() >= 6) cache.clear();
+                cache[std::move(path)] = bitmap;
+            } catch (...) {
+                // decode failed — skip
+            }
         }
+    } catch (...) {
+        // Decoder creation failed — thread exits cleanly
     }
     CoUninitialize();
 }
@@ -954,29 +957,33 @@ static void thumb_loader_worker(
     ImageIndex& index)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    Decoder decoder;
-    while (running) {
-        int idx;
-        {
-            std::unique_lock lock(mtx);
-            cv.wait(lock, [&] { return !running || !queue.empty(); });
-            if (!running) break;
-            if (queue.empty()) continue;
-            idx = queue.back();
-            queue.pop_back();
-        }
-        if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
-        if (thumbs[idx].loaded) continue;
+    try {
+        Decoder decoder;
+        while (running) {
+            int idx;
+            {
+                std::unique_lock lock(mtx);
+                cv.wait(lock, [&] { return !running || !queue.empty(); });
+                if (!running) break;
+                if (queue.empty()) continue;
+                idx = queue.back();
+                queue.pop_back();
+            }
+            if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
+            if (thumbs[idx].loaded) continue;
 
-        try {
-            auto wic = decoder.decode_scaled(index.path_at(idx), 320);
-            std::lock_guard lock(mtx);
-            thumbs[idx].wic = wic;
-            thumbs[idx].loaded = true;
-        } catch (...) {
-            std::lock_guard lock(mtx);
-            thumbs[idx].loaded = true;  // mark done even on failure
+            try {
+                auto wic = decoder.decode_scaled(index.path_at(idx), 320);
+                std::lock_guard lock(mtx);
+                thumbs[idx].wic = wic;
+                thumbs[idx].loaded = true;
+            } catch (...) {
+                std::lock_guard lock(mtx);
+                thumbs[idx].loaded = true;
+            }
         }
+    } catch (...) {
+        // Decoder creation failed — thread exits cleanly
     }
     CoUninitialize();
 }
