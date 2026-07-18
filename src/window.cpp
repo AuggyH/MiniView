@@ -18,7 +18,7 @@ bool Window::create(const std::wstring& title, int width, int height) {
 
     WNDCLASSEXW wc = {};
     wc.cbSize        = sizeof(WNDCLASSEXW);
-    wc.style         = CS_HREDRAW | CS_VREDRAW;
+    wc.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hinst;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);

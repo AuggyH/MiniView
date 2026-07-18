@@ -519,6 +519,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         switch (wp) {
         case VK_ESCAPE:
+            if (m_temp_preview) { m_temp_preview = false; m_window.invalidate(); return 0; }
             if (m_grid_mode) { toggle_grid(); return 0; }
             if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
             DestroyWindow(hwnd); return 0;
@@ -561,11 +562,21 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_END:
             if (m_grid_mode) { m_grid_sel = static_cast<int>(m_index.size()) - 1; grid_ensure_visible(); m_window.invalidate(); return 0; }
             navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
-        case VK_SPACE: navigate_to(m_current_idx + 1); return 0;
+        case VK_SPACE:
+            if (m_grid_mode && m_grid_sel >= 0) {
+                if (m_temp_preview) {
+                    m_temp_preview = false;
+                } else {
+                    open_image(m_index.path_at(m_grid_sel));
+                    m_temp_preview = true;
+                }
+                m_window.invalidate();
+                return 0;
+            }
+            navigate_to(m_current_idx + 1); return 0;
         case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
         case VK_RETURN:
-            if (m_grid_mode && m_grid_sel >= 0) { toggle_grid(); navigate_to(m_grid_sel); return 0; }
-            if (m_has_image) { toggle_fullscreen(hwnd); return 0; }
+            if (m_has_image && !m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
             return -1;
         case VK_DELETE:
             if (m_grid_mode && has_selection()) {
@@ -1529,6 +1540,20 @@ void App::grid_render() {
 }
 
 void App::render_frame() {
+    if (m_temp_preview) {
+        if (!m_renderer.begin_frame()) return;
+        m_renderer.clear();
+        if (m_has_image) {
+            if (m_using_thumb_preview) {
+                auto full = get_preloaded(m_current_path);
+                if (full) { m_renderer.upload_image(full.Get()); m_using_thumb_preview = false; }
+            }
+            m_renderer.draw_image();
+            m_renderer.draw_overlay();
+        }
+        m_renderer.end_frame();
+        return;
+    }
     if (m_grid_mode) {
         grid_render();
         return;
