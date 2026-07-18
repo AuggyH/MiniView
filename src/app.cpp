@@ -224,7 +224,11 @@ App::App()  = default;
 App::~App() { stop_preloader(); stop_thumb_loader(); }
 
 int App::run(const std::wstring& initial_path) {
-    if (!m_window.create(L"MinView", 1200, 800))
+    // Scale window size by DPI
+    float dpi = static_cast<float>(GetDpiForWindow(GetDesktopWindow()));
+    int ww = static_cast<int>(1200 * dpi / 96.0f);
+    int wh = static_cast<int>(800 * dpi / 96.0f);
+    if (!m_window.create(L"MinView", ww, wh))
         throw std::runtime_error("Failed to create window");
 
     m_window.set_message_callback(
@@ -236,7 +240,6 @@ int App::run(const std::wstring& initial_path) {
         throw std::runtime_error("Failed to init Direct2D renderer");
 
     // Set initial DPI from monitor
-    float dpi = static_cast<float>(GetDpiForWindow(m_window.handle()));
     m_renderer.set_dpi(dpi, dpi);
 
     SetMenu(m_window.handle(), build_menu_bar());
@@ -986,6 +989,43 @@ void App::zoom_at_center(float factor) {
 
 // ── Grid mode ────────────────────────────────────────────────
 
+// Get a WIC bitmap from the Windows shell thumbnail cache (fast path)
+static ComPtr<IWICBitmapSource> get_shell_thumb(const std::wstring& path, uint32_t max_size) {
+    ComPtr<IShellItemImageFactory> factory;
+    HRESULT hr = SHCreateItemFromParsingName(path.c_str(), nullptr,
+        IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) return nullptr;
+
+    SIZE sz = {static_cast<LONG>(max_size), static_cast<LONG>(max_size)};
+    HBITMAP hbmp = nullptr;
+    hr = factory->GetImage(sz, SIIGBF_RESIZETOFIT, &hbmp);
+    if (FAILED(hr) || !hbmp) return nullptr;
+
+    // Convert HBITMAP to WIC bitmap via IWICImagingFactory
+    ComPtr<IWICImagingFactory> wic_factory;
+    hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_factory));
+    if (FAILED(hr)) { DeleteObject(hbmp); return nullptr; }
+
+    ComPtr<IWICBitmap> wic_bmp;
+    hr = wic_factory->CreateBitmapFromHBITMAP(hbmp, nullptr,
+        WICBitmapUsePremultipliedAlpha, &wic_bmp);
+    DeleteObject(hbmp);
+    if (FAILED(hr)) return nullptr;
+
+    // Convert to PBGRA
+    ComPtr<IWICFormatConverter> converter;
+    hr = wic_factory->CreateFormatConverter(&converter);
+    if (FAILED(hr)) return nullptr;
+    hr = converter->Initialize(wic_bmp.Get(), GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeMedianCut);
+    if (FAILED(hr)) return nullptr;
+
+    ComPtr<IWICBitmapSource> result;
+    converter.As(&result);
+    return result;
+}
+
 static void thumb_loader_worker(
     std::atomic<bool>& running,
     std::mutex& mtx,
@@ -1011,7 +1051,13 @@ static void thumb_loader_worker(
             if (thumbs[idx].loaded) continue;
 
             try {
-                auto wic = decoder.decode_scaled(index.path_at(idx), 200);
+                auto path = index.path_at(idx);
+                // Try shell thumbnail cache first (instant for previously-viewed files)
+                auto wic = get_shell_thumb(path, 320);
+                if (!wic) {
+                    // Fall back to WIC decode
+                    wic = decoder.decode_scaled(path, 320);
+                }
                 std::lock_guard lock(mtx);
                 thumbs[idx].wic = wic;
                 thumbs[idx].loaded = true;
@@ -1029,7 +1075,7 @@ static void thumb_loader_worker(
 void App::start_thumb_loader() {
     m_thumb_running = true;
     m_thumb_threads.clear();
-    int num_threads = 1;  // single thread — multi-thread causes intermittent WIC init failures
+    int num_threads = 2;
     for (int i = 0; i < num_threads; ++i) {
         try {
             m_thumb_threads.emplace_back(thumb_loader_worker,
@@ -1284,6 +1330,32 @@ void App::grid_render() {
     for (int i = top_row * cols; i < std::min(total, (bot_row + 1) * cols); ++i)
         request_thumb(i);
 
+    // Batch-grab ready WIC thumbnails under one mutex lock (avoids per-thumbnail contention)
+    std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        for (int r = top_row; r <= bot_row; ++r) {
+            for (int c = 0; c < cols; ++c) {
+                int idx = r * cols + c;
+                if (idx >= total) break;
+                if (m_thumb_d2d.count(idx)) continue;
+                if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].loaded && m_thumbs[idx].wic) {
+                    ready.push_back({idx, m_thumbs[idx].wic});
+                }
+            }
+        }
+    }
+
+    // Create D2D bitmaps outside the mutex (GPU upload, can be slow)
+    for (auto& [idx, wic] : ready) {
+        ComPtr<ID2D1Bitmap1> d2d_bmp;
+        HRESULT hr = m_renderer.create_bitmap_from_wic(wic.Get(), &d2d_bmp);
+        if (SUCCEEDED(hr) && d2d_bmp) {
+            m_thumb_d2d[idx] = d2d_bmp;
+        }
+    }
+
+    // Now render (no mutex needed — all data is in m_thumb_d2d)
     for (int r = top_row; r <= bot_row; ++r) {
         for (int c = 0; c < cols; ++c) {
             int idx = r * cols + c;
@@ -1292,28 +1364,8 @@ void App::grid_render() {
             float x = static_cast<float>(THUMB_PAD + c * cell);
             float y = static_cast<float>(THUMB_PAD + r * cell - m_grid_scroll_y);
 
-            // Check if we have a D2D bitmap cached; if not, create one from WIC
-            // (must hold m_thumb_mutex when reading thumb state — worker threads write here)
+            // Look up in D2D cache (already populated by batch above)
             auto dit = m_thumb_d2d.find(idx);
-            if (dit == m_thumb_d2d.end()) {
-                bool loaded = false;
-                ComPtr<IWICBitmapSource> wic_copy;
-                {
-                    std::lock_guard lock(m_thumb_mutex);
-                    if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].loaded) {
-                        wic_copy = m_thumbs[idx].wic;
-                        loaded = true;
-                    }
-                }
-                if (loaded && wic_copy) {
-                    ComPtr<ID2D1Bitmap1> d2d_bmp;
-                    HRESULT hr = m_renderer.create_bitmap_from_wic(wic_copy.Get(), &d2d_bmp);
-                    if (SUCCEEDED(hr) && d2d_bmp) {
-                        m_thumb_d2d[idx] = d2d_bmp;
-                        dit = m_thumb_d2d.find(idx);
-                    }
-                }
-            }
 
             bool sel = (idx == m_grid_sel) || (idx < static_cast<int>(m_selected.size()) && m_selected[idx]);
             if (dit != m_thumb_d2d.end() && dit->second) {
