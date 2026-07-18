@@ -367,6 +367,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 0;
 
+    case WM_TIMER:
+        if (wp == 1 && m_grid_mode) {
+            m_window.invalidate();  // triggers grid_render which requests visible thumbs
+        }
+        return 0;
+
     case WM_DPICHANGED: {
         float dpi = static_cast<float>(LOWORD(wp));
         m_renderer.set_dpi(dpi, dpi);
@@ -1098,7 +1104,8 @@ static void thumb_loader_worker(
     std::condition_variable& cv,
     std::vector<int>& queue,
     std::vector<App::ThumbEntry>& thumbs,
-    ImageIndex& index)
+    ImageIndex& index,
+    int thumb_size)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     try {
@@ -1135,15 +1142,15 @@ static void thumb_loader_worker(
                     ULONGLONG cache_time = (static_cast<ULONGLONG>(cache_attr.ftLastWriteTime.dwHighDateTime) << 32)
                         | cache_attr.ftLastWriteTime.dwLowDateTime;
                     if (cache_time >= src_time) {
-                        try { wic = decoder.decode_scaled(cache_file, 256); cache_hit = true; }
+                        try { wic = decoder.decode_scaled(cache_file, thumb_size); cache_hit = true; }
                         catch (...) {}
                     }
                 }
 
                 if (!cache_hit) {
-                    wic = get_shell_thumb(path, 256);
+                    wic = get_shell_thumb(path, thumb_size);
                     if (!wic) {
-                        wic = decoder.decode_scaled(path, 256);
+                        wic = decoder.decode_scaled(path, thumb_size);
                     }
                     // Save to disk cache
                     if (wic) {
@@ -1178,7 +1185,8 @@ void App::start_thumb_loader() {
                 std::ref(m_thumb_cv),
                 std::ref(m_thumb_queue),
                 std::ref(m_thumbs),
-                std::ref(m_index));
+                std::ref(m_index),
+                m_thumb_size);
         } catch (...) {
             m_thumb_running = false;
             break;
@@ -1233,8 +1241,12 @@ void App::toggle_grid() {
         grid_ensure_visible();
         SetWindowTextW(m_window.handle(),
             (L"\u7F29\u7565\u56FE\u7F51\u683C [" + std::to_wstring(m_index.size()) + L" \u5F20]").c_str());
+
+        // 100ms timer for lazy thumbnail loading (fires even when unfocused)
+        m_grid_timer = SetTimer(m_window.handle(), 1, 100, nullptr);
     } else {
         // Exit grid
+        if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
         stop_thumb_loader();
         m_thumbs.clear();
         m_thumb_d2d.clear();
@@ -1425,7 +1437,9 @@ void App::grid_render() {
     int top_row = m_grid_scroll_y / cell;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
 
-    // Request thumbs for visible range
+    // (thumb requests handled by WM_TIMER for smooth scroll)
+
+    // Request visible thumbs (cheap — skips already-loaded/queued)
     for (int i = top_row * cols; i < std::min(total, (bot_row + 1) * cols); ++i)
         request_thumb(i);
 
@@ -1448,7 +1462,7 @@ void App::grid_render() {
     // Create D2D bitmaps outside the mutex (limit to 4/frame to avoid blocking render)
     int d2d_count = 0;
     for (auto& [idx, wic] : ready) {
-        if (d2d_count >= 4) break;
+        if (d2d_count >= 2) break;
         ComPtr<ID2D1Bitmap1> d2d_bmp;
         HRESULT hr = m_renderer.create_bitmap_from_wic(wic.Get(), &d2d_bmp);
         if (SUCCEEDED(hr) && d2d_bmp) {

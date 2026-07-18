@@ -111,6 +111,7 @@ private:
     bool  m_using_thumb_preview = false;
     bool  m_temp_preview = false;
     int   m_panel_width = 280;
+    UINT_PTR m_grid_timer = 0;
     ImageMeta m_info_meta;
 
     // Multi-select (grid only)
