@@ -76,6 +76,28 @@ ComPtr<IWICBitmapSource> Decoder::decode_scaled(const std::wstring& path, uint32
         hr = m_factory->CreateBitmapScaler(&scaler);
         if (FAILED(hr))
             throw std::runtime_error("Failed to create bitmap scaler");
+
+        // Two-step downscale for large ratios: fast Linear to 2x, then Fant to final
+        float ratio = std::max(fw, fh) / static_cast<float>(max_size);
+        if (ratio > 3.0f) {
+            uint32_t mid_w = static_cast<uint32_t>(fw * scale * 2.0f);
+            uint32_t mid_h = static_cast<uint32_t>(fh * scale * 2.0f);
+            if (mid_w > max_size * 2) mid_w = max_size * 2;
+            if (mid_h > max_size * 2) mid_h = max_size * 2;
+            hr = scaler->Initialize(frame.Get(), mid_w, mid_h, WICBitmapInterpolationModeLinear);
+            if (FAILED(hr))
+                throw std::runtime_error("Failed to scale bitmap (step 1)");
+
+            ComPtr<IWICBitmapScaler> scaler2;
+            hr = m_factory->CreateBitmapScaler(&scaler2);
+            if (FAILED(hr))
+                throw std::runtime_error("Failed to create bitmap scaler 2");
+            hr = scaler2->Initialize(scaler.Get(), sw, sh, WICBitmapInterpolationModeFant);
+            if (FAILED(hr))
+                throw std::runtime_error("Failed to scale bitmap (step 2)");
+            return convert_to_pbgra(scaler2.Get());
+        }
+
         hr = scaler->Initialize(frame.Get(), sw, sh, WICBitmapInterpolationModeFant);
         if (FAILED(hr))
             throw std::runtime_error("Failed to scale bitmap");
