@@ -485,16 +485,13 @@ void Renderer::draw_side_panel(float x, float w, float h,
         y = pad + thumb_h + pad;
     }
 
-    // Info rows
+    // Info rows — 2-column layout with text measurement
+    float lw = 80.0f, col_gap = 4.0f;
     for (auto& [label, value] : info) {
         if (y + 20 > h) break;
-        D2D1_RECT_F lr = {x + pad, y, x + 80, y + 26};
-        D2D1_RECT_F vr = {x + 84, y, x + w - pad, y + 26};
-        m_d2d_context->DrawText(label.c_str(), static_cast<uint32_t>(label.size()),
-            m_text_format.Get(), &lr, grey.Get());
-        m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
-            m_text_format.Get(), &vr, white.Get());
-        y += 30;
+        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get());
+        float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap, value, white.Get());
+        y = std::max(y1, y2);
     }
 
     // Generation info section
@@ -505,13 +502,9 @@ void Renderer::draw_side_panel(float x, float w, float h,
         y += 30;
         for (auto& [label, value] : gen_info) {
             if (y + 20 > h) break;
-            D2D1_RECT_F lr = {x + pad, y, x + 80, y + 26};
-            D2D1_RECT_F vr = {x + 84, y, x + w - pad, y + 26};
-            m_d2d_context->DrawText(label.c_str(), static_cast<uint32_t>(label.size()),
-                m_text_format.Get(), &lr, grey.Get());
-            m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
-                m_text_format.Get(), &vr, white.Get());
-            y += 30;
+            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get());
+            float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap, value, white.Get());
+            y = std::max(y1, y2);
         }
     }
 }
@@ -533,6 +526,26 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
     D2D1_RECT_F tr = {x, thumb_y, x + w, thumb_y + thumb_h};
     D2D1_ROUNDED_RECT rr = {tr, w * 0.4f, w * 0.4f};
     m_d2d_context->FillRoundedRectangle(&rr, thumb.Get());
+}
+
+float Renderer::draw_text_line(float x, float y, float w,
+    const std::wstring& text, ID2D1SolidColorBrush* brush)
+{
+    if (!m_dwrite_factory || !m_d2d_context || text.empty()) return y + 20;
+
+    ComPtr<IDWriteTextLayout> layout;
+    HRESULT hr = m_dwrite_factory->CreateTextLayout(
+        text.c_str(), static_cast<uint32_t>(text.size()),
+        m_text_format.Get(), w, 200.0f, &layout);
+    if (FAILED(hr)) return y + 20;
+
+    DWRITE_TEXT_METRICS metrics;
+    layout->GetMetrics(&metrics);
+    float h = metrics.height;
+
+    D2D1_POINT_2F origin = {x, y};
+    m_d2d_context->DrawTextLayout(origin, layout.Get(), brush);
+    return y + h + 4;  // 4px gap
 }
 
 } // namespace mv
