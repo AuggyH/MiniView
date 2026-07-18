@@ -533,9 +533,9 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.24f, 1.0f), &line);
     m_d2d_context->DrawLine({x, y_off}, {x, y_off + h}, line.Get(), 1.0f);
 
-    ComPtr<ID2D1SolidColorBrush> white, grey;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.9f, 0.9f, 0.9f, 1.0f), &white);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.45f, 0.45f, 0.50f, 1.0f), &grey);
+    ComPtr<ID2D1SolidColorBrush> label_br, value_br;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.80f, 0.80f, 0.82f, 1.0f), &label_br);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.60f, 0.60f, 0.64f, 1.0f), &value_br);
 
     float content_w = w - pad * 2;
 
@@ -547,7 +547,6 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         float ox = x + pad;
         float oy = y;
         D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
-        // Rounded corners on preview
         {
             float pr = 4.0f * dpi_s;
             D2D1_ROUNDED_RECT prr = {{ox, oy, ox + dw, oy + dh}, pr, pr};
@@ -565,35 +564,41 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         y = y_off + pad + dh + sec_gap;
     }
 
-    // ── Info rows (justified 2-column) ──
+    // ── Info rows (label emphasized, value slightly dimmed) ──
     float lw = 70.0f * dpi_s;
     float cgap = 8.0f * dpi_s;
     float val_w = content_w - lw - cgap;
 
     for (auto& [label, value] : info) {
         if (y + gap > y_off + h) break;
-        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
+        float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
         float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                  value, white.Get(), 12.0f);
-        y = std::max(y1, y2) + gap - 4.0f * dpi_s;  // draw_text_line already adds 4px
+                                  value, value_br.Get(), 10.0f);
+        y = std::max(y1, y2) + gap - 4.0f * dpi_s;
     }
 
     // ── Generation info section ──
     if (!gen_info.empty()) {
-        y += sec_gap * 0.5f;
+        float title_pad = 12.0f * dpi_s;
+        y += title_pad;
+        // Horizontal divider
+        ComPtr<ID2D1SolidColorBrush> div_br;
+        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.24f, 1.0f), &div_br);
+        m_d2d_context->DrawLine({x + pad, y}, {x + pad + content_w, y}, div_br.Get(), 1.0f);
+        y += title_pad;
         // Section title
         {
             ComPtr<ID2D1SolidColorBrush> title_br;
-            m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.7f, 0.7f, 0.75f, 1.0f), &title_br);
+            m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.70f, 0.70f, 0.74f, 1.0f), &title_br);
             float ty = draw_text_line(x + pad, y, content_w, L"\u751F\u6210\u4FE1\u606F",
                                       title_br.Get(), 12.0f);
             y = ty + gap * 0.5f;
         }
         for (auto& [label, value] : gen_info) {
             if (y + gap > y_off + h) break;
-            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
+            float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
             float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                      value, white.Get(), 12.0f);
+                                      value, value_br.Get(), 10.0f);
             y = std::max(y1, y2) + gap - 4.0f * dpi_s;
         }
     }
