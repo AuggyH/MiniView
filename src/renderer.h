@@ -34,7 +34,8 @@ public:
         ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
         const std::vector<std::pair<std::wstring, std::wstring>>& info,
         const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
-        std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable = nullptr);
+        std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable = nullptr,
+        int sel_idx = -1, const std::wstring* toast = nullptr);
     void draw_scrollbar(float x, float y, float w, float h,
         float total, float view, float pos, bool active = false);
     float draw_text_line(float x, float y, float w,

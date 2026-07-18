@@ -511,7 +511,8 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,
     const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
-    std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable)
+    std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable,
+    int sel_idx, const std::wstring* toast)
 {
     if (!m_d2d_context || !m_text_format) return;
 
@@ -572,12 +573,20 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     for (auto& [label, value] : info) {
         if (y + gap > y_off + h) break;
+        int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
         float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
         float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
                                   value, value_br.Get(), 10.0f);
         if (out_clickable && !value.empty()) {
             D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
             out_clickable->push_back({cr, value});
+            if (sel_idx == cur_idx) {
+                ComPtr<ID2D1SolidColorBrush> sel_br;
+                m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
+                m_d2d_context->FillRectangle(&cr, sel_br.Get());
+                // Re-draw text on top of highlight
+                draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
+            }
         }
         y = std::max(y1, y2) + gap - 4.0f * dpi_s;
     }
@@ -601,15 +610,36 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         }
         for (auto& [label, value] : gen_info) {
             if (y + gap > y_off + h) break;
+            int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
             float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
             float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
                                       value, value_br.Get(), 10.0f);
             if (out_clickable && !value.empty()) {
                 D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
                 out_clickable->push_back({cr, value});
+                if (sel_idx == cur_idx) {
+                    ComPtr<ID2D1SolidColorBrush> sel_br;
+                    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
+                    m_d2d_context->FillRectangle(&cr, sel_br.Get());
+                    draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
+                }
             }
             y = std::max(y1, y2) + gap - 4.0f * dpi_s;
         }
+    }
+
+    // Toast notification
+    if (toast && !toast->empty()) {
+        float toast_y = y_off + h - pad - 28.0f * dpi_s;
+        D2D1_RECT_F tr = {x + pad, toast_y, x + w - pad, toast_y + 24.0f * dpi_s};
+        ComPtr<ID2D1SolidColorBrush> toast_bg;
+        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.15f, 0.15f, 0.18f, 0.92f), &toast_bg);
+        D2D1_ROUNDED_RECT trr = {tr, 4.0f * dpi_s, 4.0f * dpi_s};
+        m_d2d_context->FillRoundedRectangle(&trr, toast_bg.Get());
+        ComPtr<ID2D1SolidColorBrush> toast_txt;
+        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.88f, 1.0f), &toast_txt);
+        draw_text_line(x + pad + 8.0f * dpi_s, toast_y + 3.0f * dpi_s,
+                       w - pad * 2 - 16.0f * dpi_s, *toast, toast_txt.Get(), 11.0f);
     }
 }
 

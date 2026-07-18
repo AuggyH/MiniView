@@ -135,6 +135,9 @@ private:
     int   m_grid_saved_idx = 0;
     ImageMeta m_info_meta;
     std::vector<std::pair<D2D1_RECT_F, std::wstring>> m_panel_clickable;
+    int m_panel_sel = -1;           // selected clickable index, -1 = none
+    std::wstring m_panel_copied;    // last copied text for toast
+    UINT_PTR m_toast_timer = 0;     // toast dismiss timer
 
     // Multi-select (grid only)
     std::vector<bool> m_selected;
