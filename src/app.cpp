@@ -1368,7 +1368,7 @@ void App::copy_to_clipboard() {
 
 // ── Fullscreen ───────────────────────────────────────────────
 
-void App::start_transition(HWND hwnd, bool forward) {
+void App::start_transition(HWND /*hwnd*/, bool forward) {
     if (m_animating) return;
     m_anim_forward = forward;
     m_anim_thumb.Reset();
