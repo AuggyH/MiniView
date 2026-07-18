@@ -21,6 +21,8 @@ void ImageIndex::clear() {
     m_root_dir.clear();
 }
 
+// ── Sort implementations ─────────────────────────────────────
+
 void ImageIndex::sort_by_name() {
     std::sort(m_files.begin(), m_files.end(),
         [](const ImageEntry& a, const ImageEntry& b) {
@@ -43,12 +45,45 @@ void ImageIndex::sort_by_path() {
     rebuild_map();
 }
 
+void ImageIndex::sort_by_date() {
+    std::sort(m_files.begin(), m_files.end(),
+        [](const ImageEntry& a, const ImageEntry& b) {
+            return a.mtime > b.mtime;  // newest first
+        });
+    rebuild_map();
+}
+
+void ImageIndex::sort_by_size() {
+    std::sort(m_files.begin(), m_files.end(),
+        [](const ImageEntry& a, const ImageEntry& b) {
+            return a.size > b.size;  // largest first
+        });
+    rebuild_map();
+}
+
+void ImageIndex::sort_random() {
+    std::shuffle(m_files.begin(), m_files.end(), m_rng);
+    rebuild_map();
+}
+
+void ImageIndex::sort_by(SortMode mode) {
+    m_sort_mode = mode;
+    switch (mode) {
+    case SortMode::Name:   sort_by_name(); break;
+    case SortMode::Date:   sort_by_date(); break;
+    case SortMode::Size:   sort_by_size(); break;
+    case SortMode::Random: sort_random();  break;
+    }
+}
+
 void ImageIndex::rebuild_map() {
     m_path_to_idx.clear();
     for (int i = 0; i < static_cast<int>(m_files.size()); ++i) {
         m_path_to_idx[m_files[i].path] = i;
     }
 }
+
+// ── Query ────────────────────────────────────────────────────
 
 bool ImageIndex::remove(int idx) {
     if (idx < 0 || idx >= static_cast<int>(m_files.size())) return false;
@@ -66,7 +101,6 @@ std::wstring ImageIndex::relpath_at(size_t idx) const {
     if (idx >= m_files.size()) return L"";
     const auto& full = m_files[idx].path;
     if (m_root_dir.empty()) return full;
-    // Strip root directory prefix (case-insensitive)
     size_t root_len = m_root_dir.size();
     if (full.size() > root_len &&
         _wcsnicmp(full.c_str(), m_root_dir.c_str(), root_len) == 0) {
@@ -81,6 +115,8 @@ int ImageIndex::index_of(const std::wstring& path) const {
     auto it = m_path_to_idx.find(path);
     return (it != m_path_to_idx.end()) ? it->second : -1;
 }
+
+// ── Scan ─────────────────────────────────────────────────────
 
 int ImageIndex::scan(const std::wstring& directory, bool recursive) {
     m_files.clear();
@@ -113,11 +149,11 @@ int ImageIndex::scan(const std::wstring& directory, bool recursive) {
         return -1;
     }
 
-    // Recursive mode: sort by full path to group by subfolder
-    if (recursive)
+    // Apply current sort mode (Name by default, or by-path for recursive)
+    if (m_sort_mode == SortMode::Name && recursive)
         sort_by_path();
     else
-        sort_by_name();
+        sort_by(m_sort_mode);
 
     return static_cast<int>(m_files.size());
 }
