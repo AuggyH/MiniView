@@ -2117,6 +2117,17 @@ void App::grid_render() {
         }
     }
 
+    // Toolbar + panel + scrollbar
+    float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
+    float tw = static_cast<float>(m_renderer.target_size().width);
+    float view_h = static_cast<float>(m_renderer.target_size().height);
+
+    // Title bar with menus (drawn before content, clip keeps content below)
+    float title_h2 = m_title_h * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
+        m_toolbar_items, m_toolbar_active);
+    m_renderer.push_clip_below(title_h2);
+
     // --- Second pass: render ---
     for (int r = top_row; r <= bot_row && r < static_cast<int>(rows.size()); ++r) {
         auto& ri = rows[r];
@@ -2157,11 +2168,6 @@ void App::grid_render() {
     }
     }  // for r loop
 
-    // Toolbar + panel + scrollbar
-    float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
-    float tw = static_cast<float>(m_renderer.target_size().width);
-    float view_h = static_cast<float>(m_renderer.target_size().height);
-
     // Scrollbar — centered in sb_zone between grid area and panel
     int total_h = 0;
     for (auto& ri : rows) total_h += ri.row_h + gap_v + ri.label_extra;
@@ -2172,12 +2178,6 @@ void App::grid_render() {
     bool sb_active = m_scrollbar_dragging || m_scrollbar_hover;
     m_renderer.draw_scrollbar(sb_x0, static_cast<float>(m_toolbar_h), sb_w, view_h - m_toolbar_h,
         static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y), sb_active);
-
-    // Title bar with menus
-    float title_h2 = m_title_h * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
-        m_toolbar_items, m_toolbar_active);
-    m_renderer.push_clip_below(title_h2);
 
     // Side info panel
     {
