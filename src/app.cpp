@@ -1300,9 +1300,12 @@ void App::toggle_grid() {
 
     if (m_grid_mode) {
         int n = static_cast<int>(m_index.size());
-        m_thumbs.clear();
-        m_thumbs.resize(n);
-        m_thumb_d2d.clear();
+        bool re_entry = (m_thumbs.size() == static_cast<size_t>(n));
+        if (!re_entry) {
+            m_thumbs.clear();
+            m_thumbs.resize(n);
+            m_thumb_d2d.clear();
+        }
 
         // Smart scroll restoration
         if (m_current_idx == m_grid_saved_idx) {
@@ -1318,7 +1321,7 @@ void App::toggle_grid() {
         m_selected.resize(n, false);
         if (m_grid_sel < n) m_selected[m_grid_sel] = true;
         m_sel_anchor = m_grid_sel;
-        start_thumb_loader();
+        if (!re_entry) start_thumb_loader();
 
         // Request first visible page of thumbnails
         int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - m_thumb_pad * 2 + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
@@ -1338,13 +1341,11 @@ void App::toggle_grid() {
         // 100ms timer for lazy thumbnail loading (fires even when unfocused)
         m_grid_timer = SetTimer(m_window.handle(), 1, 100, nullptr);
     } else {
-        // Exit grid — save position and selected index
+        // Exit grid — save state but keep thumb cache
         m_grid_scroll_saved = m_grid_scroll_y;
         m_grid_saved_idx = m_grid_sel;
         if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
-        stop_thumb_loader();
-        m_thumbs.clear();
-        m_thumb_d2d.clear();
+        // Don't stop thumb loader or clear cache — reuse on re-entry
         update_title();
     }
     m_window.invalidate();
