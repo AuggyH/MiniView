@@ -456,8 +456,9 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc) {
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.29f, 0.56f, 1.0f, 1.0f), &br);
     float r = 4.0f * m_dpi_y / 96.0f;
+    float sw = 2.0f * m_dpi_y / 96.0f;
     D2D1_ROUNDED_RECT rr = {rc, r, r};
-    m_d2d_context->DrawRoundedRectangle(&rr, br.Get(), 2.0f);
+    m_d2d_context->DrawRoundedRectangle(&rr, br.Get(), sw);
 }
 
 void Renderer::draw_label(float x, float y, float w, const std::wstring& text, float font_size) {
