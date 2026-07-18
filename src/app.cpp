@@ -111,6 +111,69 @@ private:
     ULONG m_ref;
 };
 
+
+// ── Menu command IDs ─────────────────────────────────────────
+
+enum {
+    IDM_OPEN_FILE    = 1001,
+    IDM_OPEN_FOLDER  = 1002,
+    IDM_EXIT         = 1003,
+    IDM_GRID         = 1010,
+    IDM_FULLSCREEN   = 1011,
+    IDM_RECURSIVE    = 1012,
+    IDM_THUMB_SQUARE = 1013,
+    IDM_SORT_NAME    = 1020,
+    IDM_SORT_DATE    = 1021,
+    IDM_SORT_SIZE    = 1022,
+    IDM_SORT_RANDOM  = 1023,
+    IDM_COPY         = 1030,
+    IDM_DELETE       = 1031,
+    IDM_DELETE_PERM  = 1032,
+    IDM_EXPLORER     = 1033,
+    IDM_ABOUT        = 1040,
+};
+
+HMENU build_menu_bar() {
+    HMENU bar = CreateMenu();
+
+    HMENU file_menu = CreatePopupMenu();
+    AppendMenuW(file_menu, MF_STRING, IDM_OPEN_FILE,   L"\u6253\u5F00\u6587\u4EF6...\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_OPEN_FOLDER, L"\u6253\u5F00\u6587\u4EF6\u5939...");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(file_menu, MF_STRING, IDM_EXIT,        L"\u9000\u51FA\tAlt+F4");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu), L"\u6587\u4EF6(&F)");
+
+    HMENU view_menu = CreatePopupMenu();
+    AppendMenuW(view_menu, MF_STRING, IDM_GRID,        L"\u7F29\u7565\u56FE\u7F51\u683C\tG");
+    AppendMenuW(view_menu, MF_STRING, IDM_FULLSCREEN,  L"\u5168\u5C4F\tF11");
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
+
+    HMENU sort_menu = CreatePopupMenu();
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_NAME,   L"\u6309\u540D\u79F0\tN");
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_DATE,   L"\u6309\u65E5\u671F\tD");
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_SIZE,   L"\u6309\u5927\u5C0F\tS");
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_RANDOM, L"\u968F\u673A\u6253\u4E71\tR");
+    AppendMenuW(view_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"\u6392\u5E8F\u65B9\u5F0F");
+
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view_menu, MF_STRING, IDM_RECURSIVE,    L"\u9012\u5F52\u6D4F\u89C8\tCtrl+R");
+    AppendMenuW(view_menu, MF_STRING, IDM_THUMB_SQUARE, L"\u65B9\u5F62\u7F29\u7565\u56FE\tA");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu), L"\u67E5\u770B(&V)");
+
+    HMENU edit_menu = CreatePopupMenu();
+    AppendMenuW(edit_menu, MF_STRING, IDM_COPY,        L"\u590D\u5236\tCtrl+C");
+    AppendMenuW(edit_menu, MF_STRING, IDM_DELETE,      L"\u5220\u9664\tDel");
+    AppendMenuW(edit_menu, MF_STRING, IDM_DELETE_PERM, L"\u6C38\u4E45\u5220\u9664\tShift+Del");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(edit_menu, MF_STRING, IDM_EXPLORER,    L"\u5728\u8D44\u6E90\u7BA1\u7406\u5668\u4E2D\u6253\u5F00");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(edit_menu), L"\u7F16\u8F91(&E)");
+
+    HMENU help_menu = CreatePopupMenu();
+    AppendMenuW(help_menu, MF_STRING, IDM_ABOUT, L"\u5173\u4E8E MinView");
+    AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(help_menu), L"\u5E2E\u52A9(&H)");
+
+    return bar;
+}
 // ── Preloader worker (runs on background thread) ─────────────
 
 static void preload_worker(
@@ -165,6 +228,8 @@ int App::run(const std::wstring& initial_path) {
     if (!m_renderer.init(m_window.handle()))
         throw std::runtime_error("Failed to init Direct2D renderer");
 
+    SetMenu(m_window.handle(), build_menu_bar());
+
     start_preloader();
 
     if (!initial_path.empty()) open_image(initial_path);
@@ -178,6 +243,62 @@ int App::run(const std::wstring& initial_path) {
 
 LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+
+    case WM_COMMAND:
+        switch (LOWORD(wp)) {
+        case IDM_OPEN_FILE: {
+            OPENFILENAMEW ofn = {};
+            wchar_t file[MAX_PATH] = {};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"\u56FE\u7247\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tiff;*.tif\0\u6240\u6709\u6587\u4EF6\0*.*\0";
+            ofn.lpstrFile = file; ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            if (GetOpenFileNameW(&ofn)) open_image(file);
+            return 0;
+        }
+        case IDM_OPEN_FOLDER: {
+            BROWSEINFOW bi = {};
+            bi.hwndOwner = hwnd;
+            bi.lpszTitle = L"\u9009\u62E9\u6587\u4EF6\u5939";
+            bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+            LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+            if (pidl) {
+                wchar_t dir[MAX_PATH];
+                if (SHGetPathFromIDListW(pidl, dir)) open_image(dir);
+                CoTaskMemFree(pidl);
+            }
+            return 0;
+        }
+        case IDM_EXIT: DestroyWindow(hwnd); return 0;
+        case IDM_GRID: if (!m_index.empty()) toggle_grid(); return 0;
+        case IDM_FULLSCREEN: toggle_fullscreen(hwnd); return 0;
+        case IDM_RECURSIVE: toggle_recursive(); return 0;
+        case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
+        case IDM_SORT_NAME:   set_sort_mode(SortMode::Name);   return 0;
+        case IDM_SORT_DATE:   set_sort_mode(SortMode::Date);   return 0;
+        case IDM_SORT_SIZE:   set_sort_mode(SortMode::Size);   return 0;
+        case IDM_SORT_RANDOM: set_sort_mode(SortMode::Random); return 0;
+        case IDM_COPY:
+            if (m_grid_mode && has_selection()) copy_selected();
+            else copy_to_clipboard();
+            return 0;
+        case IDM_DELETE:
+            if (m_grid_mode && has_selection()) delete_selected(false);
+            else delete_current_file(false);
+            return 0;
+        case IDM_DELETE_PERM:
+            if (m_grid_mode && has_selection()) delete_selected(true);
+            else delete_current_file(true);
+            return 0;
+        case IDM_EXPLORER: open_in_explorer(); return 0;
+        case IDM_ABOUT:
+            MessageBoxW(hwnd,
+                L"MinView Native v0.6.0\n\nC++20 / Direct2D + WIC\nGPU \u52A0\u901F\u56FE\u7247\u6D4F\u89C8\u5668\n\u96F6\u5916\u90E8\u4F9D\u8D56",
+                L"\u5173\u4E8E MinView", MB_OK | MB_ICONINFORMATION);
+            return 0;
+        }
+        break;
 
     case WM_SIZE: {
         uint32_t w = LOWORD(lp), h = HIWORD(lp);
@@ -206,30 +327,34 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (!m_has_image) return 0;
         float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
-        float factor = (delta > 0) ? 1.15f : 1.0f / 1.15f;
+        bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
-        POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        ScreenToClient(hwnd, &pt);
-
-        uint32_t iw, ih; m_renderer.image_size(iw, ih);
-        if (iw == 0 || ih == 0) return 0;
-
-        float old_scale = m_renderer.scale();
-        float new_scale = std::clamp(old_scale * factor, 0.01f, 100.0f);
-        if (new_scale == old_scale) return 0;
-
-        D2D1_SIZE_U ts = m_renderer.target_size();
-        float img_x = (ts.width  - iw * old_scale) / 2.0f;
-        float img_y = (ts.height - ih * old_scale) / 2.0f;
-        float img_cx = (pt.x - img_x) / old_scale;
-        float img_cy = (pt.y - img_y) / old_scale;
-        float new_img_x = pt.x - img_cx * new_scale;
-        float new_img_y = pt.y - img_cy * new_scale;
-
-        m_renderer.set_scale(new_scale);
-        m_renderer.set_offset(
-            new_img_x - (ts.width  - iw * new_scale) / 2.0f,
-            new_img_y - (ts.height - ih * new_scale) / 2.0f);
+        if (ctrl) {
+            // Ctrl+Wheel = zoom (cursor-centered)
+            float factor = (delta > 0) ? 1.15f : 1.0f / 1.15f;
+            POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &pt);
+            uint32_t iw, ih; m_renderer.image_size(iw, ih);
+            if (iw == 0 || ih == 0) return 0;
+            float old_scale = m_renderer.scale();
+            float new_scale = std::clamp(old_scale * factor, 0.01f, 100.0f);
+            if (new_scale == old_scale) return 0;
+            D2D1_SIZE_U ts = m_renderer.target_size();
+            float img_x = (ts.width  - iw * old_scale) / 2.0f;
+            float img_y = (ts.height - ih * old_scale) / 2.0f + m_renderer.scroll_y();
+            float img_cx = (pt.x - img_x) / old_scale;
+            float img_cy = (pt.y - img_y) / old_scale;
+            float new_img_x = pt.x - img_cx * new_scale;
+            float new_img_y = pt.y - img_cy * new_scale;
+            m_renderer.set_scale(new_scale);
+            m_renderer.set_offset(
+                new_img_x - (ts.width  - iw * new_scale) / 2.0f,
+                new_img_y - (ts.height - ih * new_scale) / 2.0f);
+        } else {
+            // Plain wheel = vertical scroll (for tall images)
+            float sy = m_renderer.scroll_y() - delta * 40.0f;
+            m_renderer.set_scroll_y(sy);
+        }
         m_window.invalidate();
         return 0;
     }
@@ -312,6 +437,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             case '0': case VK_NUMPAD0: fit_to_window(); m_window.invalidate(); return 0;
             case VK_OEM_PLUS: case VK_ADD:   zoom_at_center(1.25f); return 0;
             case VK_OEM_MINUS: case VK_SUBTRACT: zoom_at_center(1.0f/1.25f); return 0;
+            case 'O': {
+                OPENFILENAMEW ofn = {};
+                wchar_t file[MAX_PATH] = {};
+                ofn.lStructSize = sizeof(ofn);
+                ofn.hwndOwner = hwnd;
+                ofn.lpstrFilter = L"\u56FE\u7247\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tiff;*.tif\0\u6240\u6709\u6587\u4EF6\0*.*\0";
+                ofn.lpstrFile = file; ofn.nMaxFile = MAX_PATH;
+                ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+                if (GetOpenFileNameW(&ofn)) open_image(file);
+                return 0;
+            }
             case 'C':
                 if (m_grid_mode && has_selection()) copy_selected();
                 else copy_to_clipboard();
@@ -431,7 +567,7 @@ void App::open_image(const std::wstring& path) {
 
         m_window.invalidate();
     } catch (const std::exception&) {
-        SetWindowTextW(m_window.handle(), L"Error loading image");
+        SetWindowTextW(m_window.handle(), L"\u56FE\u7247\u52A0\u8F7D\u5931\u8D25");
     }
 }
 
@@ -609,28 +745,28 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
     if (!menu) return;
 
     if (m_has_image) {
-        AppendMenuW(menu, MF_STRING, 1, L"Open in Explorer");
-        AppendMenuW(menu, MF_STRING, 2, L"Copy Image\tCtrl+C");
+        AppendMenuW(menu, MF_STRING, 1, L"\u5728\u8D44\u6E90\u7BA1\u7406\u5668\u4E2D\u6253\u5F00");
+        AppendMenuW(menu, MF_STRING, 2, L"\u590D\u5236\u56FE\u7247\tCtrl+C");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
         // Sort submenu
         HMENU sort_menu = CreatePopupMenu();
         auto sm = m_index.sort_mode();
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Name   ? MF_CHECKED : 0), 10, L"By Name\tN");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Date   ? MF_CHECKED : 0), 11, L"By Date\tD");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Size   ? MF_CHECKED : 0), 12, L"By Size\tS");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Random ? MF_CHECKED : 0), 13, L"Random Shuffle\tR");
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"Sort By");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Name   ? MF_CHECKED : 0), 10, L"\u6309\u540D\u79F0\tN");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Date   ? MF_CHECKED : 0), 11, L"\u6309\u65E5\u671F\tD");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Size   ? MF_CHECKED : 0), 12, L"\u6309\u5927\u5C0F\tS");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Random ? MF_CHECKED : 0), 13, L"\u968F\u673A\u6253\u4E71\tR");
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"\u6392\u5E8F\u65B9\u5F0F");
 
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, 3, L"Delete\tDel");
-        AppendMenuW(menu, MF_STRING, 4, L"Delete Permanently\tShift+Del");
+        AppendMenuW(menu, MF_STRING, 3, L"\u5220\u9664\tDel");
+        AppendMenuW(menu, MF_STRING, 4, L"\u6C38\u4E45\u5220\u9664\tShift+Del");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         UINT flags = MF_STRING;
         if (m_recursive) flags |= MF_CHECKED;
-        AppendMenuW(menu, flags, 6, L"Recursive Browse\tCtrl+R");
+        AppendMenuW(menu, flags, 6, L"\u9012\u5F52\u6D4F\u89C8\tCtrl+R");
     } else {
-        AppendMenuW(menu, MF_STRING, 5, L"Open File...");
+        AppendMenuW(menu, MF_STRING, 5, L"\u6253\u5F00\u6587\u4EF6...");
     }
 
     if (x == -1 && y == -1) {
@@ -870,7 +1006,7 @@ void App::toggle_grid() {
 
         grid_ensure_visible();
         SetWindowTextW(m_window.handle(),
-            (L"Grid [" + std::to_wstring(m_index.size()) + L" images]").c_str());
+            (L"\u7F29\u7565\u56FE\u7F51\u683C [" + std::to_wstring(m_index.size()) + L" \u5F20]").c_str());
     } else {
         // Exit grid
         stop_thumb_loader();
@@ -1109,7 +1245,7 @@ void App::render_frame() {
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(128, 128, 128));
             const wchar_t* msg = m_has_image
-                ? L"Loading..." : L"Drag an image here or right-click to open";
+                ? L"\u52A0\u8F7D\u4E2D..." : L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6";
             DrawTextW(hdc, msg, -1, &rc,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             EndPaint(m_window.handle(), &ps);
@@ -1120,6 +1256,8 @@ void App::render_frame() {
     if (m_has_image) {
         m_renderer.draw_image();
         m_renderer.draw_overlay();
+    } else {
+        m_renderer.draw_hint(L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6");
     }
     m_renderer.end_frame();
 }

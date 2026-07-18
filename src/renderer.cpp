@@ -188,6 +188,7 @@ void Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
     m_scale = std::min(sx, sy);
     m_offset_x = 0;
     m_offset_y = 0;
+    m_scroll_y = 0;
 }
 
 bool Renderer::begin_frame() {
@@ -225,7 +226,7 @@ void Renderer::draw_image() {
     float scaled_w = m_img_width  * m_scale;
     float scaled_h = m_img_height * m_scale;
     float x = (m_target_size.width  - scaled_w) / 2.0f + m_offset_x;
-    float y = (m_target_size.height - scaled_h) / 2.0f + m_offset_y;
+    float y = (m_target_size.height - scaled_h) / 2.0f + m_offset_y + m_scroll_y;
 
     D2D1_RECT_F dest = {x, y, x + scaled_w, y + scaled_h};
     D2D1_RECT_F src  = {0, 0,
@@ -236,6 +237,23 @@ void Renderer::draw_image() {
         m_image_bitmap.Get(), &dest, 1.0f,
         D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
         &src);
+}
+
+void Renderer::draw_hint(const std::wstring& text) {
+    if (!m_d2d_context || !m_text_format) return;
+    ComPtr<ID2D1SolidColorBrush> brush;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.8f), &brush);
+    D2D1_RECT_F rc = {0, 0,
+        static_cast<float>(m_target_size.width),
+        static_cast<float>(m_target_size.height)};
+    m_text_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    m_text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    m_d2d_context->DrawText(text.c_str(), static_cast<uint32_t>(text.size()),
+        m_text_format.Get(), &rc, brush.Get());
+    // Restore alignment for overlay
+    m_text_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    m_text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 }
 
 void Renderer::draw_overlay() {
@@ -270,6 +288,10 @@ void Renderer::set_scale(float s) {
 void Renderer::set_offset(float x, float y) {
     m_offset_x = x;
     m_offset_y = y;
+}
+
+void Renderer::set_scroll_y(float y) {
+    m_scroll_y = y;
 }
 
 // ── Grid drawing ─────────────────────────────────────────────
