@@ -325,7 +325,7 @@ void Renderer::draw_overlay() {
 
     int zoom_pct = static_cast<int>(m_scale * 100.0f + 0.5f);
     std::wstring text = std::to_wstring(zoom_pct) + L"%  |  " +
-        std::to_wstring(m_img_width) + L"\u00D7" +
+        std::to_wstring(m_img_width) + L" \u00D7 " +
         std::to_wstring(m_img_height);
 
     float x = OVERLAY_PAD;
@@ -481,7 +481,7 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
     m_dwrite_factory->CreateEllipsisTrimmingSign(tf.Get(), &ellipsis);
     layout->SetTrimming(&trim, ellipsis.Get());
     ComPtr<ID2D1SolidColorBrush> br;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.6f, 0.6f, 0.64f, 1.0f), &br);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.82f, 0.82f, 0.85f, 1.0f), &br);
     D2D1_POINT_2F pt = {x, y};
     m_d2d_context->DrawTextLayout(pt, layout.Get(), br.Get());
 }
