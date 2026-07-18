@@ -36,7 +36,7 @@ private:
     void    fit_to_window();
     void    zoom_at_center(float factor);
     void    toggle_fullscreen(HWND hwnd);
-    void    start_transition(HWND hwnd);
+    void    start_transition(HWND hwnd, bool forward);
     void    toggle_recursive();
     void    render_frame();
     void    update_title();
@@ -127,7 +127,10 @@ private:
     bool  m_animating = false;
     float m_anim_t = 0.0f;
     UINT_PTR m_anim_timer = 0;
-    Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_snapshot;  // pre-transition frame
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_anim_thumb;  // thumbnail bitmap
+    D2D1_RECT_F m_anim_src = {};   // thumbnail grid position
+    D2D1_RECT_F m_anim_dst = {};   // fitted image position
+    bool  m_anim_forward = true;   // grid→image or image→grid
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     int   m_toolbar_h = 28;
