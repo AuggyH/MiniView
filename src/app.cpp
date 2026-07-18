@@ -461,7 +461,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     POINT pt = {static_cast<int>(x), m_toolbar_h};
                     ClientToScreen(hwnd, &pt);
                     show_toolbar_menu(hwnd, i, pt.x, pt.y);
-                    m_toolbar_active = -1;
                     m_window.invalidate();
                     return 0;
                 }
@@ -484,6 +483,25 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_MOUSEMOVE:
+        // Toolbar hover tracking
+        {
+            int ty = GET_Y_LPARAM(lp);
+            int prev = m_toolbar_active;
+            m_toolbar_active = -1;
+            if (ty < m_toolbar_h) {
+                int tx = GET_X_LPARAM(lp);
+                float x = 12.0f;
+                float fs = 13.0f * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+                for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
+                    float iw = m_renderer.measure_text(m_toolbar_items[i], fs) + 24.0f;
+                    if (tx >= static_cast<int>(x) && tx < static_cast<int>(x + iw)) {
+                        m_toolbar_active = i; break;
+                    }
+                    x += iw;
+                }
+            }
+            if (m_toolbar_active != prev) m_window.invalidate();
+        }
         if (m_drag_pending) {
             int dx = GET_X_LPARAM(lp) - m_drag_start_x;
             int dy = GET_Y_LPARAM(lp) - m_drag_start_y;
@@ -1510,13 +1528,17 @@ void App::grid_render() {
     m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
 
     int total = static_cast<int>(m_index.size());
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width);  // full window
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
     int cols = std::max(1, (grid_area_w - m_thumb_pad * 2 + m_thumb_gap) / m_cell_size);
     m_grid_cols = cols;
-    int cell = m_thumb_size + m_thumb_gap;
-    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h - m_thumb_pad * 2 + m_thumb_gap) / cell;
+    // Distribute leftover width as extra gap between columns
+    int cell_h = m_thumb_size + m_thumb_gap;
+    int total_gap_w = grid_area_w - cols * m_thumb_size;
+    int gap_w = (cols > 1) ? total_gap_w / (cols - 1) : 0;
+    int cell_w = m_thumb_size + std::max(gap_w, m_thumb_gap);
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h - m_thumb_pad * 2 + m_thumb_gap) / cell_h;
     int tx = 0;
-    int top_row = m_grid_scroll_y / cell;
+    int top_row = m_grid_scroll_y / cell_h;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
 
     // (thumb requests handled by WM_TIMER for smooth scroll)
@@ -1561,8 +1583,8 @@ void App::grid_render() {
             int idx = r * cols + c;
             if (idx >= total) break;
 
-            float x = static_cast<float>(tx + c * cell);
-            float y = static_cast<float>(m_toolbar_h + m_thumb_pad + r * cell - m_grid_scroll_y);
+            float x = static_cast<float>(tx + c * cell_w);
+            float y = static_cast<float>(m_toolbar_h + m_thumb_pad + r * cell_h - m_grid_scroll_y);
 
             // Look up in D2D cache (already populated by batch above)
             auto dit = m_thumb_d2d.find(idx);
