@@ -1657,11 +1657,11 @@ void App::grid_render() {
                 std::wstring fname = (pos2 != std::wstring::npos) ? spath.substr(pos2 + 1) : spath;
                 float dpi_s = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
                 float ly = row_y + ri.row_h + 4.0f * dpi_s;
-                m_renderer.draw_label(x, ly, w, fname);
+                m_renderer.draw_label(x, ly, w, fname, 12.0f);
 
                 if (m_thumbs[idx2].orig_w > 0)
                     m_renderer.draw_label(x, ly + 18.0f * dpi_s, w,
-                        std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h));
+                        std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f);
             }
         }
     }

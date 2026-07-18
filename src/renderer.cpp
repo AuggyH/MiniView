@@ -449,13 +449,13 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc) {
     m_d2d_context->DrawRectangle(&rc, br.Get(), 2.0f);
 }
 
-void Renderer::draw_label(float x, float y, float w, const std::wstring& text) {
+void Renderer::draw_label(float x, float y, float w, const std::wstring& text, float font_size) {
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return;
     ComPtr<IDWriteTextFormat> tf;
     m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        11.0f * m_dpi_y / 96.0f, L"en-US", &tf);
-    tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);  // center under thumbnail
+        font_size * m_dpi_y / 96.0f, L"en-US", &tf);
+    tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
         tf.Get(), w, 28.0f, &layout);
