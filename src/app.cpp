@@ -1372,11 +1372,13 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
     if (m_animating) return;
     m_anim_forward = forward;
     m_anim_thumb.Reset();
-    if (forward) {
-        auto it = m_thumb_d2d.find(m_grid_sel);
-        if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
-    } else {
-        m_anim_dst = m_anim_src;
+
+    int thumb_idx = (m_grid_sel >= 0) ? m_grid_sel : m_grid_saved_idx;
+    auto it = m_thumb_d2d.find(thumb_idx);
+    if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
+
+    if (!forward) {
+        m_anim_dst = m_anim_src;  // dest = thumb pos
     }
 }
 
