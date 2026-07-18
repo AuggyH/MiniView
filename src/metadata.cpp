@@ -229,12 +229,24 @@ ImageMeta parse_comfyui(const std::string& json) {
                     if (le == std::string::npos) return "";
                     std::string wid = json.substr(ls, le - ls);
 
+                    // Debug: found link
+                    { std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
+                      dbg << "  Link to widget: " << wid << std::endl; }
+
                     // Find widget node: "\"id\": {"
                     std::string wkey = "\"" + wid + "\"";
                     size_t wp = json.find(wkey);
-                    if (wp == std::string::npos) return "";
+                    if (wp == std::string::npos) {
+                        { std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
+                          dbg << "  Widget not found!" << std::endl; }
+                        return "";
+                    }
                     size_t wb = json.find('{', wp + wkey.size());
                     if (wb == std::string::npos || wb > wp + wkey.size() + 20) return "";
+                    
+                    // Dump first 300 chars of widget for debug
+                    { std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
+                      dbg << "  Widget content: " << json.substr(wp, std::min(size_t(300), json.size() - wp)) << std::endl; }
                     // Search inputs first, then widgets_values
                     size_t wi = json.find("\"inputs\"", wp);
                     if (wi != std::string::npos && wi < wb + 2000) {
