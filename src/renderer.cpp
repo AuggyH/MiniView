@@ -617,7 +617,7 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
             y = ty + title_pad;
         }
         for (auto& [label, value] : gen_info) {
-            if (y + gap > y_off + h) break;
+
             int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
             float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
             float vw = 0;
