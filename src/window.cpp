@@ -42,6 +42,10 @@ bool Window::create(const std::wstring& title, int width, int height) {
 
     ShowWindow(m_hwnd, SW_SHOW);
     UpdateWindow(m_hwnd);
+
+    // Accept file drops
+    DragAcceptFiles(m_hwnd, TRUE);
+
     return true;
 }
 

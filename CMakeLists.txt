@@ -4,6 +4,9 @@ project(MinView VERSION 2.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Static CRT — produce a single, standalone .exe
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # Windows subsystem (no console window)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS")
 
@@ -40,6 +43,7 @@ target_link_libraries(MinView
     dxguid
     ole32
     comctl32
+    comdlg32
     shell32
     shlwapi
 )
