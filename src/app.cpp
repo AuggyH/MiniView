@@ -848,21 +848,21 @@ void App::open_image(const std::wstring& path) {
 }
 
 void App::update_title() {
-    uint32_t iw, ih; m_renderer.image_size(iw, ih);
+    std::wstring title;
 
-    // Show relative path in recursive mode, filename only otherwise
-    std::wstring display_name;
-    if (m_recursive && m_current_idx >= 0) {
-        display_name = m_index.relpath_at(m_current_idx);
+    if (m_grid_mode) {
+        title = L"\u7F29\u7565\u56FE\u7F51\u683C ["   // 缩略图网格 [
+            + std::to_wstring(m_index.size()) + L" \u5F20]  \u2014  MinView";
+    } else if (!m_has_image || m_current_path.empty()) {
+        title = L"MinView";
     } else {
         size_t pos = m_current_path.find_last_of(L"\\/");
-        display_name = (pos != std::wstring::npos)
+        std::wstring name = (pos != std::wstring::npos)
             ? m_current_path.substr(pos + 1) : m_current_path;
+        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        title = name + L"  (" + std::to_wstring(iw) + L"\u00D7" + std::to_wstring(ih) + L")  \u2014  MinView";
     }
 
-    std::wstring title = std::to_wstring(iw) + L"x" + std::to_wstring(ih) +
-        L" [" + std::to_wstring(m_current_idx + 1) + L"/" +
-        std::to_wstring(m_index.size()) + L"] " + display_name;
     SetWindowTextW(m_window.handle(), title.c_str());
 }
 
@@ -1027,7 +1027,7 @@ void App::delete_current_file(bool permanent) {
         m_has_image = false;
         m_current_path.clear();
         m_current_idx = -1;
-        SetWindowTextW(m_window.handle(), L"MinView");
+        update_title();
         m_window.invalidate();
         return;
     }
@@ -1596,8 +1596,7 @@ void App::toggle_grid() {
             request_thumb(i);
 
         grid_ensure_visible();
-        SetWindowTextW(m_window.handle(),
-            (L"\u7F29\u7565\u56FE\u7F51\u683C [" + std::to_wstring(m_index.size()) + L" \u5F20]").c_str());
+        update_title();
 
         // 100ms timer for lazy thumbnail loading (fires even when unfocused)
         m_grid_timer = SetTimer(m_window.handle(), 1, 100, nullptr);
@@ -1861,7 +1860,7 @@ void App::delete_selected(bool permanent) {
         m_has_image = false; m_current_path.clear(); m_current_idx = -1;
         m_grid_mode = false; stop_thumb_loader();
         m_thumbs.clear(); m_thumb_d2d.clear();
-        SetWindowTextW(m_window.handle(), L"MinView");
+        update_title();
         m_window.invalidate(); return;
     }
     m_grid_sel = std::min(m_grid_sel, static_cast<int>(m_index.size()) - 1);
