@@ -647,9 +647,15 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDBLCLK:
         if (m_grid_mode) {
+            // Hit-test: only open if clicking on a thumbnail
+            int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);
+            int old_sel = m_grid_sel;
+            grid_click(cx, cy, false, false);
             if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size())) {
                 toggle_grid();
                 navigate_to(m_grid_sel);
+            } else {
+                m_grid_sel = old_sel;
             }
             return 0;
         }
