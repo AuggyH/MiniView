@@ -26,6 +26,7 @@ public:
 
     void draw_image();
     void draw_overlay();
+    void draw_hint(const std::wstring& text);
 
     // Create a D2D bitmap from a WIC source (for grid thumbnails)
     HRESULT create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** out);
@@ -43,9 +44,11 @@ public:
 
     void  set_scale(float s);
     void  set_offset(float x, float y);
+    void  set_scroll_y(float y);
     float scale()    const { return m_scale; }
     float offset_x() const { return m_offset_x; }
     float offset_y() const { return m_offset_y; }
+    float scroll_y() const { return m_scroll_y; }
 
     bool is_valid() const { return m_d2d_context != nullptr; }
 
@@ -74,6 +77,7 @@ private:
     float       m_scale = 1.0f;
     float       m_offset_x = 0.0f;
     float       m_offset_y = 0.0f;
+    float       m_scroll_y = 0.0f;
 };
 
 } // namespace mv
