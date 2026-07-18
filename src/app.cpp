@@ -249,8 +249,8 @@ int App::run(const std::wstring& initial_path) {
 
     // Scale thumbnail sizes by DPI
     float scale = dpi / 96.0f;
-    m_thumb_cell  = static_cast<int>(160 * scale);  // display cell → columns
-    m_thumb_size  = static_cast<int>(320 * scale);  // decode res (2x supersampling)
+    m_thumb_cell  = static_cast<int>(200 * scale);  // display cell → columns (~5/row)
+    m_thumb_size  = static_cast<int>(400 * scale);  // decode res (2x supersampling)
     m_thumb_gap   = static_cast<int>(6 * scale);
     m_thumb_pad   = static_cast<int>(0);      // zero padding — grid flush with edges
     m_cell_size   = m_thumb_cell + m_thumb_gap;
