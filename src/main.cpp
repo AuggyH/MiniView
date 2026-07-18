@@ -154,9 +154,6 @@ bool unregister_file_associations() {
 } // anonymous namespace
 
 int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE, PWSTR, int /*nCmdShow*/) {
-    // Enable per-monitor DPI awareness for sharp rendering on 4K/high-DPI displays
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) return 1;
 
