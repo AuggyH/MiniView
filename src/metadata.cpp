@@ -1,5 +1,6 @@
 #include "metadata.h"
 #include <fstream>
+#include <iostream>
 #include <vector>
 #include <regex>
 #include <algorithm>
@@ -90,6 +91,12 @@ static std::string json_str_val(const std::string& json, const std::string& key)
     return "";
 }
 
+static long long json_llong(const std::string& json, const std::string& key) {
+    auto s = json_str_val(json, key);
+    if (s.empty()) return -1;
+    try { return std::stoll(s); } catch (...) { return -1; }
+}
+
 static int json_int(const std::string& json, const std::string& key) {
     auto s = json_str_val(json, key);
     if (s.empty()) return -1;
@@ -162,7 +169,7 @@ ImageMeta parse_comfyui(const std::string& json) {
 
     auto ksampler = find_node(json, "KSampler");
     if (!ksampler.empty()) {
-        m.seed = json_int(ksampler, "seed");
+        m.seed = json_llong(ksampler, "seed");
         m.steps = json_int(ksampler, "steps");
         m.cfg = json_float(ksampler, "cfg");
         m.sampler = utf8_to_wstring(json_str_val(ksampler, "sampler_name"));
@@ -185,100 +192,116 @@ ImageMeta parse_comfyui(const std::string& json) {
         m.height = json_int(latent, "height");
     }
 
-    // Extract prompts by tracing KSampler "positive"/"negative" inputs
-    if (!ksampler.empty()) {
-        auto extract_text_from_port = [&](const std::string& port) -> std::string {
-            std::string key = "\"" + port + "\"";
-            size_t kp = ksampler.find(key);
-            if (kp == std::string::npos) return "";
-            kp = ksampler.find('[', kp + key.size());
-            if (kp == std::string::npos) return "";
-            kp++;
-            while (kp < ksampler.size() && (ksampler[kp] == ' ' || ksampler[kp] == '\t')) kp++;
-            bool q = (kp < ksampler.size() && ksampler[kp] == '"');
-            if (q) kp++;
-            size_t id_end = ksampler.find_first_of(q ? "\"" : ",]", kp);
-            if (id_end == std::string::npos) return "";
-            std::string node_id = ksampler.substr(kp, id_end - kp);
-
-            // Find this node in the full JSON
-            std::string nkey = "\"" + node_id + "\"";
-            size_t np = json.find(nkey);
-            if (np == std::string::npos) return "";
-            size_t br = json.find('{', np + nkey.size());
-            if (br == std::string::npos || br > np + nkey.size() + 20) return "";
-
-            // Get "text" from inputs (with link resolution)
-            size_t inp = json.find("\"inputs\"", np);
-            if (inp == std::string::npos || inp > br + 2000) return "";
-            size_t ts = json.find("\"text\"", inp);
-            if (ts == std::string::npos || ts > inp + 2000) return "";
-            size_t tvs = json.find(':', ts + 6);
-            if (tvs == std::string::npos || tvs > ts + 20) return "";
-            tvs++;
-            while (tvs < json.size() && (json[tvs] == ' ' || json[tvs] == '\t')) tvs++;
-            if (tvs >= json.size()) return "";
-
-            // Direct string
-            if (json[tvs] == '"') {
-                size_t tve = json.find('"', tvs + 1);
-                if (tve == std::string::npos) return "";
-                return json.substr(tvs + 1, tve - tvs - 1);
+    // Extract prompts from CLIPTextEncode nodes by _meta.title
+    {
+        std::string search = "\"CLIPTextEncode\"";
+        size_t pos = 0;
+        while ((pos = json.find(search, pos)) != std::string::npos) {
+            pos += search.size();
+            // Backtrack to find node start
+            size_t ns = pos;
+            int d = 0;
+            while (ns > 0) {
+                if (json[ns] == '}') d++; else if (json[ns] == '{') {
+                    if (d == 0) break; d--;
+                } ns--;
             }
-            // Link: follow to widget
-            if (json[tvs] == '[') {
-                size_t ls = tvs + 1;
-                while (ls < json.size() && (json[ls] == ' ' || json[ls] == '\t')) ls++;
-                bool lq = (ls < json.size() && json[ls] == '"');
-                if (lq) ls++;
-                size_t le = json.find_first_of(lq ? "\"" : ",]", ls);
-                if (le == std::string::npos) return "";
-                std::string wid = json.substr(ls, le - ls);
+            // Get _meta.title
+            size_t mt = json.find("\"_meta\"", ns);
+            if (mt == std::string::npos || mt > pos + 300) continue;
+            size_t tt = json.find("\"title\"", mt);
+            if (tt == std::string::npos || tt > mt + 100) continue;
+            size_t tc = json.find(':', tt + 7);
+            if (tc == std::string::npos || tc > tt + 10) continue;
+            tc++;
+            while (tc < json.size() && (json[tc] == ' ' || json[tc] == '\t')) tc++;
+            if (tc >= json.size() || json[tc] != '"') continue;
+            size_t te = json.find('"', tc + 1);
+            if (te == std::string::npos) continue;
+            std::string title = json.substr(tc + 1, te - tc - 1);
 
-                std::string wkey = "\"" + wid + "\"";
-                size_t wp = json.find(wkey);
-                if (wp == std::string::npos) return "";
-                size_t wb = json.find('{', wp + wkey.size());
-                if (wb == std::string::npos || wb > wp + wkey.size() + 20) return "";
-                // Look for text in widget
-                for (auto* area : {"\"inputs\"", "\"widgets_values\""}) {
-                    size_t wi = json.find(area, wp);
-                    if (wi == std::string::npos || wi > wb + 2000) continue;
-                    for (auto* field : {"\"text\"", "\"string\"", "\"value\"", "\"widget_value\"", "\"multiline\""}) {
-                        size_t f = json.find(field, wi);
-                        if (f == std::string::npos || f > wi + 2000) continue;
-                        size_t fc = json.find(':', f + strlen(field));
-                        if (fc == std::string::npos || fc > f + 20) continue;
-                        fc++;
-                        while (fc < json.size() && (json[fc] == ' ' || json[fc] == '\t')) fc++;
-                        if (fc < json.size() && json[fc] == '"') {
-                            size_t fe = json.find('"', fc + 1);
-                            if (fe != std::string::npos)
-                                return json.substr(fc + 1, fe - fc - 1);
+            // Get text from inputs
+            auto resolve = [&]() -> std::string {
+                size_t inp = json.find("\"inputs\"", ns);
+                if (inp == std::string::npos || inp > pos + 500) return "";
+                size_t ts = json.find("\"text\"", inp);
+                if (ts == std::string::npos || ts > inp + 500) return "";
+                size_t tvs = json.find(':', ts + 6);
+                if (tvs == std::string::npos || tvs > ts + 10) return "";
+                tvs++;
+                while (tvs < json.size() && (json[tvs]==' ' || json[tvs]=='\t')) tvs++;
+                if (tvs >= json.size()) return "";
+                // Direct string
+                if (json[tvs] == '"') {
+                    size_t ve = json.find('"', tvs + 1);
+                    if (ve != std::string::npos) return json.substr(tvs + 1, ve - tvs - 1);
+                }
+                // Link [id, slot]
+                if (json[tvs] == '[') {
+                    size_t ls = tvs + 1;
+                    while (ls < json.size() && (json[ls]==' ' || json[ls]=='\t')) ls++;
+                    bool q = (ls < json.size() && json[ls]=='"'); if (q) ls++;
+                    size_t le = json.find_first_of(q ? "\"":",]", ls);
+                    std::string wid = json.substr(ls, le - ls);
+                    std::string wk = "\"" + wid + "\"";
+                    // Find the actual node key "\"id\": {", not a reference inside a link
+                    size_t wp = 0;
+                    while (true) {
+                        wp = json.find(wk, wp);
+                        if (wp == std::string::npos) return "";
+                        // Check if followed by ": {"
+                        size_t after = wp + wk.size();
+                        while (after < json.size() && (json[after] == ' ' || json[after] == '\t')) after++;
+                        if (after < json.size() && json[after] == ':') {
+                            after++;
+                            while (after < json.size() && (json[after] == ' ' || json[after] == '\t')) after++;
+                            if (after < json.size() && json[after] == '{') break; // Found real node
                         }
+                        wp++; // Try next occurrence
                     }
-                    // Also check array: widgets_values: ["text", ...]
-                    if (strcmp(area, "\"widgets_values\"") == 0) {
+                    size_t wb = json.find('{', wp + wk.size());
+                    if (wb == std::string::npos || wb > wp + wk.size() + 20) return "";
+                    // Search widget inputs & widgets_values
+                    for (auto* area : {"\"inputs\"", "\"widgets_values\""}) {
+                        size_t wi = json.find(area, wp);
+                        if (wi == std::string::npos || wi > wb + 2000) continue;
+                        for (auto* fld : {"\"text\"", "\"string\"", "\"value\"", "\"widget_value\"", "\"multiline\""}) {
+                            size_t f = json.find(fld, wi);
+                            if (f == std::string::npos || f > wi + 2000) continue;
+                            size_t fc = json.find(':', f + strlen(fld));
+                            if (fc == std::string::npos || fc > f + 20) continue;
+                            fc++;
+                            while (fc < json.size() && (json[fc]==' ' || json[fc]=='\t')) fc++;
+                            if (fc < json.size() && json[fc] == '"') {
+                                size_t fe = json.find('"', fc + 1);
+                                if (fe != std::string::npos) return json.substr(fc + 1, fe - fc - 1);
+                            }
+                        }
+                        // widgets_values array
                         size_t ws = json.find('[', wi);
                         if (ws != std::string::npos && ws < wi + 20) {
                             ws++;
-                            while (ws < json.size() && (json[ws] == ' ' || json[ws] == '\t')) ws++;
+                            while (ws < json.size() && (json[ws]==' ' || json[ws]=='\t')) ws++;
                             if (ws < json.size() && json[ws] == '"') {
                                 size_t we = json.find('"', ws + 1);
-                                if (we != std::string::npos)
-                                    return json.substr(ws + 1, we - ws - 1);
+                                if (we != std::string::npos) return json.substr(ws + 1, we - ws - 1);
                             }
                         }
                     }
                 }
-            }
-            return "";
-        };
+                return "";
+            };
+            std::string text = resolve();
 
-        auto pos_text = extract_text_from_port("positive");
-        auto neg_text = extract_text_from_port("negative");
-        if (!pos_text.empty()) m.positive_prompt = utf8_to_wstring(pos_text);
-        if (!neg_text.empty()) m.negative_prompt = utf8_to_wstring(neg_text);
+            if (!text.empty()) {
+                if (title.find("\\u6b63\\u9762") != std::string::npos ||
+                    title.find("\\u6b63\\u5411") != std::string::npos)
+                    m.positive_prompt = utf8_to_wstring(text);
+                else if (title.find("\\u8d1f\\u9762") != std::string::npos ||
+                         title.find("\\u53cd\\u5411") != std::string::npos)
+                    m.negative_prompt = utf8_to_wstring(text);
+            }
+        }
     }
 
     m.valid = (m.seed >= 0 || !m.model.empty() || !m.positive_prompt.empty());
@@ -358,7 +381,6 @@ ImageMeta extract_metadata(const std::wstring& path) {
     if (ext == L".png") {
         auto texts = read_png_texts(path);
         
-        // Debug: dump all PNG text keys and content summaries
         {
             std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
             dbg << "=== [PNG] ===" << std::endl;

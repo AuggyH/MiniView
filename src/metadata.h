@@ -10,7 +10,7 @@ struct ImageMeta {
     std::wstring vae;
     std::wstring sampler;
     std::wstring scheduler;
-    int    seed = -1;
+    long long seed = -1;
     int    steps = 0;
     float  cfg = 0.0f;
     int    width = 0;
