@@ -399,8 +399,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ScreenToClient(hwnd, &pt);  // convert to client coords for hit-test
         if (m_grid_mode) {
             // Right-click: select item under cursor and show menu
-            grid_click(pt.x, pt.y, false, false);
-            if (m_grid_sel < 0 || m_grid_sel >= static_cast<int>(m_index.size()))
+            if (!grid_click(pt.x, pt.y, false, false))
                 return 0;  // no menu on empty space
             show_context_menu(hwnd, cx, cy);  // screen coords for popup
         } else {
@@ -554,8 +553,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode) {
             bool sd = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             bool cd = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), sd, cd);
-            return 0;
+            if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), sd, cd)) return 0;
         }
         if (!m_has_image) return -1;
         m_drag_start_x = GET_X_LPARAM(lp);
@@ -647,15 +645,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDBLCLK:
         if (m_grid_mode) {
-            // Hit-test: only open if clicking on a thumbnail
-            int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);
-            int old_sel = m_grid_sel;
-            grid_click(cx, cy, false, false);
-            if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size())) {
+            // Only open if clicking on a thumbnail
+            if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
                 toggle_grid();
                 navigate_to(m_grid_sel);
-            } else {
-                m_grid_sel = old_sel;
             }
             return 0;
         }
@@ -1597,10 +1590,10 @@ void App::toggle_grid() {
     m_window.invalidate();
 }
 
-void App::grid_click(int x, int y, bool shift, bool ctrl) {
+bool App::grid_click(int x, int y, bool shift, bool ctrl) {
     int cols = m_grid_cols, gap_h = m_thumb_gap_h;
     int total = static_cast<int>(m_index.size());
-    if (cols == 0 || total == 0) return;
+    if (cols == 0 || total == 0) return false;
 
     // Match grid_render's layout: grid_area_w = window - panel - sb_zone - pad
     float dpi_s = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
@@ -1614,7 +1607,7 @@ void App::grid_click(int x, int y, bool shift, bool ctrl) {
         if (ty < row_y + m_row_heights[r]) { row = r; break; }
         row_y += m_row_heights[r];
     }
-    if (row < 0) return;
+    if (row < 0) return false;
 
     if (m_thumb_square) {
         // Square grid: uniform cells centered
@@ -1623,11 +1616,11 @@ void App::grid_click(int x, int y, bool shift, bool ctrl) {
         int x0 = (grid_area_w - cols * cell_w - (cols - 1) * gap_h) / 2;
         if (x0 < 0) x0 = 0;
         int col = (x - m_thumb_pad - x0) / (cell_w + gap_h);
-        if (col < 0 || col >= cols) return;
+        if (col < 0 || col >= cols) return false;
         int idx = row * cols + col;
-        if (idx < 0 || idx >= total) return;
+        if (idx < 0 || idx >= total) return false;
         select_item(idx, shift, ctrl);
-        return;
+        return true;
     }
 
     // Justified layout: recompute row
@@ -1659,10 +1652,11 @@ void App::grid_click(int x, int y, bool shift, bool ctrl) {
         float img_w = static_cast<float>(row_h) * iw / ih;
         if (tx >= static_cast<int>(cx) && tx < static_cast<int>(cx + img_w)) {
             select_item(i, shift, ctrl);
-            return;
+            return true;
         }
         cx += img_w + gap_h;
     }
+    return false;
 }
 
 void App::select_item(int idx, bool shift, bool ctrl) {
