@@ -398,6 +398,24 @@ ImageMeta extract_metadata(const std::wstring& path) {
     // PNG: read tEXt chunks
     if (ext == L".png") {
         auto texts = read_png_texts(path);
+        
+        // Debug: dump all PNG text keys and content summaries
+        {
+            std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
+            dbg << "=== " << std::string(path.begin(), path.end()) << " ===" << std::endl;
+            for (auto& [k, v] : texts) {
+                bool is_json = (!v.empty() && (v.front() == '{' || v.front() == '['));
+                dbg << "  tEXt[" << k << "]: " << (is_json ? "JSON" : "TEXT") 
+                    << " len=" << v.size() << std::endl;
+                if (is_json) {
+                    // Show first 300 chars
+                    dbg << "    " << v.substr(0, std::min(size_t(300), v.size())) << std::endl;
+                } else {
+                    dbg << "    " << v.substr(0, std::min(size_t(100), v.size())) << std::endl;
+                }
+            }
+            dbg << std::endl;
+        }
 
         // ComfyUI: "prompt" or "workflow" keywords
         auto it = texts.find("prompt");
