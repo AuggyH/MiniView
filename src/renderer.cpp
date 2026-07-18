@@ -539,14 +539,13 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     float content_w = w - pad * 2;
 
-    // Preview thumbnail — fill content width, taller
+    // Preview thumbnail — fill content width, height from native aspect ratio
     if (preview && pw > 0 && ph > 0) {
         float thumb_w = content_w;
-        float thumb_h = thumb_w * 0.9f;
-        float scale = std::min(thumb_w / pw, thumb_h / ph);
-        float dw = pw * scale, dh = ph * scale;
-        float ox = x + pad + (thumb_w - dw) / 2.0f;
-        float oy = y + (thumb_h - dh) / 2.0f;
+        float dw = thumb_w;
+        float dh = thumb_w * ph / pw;
+        float ox = x + pad;
+        float oy = y;
         D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
         // Rounded corners on preview
         {
@@ -563,7 +562,7 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
             m_d2d_context->PopLayer();
         }
-        y = y_off + pad + thumb_h + sec_gap;
+        y = y_off + pad + dh + sec_gap;
     }
 
     // ── Info rows (justified 2-column) ──
