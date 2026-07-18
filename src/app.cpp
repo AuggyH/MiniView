@@ -252,12 +252,10 @@ int App::run(const std::wstring& initial_path) {
     m_thumb_pad  = static_cast<int>(0);      // zero padding — grid flush with edges
     m_cell_size  = m_thumb_size + m_thumb_gap;
     m_panel_width = static_cast<int>(280 * scale);
+    m_toolbar_h  = static_cast<int>(28 * scale);
 
-    // Set dark theme BEFORE creating menu so it applies to menu bar
-    SetWindowTheme(m_window.handle(), L"DarkMode_Explorer", nullptr);
-
-    SetMenu(m_window.handle(), build_menu_bar());
-    DrawMenuBar(m_window.handle());
+    // No native menu bar — custom toolbar drawn via D2D
+    SetMenu(m_window.handle(), nullptr);
 
     start_preloader();
 
@@ -446,7 +444,29 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
 
-    case WM_LBUTTONDOWN:
+    case WM_LBUTTONDOWN: {
+        // Toolbar click? (nested scope to avoid cross-case init)
+        int ty = GET_Y_LPARAM(lp);
+        if (ty < m_toolbar_h) {
+            int tx = GET_X_LPARAM(lp);
+            float x = 12.0f;
+            m_toolbar_active = -1;
+            for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
+                float iw = static_cast<float>(m_toolbar_items[i].size()) * 10.0f + 24.0f;
+                if (tx >= static_cast<int>(x) && tx < static_cast<int>(x + iw)) {
+                    m_toolbar_active = i;
+                    POINT pt = {static_cast<int>(x), m_toolbar_h};
+                    ClientToScreen(hwnd, &pt);
+                    show_toolbar_menu(hwnd, i, pt.x, pt.y);
+                    m_toolbar_active = -1;
+                    m_window.invalidate();
+                    return 0;
+                }
+                x += iw;
+            }
+            return 0;
+        }
+    }
         if (m_grid_mode) {
             bool sd = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             bool cd = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
@@ -918,6 +938,50 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
     }
 
     DestroyMenu(menu);
+}
+
+void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
+    HMENU popup = CreatePopupMenu();
+    switch (idx) {
+    case 0: // 文件
+        AppendMenuW(popup, MF_STRING, 1, L"打开文件\tCtrl+O");
+        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(popup, MF_STRING, 2, L"删除\tDel");
+        AppendMenuW(popup, MF_STRING, 3, L"永久删除\tShift+Del");
+        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(popup, MF_STRING, 4, L"在资源管理器中打开");
+        break;
+    case 1: // 查看
+        AppendMenuW(popup, MF_STRING, 10, L"全屏\tF11");
+        AppendMenuW(popup, MF_STRING, 11, L"缩略图网格\tG");
+        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(popup, MF_STRING, 12, L"排序: 名称\tN");
+        AppendMenuW(popup, MF_STRING, 13, L"排序: 日期\tD");
+        AppendMenuW(popup, MF_STRING, 14, L"排序: 大小\tS");
+        AppendMenuW(popup, MF_STRING, 15, L"排序: 随机\tR");
+        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(popup, MF_STRING, 16, L"递归浏览\tCtrl+R");
+        AppendMenuW(popup, MF_STRING, 17, L"方形缩略图\tA");
+        break;
+    case 2: // 编辑
+        AppendMenuW(popup, MF_STRING, 20, L"复制\tCtrl+C");
+        AppendMenuW(popup, MF_STRING, 21, L"复制图片");
+        break;
+    case 3: // 帮助
+        AppendMenuW(popup, MF_STRING, 30, L"查看生成信息\tI");
+        AppendMenuW(popup, MF_STRING, 31, L"关于 MinView");
+        break;
+    }
+    int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
+        x, y, 0, hwnd, nullptr);
+    DestroyMenu(popup);
+
+    // Handle commands
+    switch (cmd) {
+    case 1: case 10: case 11: case 12: case 13: case 14: case 15:
+    case 16: case 17: case 20: case 21: case 30: case 31:
+        SendMessageW(hwnd, WM_COMMAND, cmd, 0); break;
+    }
 }
 
 void App::open_in_explorer() {
@@ -1437,13 +1501,17 @@ void App::grid_render() {
     if (!m_renderer.begin_frame()) return;
     m_renderer.clear();
 
+    // Draw custom toolbar
+    float tw = static_cast<float>(m_renderer.target_size().width);
+    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
+
     int total = static_cast<int>(m_index.size());
     int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
     int cols = std::max(1, (grid_area_w - m_thumb_pad * 2 + m_thumb_gap) / m_cell_size);
     m_grid_cols = cols;
     int cell = m_thumb_size + m_thumb_gap;
-    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
-    int tx = 0;  // left-aligned, no centering
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h - m_thumb_pad * 2 + m_thumb_gap) / cell;
+    int tx = 0;
     int top_row = m_grid_scroll_y / cell;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
 
@@ -1490,7 +1558,7 @@ void App::grid_render() {
             if (idx >= total) break;
 
             float x = static_cast<float>(tx + c * cell);
-            float y = static_cast<float>(m_thumb_pad + r * cell - m_grid_scroll_y);
+            float y = static_cast<float>(m_toolbar_h + m_thumb_pad + r * cell - m_grid_scroll_y);
 
             // Look up in D2D cache (already populated by batch above)
             auto dit = m_thumb_d2d.find(idx);
@@ -1516,7 +1584,7 @@ void App::grid_render() {
     // Custom scrollbar (in grid area, left of panel)
     float total_content = static_cast<float>(m_grid_total_rows * (m_thumb_size + m_thumb_gap) + m_thumb_pad * 2);
     float view_h = static_cast<float>(m_renderer.target_size().height);
-    m_renderer.draw_scrollbar(px - 14.0f, 0, 8.0f, view_h,
+    m_renderer.draw_scrollbar(px - 14.0f, static_cast<float>(m_toolbar_h), 8.0f, view_h - m_toolbar_h,
         total_content, view_h, static_cast<float>(m_grid_scroll_y));
     float pw = static_cast<float>(m_panel_width);
     float ph = static_cast<float>(m_renderer.target_size().height);
@@ -1560,7 +1628,7 @@ void App::grid_render() {
         pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
     }
 
-    m_renderer.draw_side_panel(px, pw, ph, preview_bmp, pvw, pvh, pinfo, pgen);
+    m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h, preview_bmp, pvw, pvh, pinfo, pgen);
 
     // Info card overlay (toggled by I key)
     if (m_show_info && m_info_meta.valid) {
@@ -1624,6 +1692,9 @@ void App::render_frame() {
         return;
     }
     m_renderer.clear();
+    // Draw custom toolbar
+    float tw = static_cast<float>(m_renderer.target_size().width);
+    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
     if (m_has_image) {
         // Upgrade from thumbnail preview to full image when ready
         if (m_using_thumb_preview) {
