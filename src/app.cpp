@@ -1842,13 +1842,24 @@ void App::grid_render() {
         ri.row_y = cur_y;
         ri.label_extra = 0;
 
-        // Gather aspect ratios
+        // Gather aspect ratios — use probe dims to avoid layout shift
         float H = 120.0f; // initial guess — will be scaled
         double total_w_at_H = 0;
         for (int i = ri.start_idx; i < ri.end_idx; ++i) {
             uint32_t iw = 1, ih = 1;
-            if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic)
-                m_thumbs[i].wic->GetSize(&iw, &ih);
+            if (i < static_cast<int>(m_thumbs.size())) {
+                if (m_thumbs[i].wic)
+                    m_thumbs[i].wic->GetSize(&iw, &ih);
+                else if (m_thumbs[i].orig_w > 0)
+                    { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
+                else {
+                    auto probe = m_decoder.probe(m_index.path_at(i));
+                    if (probe) {
+                        iw = probe->width; ih = probe->height;
+                        m_thumbs[i].orig_w = iw; m_thumbs[i].orig_h = ih;
+                    }
+                }
+            }
             if (iw == 0) iw = 1; if (ih == 0) ih = 1;
             total_w_at_H += (double)H * iw / ih;
         }
@@ -1861,8 +1872,12 @@ void App::grid_render() {
         float x = 0;
         for (int i = ri.start_idx; i < ri.end_idx; ++i) {
             uint32_t iw = 1, ih = 1;
-            if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic)
-                m_thumbs[i].wic->GetSize(&iw, &ih);
+            if (i < static_cast<int>(m_thumbs.size())) {
+                if (m_thumbs[i].wic)
+                    m_thumbs[i].wic->GetSize(&iw, &ih);
+                else if (m_thumbs[i].orig_w > 0)
+                    { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
+            }
             if (iw == 0) iw = 1; if (ih == 0) ih = 1;
             float img_w = static_cast<float>(ri.row_h) * iw / ih;
             ri.img_x.push_back(x);
