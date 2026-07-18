@@ -760,6 +760,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_LBUTTONDBLCLK:
+        if (m_animating) return 0;
         if (m_grid_mode) {
             if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
                 m_from_grid = true;
@@ -803,6 +804,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         switch (wp) {
         case VK_ESCAPE:
+            if (m_animating) return 0;
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
@@ -817,6 +819,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
         case VK_SPACE:
+            if (m_animating) return 0;  // debounce during animation
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
