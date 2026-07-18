@@ -50,6 +50,7 @@ target_link_libraries(MinView
     shell32
     shlwapi
     dwmapi
+    uxtheme
 )
 
 # MSVC warnings
