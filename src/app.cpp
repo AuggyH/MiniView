@@ -1584,12 +1584,14 @@ void App::grid_render() {
             x += img_w + gap;
         }
         rows.push_back(ri);
-        cur_y += ri.row_h + gap;
+        int label_extra = m_show_labels ? static_cast<int>(32 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
+        cur_y += ri.row_h + gap + label_extra;
         idx = ri.end_idx;
     }
     m_grid_total_rows = static_cast<int>(rows.size());
     m_row_heights.clear();
-    for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap);
+    int label_extra2 = m_show_labels ? static_cast<int>(32 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
+    for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap + label_extra2);
     int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
 
     // --- Scroll calc ---
@@ -1652,6 +1654,16 @@ void App::grid_render() {
                 std::wstring fname = (pos2 != std::wstring::npos) ? spath.substr(pos2 + 1) : spath;
                 float ly = row_y + ri.row_h + 2;
                 m_renderer.draw_label(x, ly, w, fname);
+
+                WIN32_FILE_ATTRIBUTE_DATA attr2;
+                if (GetFileAttributesExW(spath.c_str(), GetFileExInfoStandard, &attr2)) {
+                    ULONGLONG fs = (static_cast<ULONGLONG>(attr2.nFileSizeHigh) << 32) | attr2.nFileSizeLow;
+                    std::wstring size_str;
+                    if (fs < 1024) size_str = std::to_wstring(fs) + L" B";
+                    else if (fs < 1024*1024) size_str = std::to_wstring(fs/1024) + L" KB";
+                    else { wchar_t buf[32]; swprintf_s(buf, L"%.1f MB", fs/(1024.0*1024.0)); size_str = buf; }
+                    m_renderer.draw_label(x, ly + 14, w, size_str);
+                }
             }
         }
     }
