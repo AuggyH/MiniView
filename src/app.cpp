@@ -230,8 +230,8 @@ App::~App() { stop_preloader(); stop_thumb_loader(); }
 int App::run(const std::wstring& initial_path) {
     // Scale window size by DPI
     float dpi = static_cast<float>(GetDpiForWindow(GetDesktopWindow()));
-    int ww = static_cast<int>(1200 * dpi / 96.0f);
-    int wh = static_cast<int>(800 * dpi / 96.0f);
+    int ww = static_cast<int>(1400 * dpi / 96.0f);
+    int wh = static_cast<int>(900 * dpi / 96.0f);
     if (!m_window.create(L"MinView", ww, wh))
         throw std::runtime_error("Failed to create window");
 
@@ -1658,13 +1658,16 @@ void App::grid_render() {
                 float dpi_s = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
                 float ly = row_y + ri.row_h + 4.0f * dpi_s;
                 m_renderer.draw_label(x, ly, w, fname, 12.0f);
+                float name_h = m_renderer.label_height(fname, w, 12.0f);
 
-                if (m_thumbs[idx2].orig_w > 0)
-                    m_renderer.draw_label(x, ly + 18.0f * dpi_s, w,
+                if (m_thumbs[idx2].orig_w > 0) {
+                    float gap_h = 3.0f * dpi_s;
+                    m_renderer.draw_label(x, ly + name_h + gap_h, w,
                         std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f);
-            }
+                }
         }
     }
+    }  // for r loop
 
     // Toolbar + panel + scrollbar
     float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
