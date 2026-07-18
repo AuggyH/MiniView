@@ -369,6 +369,23 @@ ImageMeta parse_comfyui(const std::string& prompt_json, const std::string* workf
             if (stype.find("Lora") == std::string::npos && stype.find("LoRA") == std::string::npos)
                 continue;
 
+            // Check if node is enabled (mode=0 or no mode field)
+            size_t mode_pos = wf.find("\"mode\"", lp);
+            if (mode_pos != std::string::npos && mode_pos < lp + 500) {
+                size_t mc = wf.find(':', mode_pos);
+                if (mc != std::string::npos && mc < mode_pos + 10) {
+                    mc++;
+                    while (mc < wf.size() && (wf[mc] == ' ' || wf[mc] == '\t')) mc++;
+                    if (mc < wf.size() && isdigit((unsigned char)wf[mc])) {
+                        int mode = wf[mc] - '0';
+                        if (mode != 0) {
+                            lp = te + 1; // skip disabled/muted nodes
+                            continue;
+                        }
+                    }
+                }
+            }
+
             // Get widgets_values: first is name, second is strength
             size_t wv = wf.find("\"widgets_values\"", lp);
             if (wv == std::string::npos || wv > lp + 5000) continue;
