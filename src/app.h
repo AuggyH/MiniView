@@ -25,6 +25,7 @@ public:
     struct ThumbEntry {
         Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
         bool loaded = false;
+        uint32_t orig_w = 0, orig_h = 0;
     };
 
 private:

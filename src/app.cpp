@@ -1228,6 +1228,9 @@ static void thumb_loader_worker(
                 std::lock_guard lock(mtx);
                 thumbs[idx].wic = wic;
                 thumbs[idx].loaded = true;
+                // Store original dimensions via probe
+                auto info = decoder.probe(index.path_at(idx));
+                if (info) { thumbs[idx].orig_w = info->width; thumbs[idx].orig_h = info->height; }
             } catch (...) {
                 std::lock_guard lock(mtx);
                 thumbs[idx].loaded = true;
@@ -1655,15 +1658,7 @@ void App::grid_render() {
                 float ly = row_y + ri.row_h + 4;
                 m_renderer.draw_label(x, ly, w, fname);
 
-                WIN32_FILE_ATTRIBUTE_DATA attr2;
-                if (GetFileAttributesExW(spath.c_str(), GetFileExInfoStandard, &attr2)) {
-                    ULONGLONG fs = (static_cast<ULONGLONG>(attr2.nFileSizeHigh) << 32) | attr2.nFileSizeLow;
-                    std::wstring size_str;
-                    if (fs < 1024) size_str = std::to_wstring(fs) + L" B";
-                    else if (fs < 1024*1024) size_str = std::to_wstring(fs/1024) + L" KB";
-                    else { wchar_t buf[32]; swprintf_s(buf, L"%.1f MB", fs/(1024.0*1024.0)); size_str = buf; }
-                    m_renderer.draw_label(x, ly + 16, w, size_str);
-                }
+                m_renderer.draw_label(x, ly + 16, w, std::to_wstring(m_thumbs[idx2].orig_w) + L"\u00D7" + std::to_wstring(m_thumbs[idx2].orig_h));
             }
         }
     }
