@@ -527,11 +527,11 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         float scale = std::min(thumb_w / pw, thumb_h / ph);
         float dw = pw * scale, dh = ph * scale;
         float ox = x + pad + (thumb_w - dw) / 2.0f;
-        float oy = pad + (thumb_h - dh) / 2.0f;
+        float oy = y + (thumb_h - dh) / 2.0f;
         D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
         m_d2d_context->DrawBitmap(preview, &dest, 1.0f,
             D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
-        y = pad + thumb_h + pad;
+        y = y_off + pad + thumb_h + pad;
     }
 
     // Info rows — 2-column layout with text measurement
