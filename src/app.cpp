@@ -2153,12 +2153,21 @@ void App::grid_render() {
             if (m_grid_sel >= ri.start_idx && m_grid_sel < ri.end_idx) {
                 int j = m_grid_sel - ri.start_idx;
                 if (j < static_cast<int>(ri.img_x.size())) {
-                    m_anim_src = {
-                        ri.img_x[j] + m_thumb_pad,
-                        static_cast<float>(m_toolbar_h + ri.row_y),
-                        ri.img_x[j] + m_thumb_pad + ri.img_w[j],
-                        static_cast<float>(m_toolbar_h + ri.row_y + ri.row_h)
-                    };
+                    // Use original image aspect ratio, not grid cell
+                    float cx = ri.img_x[j] + m_thumb_pad + ri.img_w[j] * 0.5f;
+                    float cy = static_cast<float>(m_toolbar_h + ri.row_y + ri.row_h * 0.5f);
+                    int idx = ri.start_idx + j;
+                    float ow = 1.0f, oh = 1.0f;
+                    if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].orig_w > 0) {
+                        ow = static_cast<float>(m_thumbs[idx].orig_w);
+                        oh = static_cast<float>(m_thumbs[idx].orig_h);
+                    }
+                    float cell_area = ri.img_w[j] * static_cast<float>(ri.row_h);
+                    float aspect = ow / oh;
+                    float src_h = std::sqrt(cell_area / aspect);
+                    float src_w = src_h * aspect;
+                    m_anim_src = {cx - src_w * 0.5f, cy - src_h * 0.5f,
+                                  cx + src_w * 0.5f, cy + src_h * 0.5f};
                 }
                 break;
             }
