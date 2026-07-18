@@ -323,6 +323,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case 'G':
             if (!m_index.empty()) toggle_grid();
             return 0;
+        case 'A':
+            if (m_grid_mode) { toggle_thumb_square(); return 0; }
+            return -1;
         case 'N':
             if (!ctrl) { set_sort_mode(SortMode::Name); return 0; }
             return -1;
@@ -904,6 +907,12 @@ void App::grid_ensure_visible() {
     if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
 }
 
+void App::toggle_thumb_square() {
+    m_thumb_square = !m_thumb_square;
+    m_thumb_d2d.clear();  // force redraw with new aspect
+    m_window.invalidate();
+}
+
 void App::grid_render() {
     if (!m_renderer.begin_frame()) return;
     m_renderer.clear();
@@ -946,7 +955,7 @@ void App::grid_render() {
             if (dit != m_thumb_d2d.end() && dit->second) {
                 // Draw placeholder bg + thumbnail on top
                 m_renderer.draw_grid_placeholder(x, y, static_cast<float>(THUMB_SIZE), L"", sel);
-                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(THUMB_SIZE), dit->second.Get());
+                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(THUMB_SIZE), dit->second.Get(), m_thumb_square);
             } else {
                 // Placeholder with filename
                 std::wstring name = m_index.path_at(idx);

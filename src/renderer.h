@@ -32,7 +32,7 @@ public:
 
     // Grid mode drawing
     void draw_grid_placeholder(float x, float y, float size, const std::wstring& name, bool selected);
-    void draw_grid_thumbnail(float x, float y, float size, ID2D1Bitmap1* thumb);
+    void draw_grid_thumbnail(float x, float y, float size, ID2D1Bitmap1* thumb, bool square = false);
 
     void clear(float r = 0.102f, float g = 0.102f, float b = 0.102f);
 
