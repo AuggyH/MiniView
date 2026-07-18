@@ -48,7 +48,7 @@ public:
         int active_idx, float y = 0);
     void draw_title_bar(float w, int hover_btn, int press_btn,
         const std::vector<std::wstring>& menu_items, int active_menu);
-    void draw_fade_overlay(float t);
+    void draw_fade_overlay(float t, bool forward);
     void draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t);
     void push_clip_below(float y);
     void pop_clip();

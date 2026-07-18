@@ -413,7 +413,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / 0.30f;  // 300ms
+            m_anim_t = elapsed / 3.00f;  // 3s for debug
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
@@ -2329,7 +2329,7 @@ void App::grid_render() {
             else
                 m_anim_src = {dx, dy, dx + dw, dy + dh};
         }
-        m_renderer.draw_fade_overlay(m_anim_t);
+        m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
@@ -2361,7 +2361,7 @@ void App::render_frame() {
                 else
                     m_anim_src = {dx, dy, dx + dw, dy + dh};
             }
-            m_renderer.draw_fade_overlay(m_anim_t);
+            m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
             if (m_anim_thumb)
                 m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
         }
@@ -2444,7 +2444,7 @@ void App::render_frame() {
             else
                 m_anim_src = {dx, dy, dx + dw, dy + dh};
         }
-        m_renderer.draw_fade_overlay(m_anim_t);
+        m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
