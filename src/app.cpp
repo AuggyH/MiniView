@@ -247,12 +247,13 @@ int App::run(const std::wstring& initial_path) {
     if (!m_renderer.init(m_window.handle()))
         throw std::runtime_error("Failed to init Direct2D renderer");
 
-    // Scale thumbnail cell size by DPI
+    // Scale thumbnail sizes by DPI
     float scale = dpi / 96.0f;
-    m_thumb_size = static_cast<int>(300 * scale);
-    m_thumb_gap  = static_cast<int>(6 * scale);
-    m_thumb_pad  = static_cast<int>(0);      // zero padding — grid flush with edges
-    m_cell_size  = m_thumb_size + m_thumb_gap;
+    m_thumb_cell  = static_cast<int>(160 * scale);  // display cell → columns
+    m_thumb_size  = static_cast<int>(320 * scale);  // decode res (2x supersampling)
+    m_thumb_gap   = static_cast<int>(6 * scale);
+    m_thumb_pad   = static_cast<int>(0);      // zero padding — grid flush with edges
+    m_cell_size   = m_thumb_cell + m_thumb_gap;
     m_panel_width = static_cast<int>(280 * scale);
     m_toolbar_h  = static_cast<int>(28 * scale);
 
@@ -1072,6 +1073,9 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     if (cmd == 0 && s_switch_to >= 0) {
         int next = s_switch_to;
         s_switch_to = -1;
+        // Update toolbar highlight immediately
+        m_toolbar_active = next;
+        m_window.invalidate();
         // Compute new popup position for the switched item
         POINT pt = {static_cast<int>(s_tb_bounds[next].left), static_cast<int>(m_toolbar_h)};
         ClientToScreen(hwnd, &pt);
@@ -1418,7 +1422,7 @@ void App::toggle_grid() {
 
         // Request first visible page of thumbnails
         int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
-        int cols = std::max(1, (gw + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
+        int cols = std::max(1, (gw + m_thumb_gap) / (m_thumb_cell + m_thumb_gap));
         m_grid_cols = cols;
         int thumb_w = (gw - (cols - 1) * m_thumb_gap) / cols;
         int cell = thumb_w + m_thumb_gap;
@@ -1686,7 +1690,7 @@ void App::grid_render() {
 
     int total = static_cast<int>(m_index.size());
     int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
-    int cols = std::max(1, (grid_area_w + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
+    int cols = std::max(1, (grid_area_w + m_thumb_gap) / (m_thumb_cell + m_thumb_gap));
     m_grid_cols = cols;
     int gap = m_thumb_gap;
     int usable_w = grid_area_w - (cols - 1) * gap;
