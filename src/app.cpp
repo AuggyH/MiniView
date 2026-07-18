@@ -2166,7 +2166,7 @@ void App::grid_render() {
                 if (j < static_cast<int>(ri.img_x.size())) {
                     // Use original image aspect ratio, not grid cell
                     float cx = ri.img_x[j] + m_thumb_pad + ri.img_w[j] * 0.5f;
-                    float cy = static_cast<float>(m_toolbar_h + ri.row_y + ri.row_h * 0.5f);
+                    float cy = static_cast<float>(m_toolbar_h + ri.row_y - m_grid_scroll_y + ri.row_h * 0.5f);
                     int idx = ri.start_idx + j;
                     float ow = 1.0f, oh = 1.0f;
                     if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].orig_w > 0) {
