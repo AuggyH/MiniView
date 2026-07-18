@@ -413,7 +413,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / 0.20f;  // 200ms
+            m_anim_t = elapsed / 0.30f;  // 300ms
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;

@@ -916,8 +916,8 @@ void Renderer::draw_fade_overlay(float t) {
 
 void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
     if (!m_d2d_context || !bmp) return;
-    // Ease-out cubic: snappier
-    float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+    // Ease-out quartic
+    float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t) * (1.0f - t);
     float x = src.left   + (dst.left   - src.left)   * et;
     float y = src.top    + (dst.top    - src.top)    * et;
     float w = (src.right - src.left) + ((dst.right - dst.left) - (src.right - src.left)) * et;
