@@ -116,6 +116,7 @@ private:
     int   m_grid_sel = -1;
     int   m_grid_cols = 0;
     int   m_grid_total_rows = 0;
+    int   m_last_cached_sel = -1;  // for anim src cache
     std::vector<int> m_row_heights;
     bool  m_thumb_square = false;
     bool  m_show_labels = true;
