@@ -35,7 +35,8 @@ public:
         const std::vector<std::pair<std::wstring, std::wstring>>& info,
         const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
         std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable = nullptr,
-        int sel_idx = -1, const std::wstring* toast = nullptr);
+        int sel_idx = -1, const std::wstring* toast = nullptr,
+        float scroll_y = 0.0f);  // returns total content height
     void draw_scrollbar(float x, float y, float w, float h,
         float total, float view, float pos, bool active = false);
     float draw_text_line(float x, float y, float w,

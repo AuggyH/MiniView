@@ -413,6 +413,18 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
             bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
+            // Check if mouse is over side panel
+            POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &pt);
+            int ww = static_cast<int>(m_renderer.target_size().width);
+            int px = ww - static_cast<int>(m_panel_width);
+            if (pt.x >= px && m_panel_width > 0) {
+                m_panel_scroll_y -= delta * 40.0f;
+                if (m_panel_scroll_y < 0) m_panel_scroll_y = 0;
+                m_window.invalidate();
+                return 0;
+            }
+
             if (ctrl) {
                 // Ctrl+Wheel = zoom thumbnail size
                 m_thumb_zoom = std::clamp(m_thumb_zoom + delta * 0.1f, 0.4f, 3.0f);
@@ -2137,7 +2149,8 @@ void App::grid_render() {
         m_panel_clickable.clear();
         m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h,
             preview_bmp, pvw, pvh, pinfo, pgen, &m_panel_clickable,
-            m_panel_sel, m_panel_copied.empty() ? nullptr : &m_panel_copied);
+            m_panel_sel, m_panel_copied.empty() ? nullptr : &m_panel_copied,
+            m_panel_scroll_y);
     }
 
     m_renderer.end_frame();

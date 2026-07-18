@@ -136,6 +136,7 @@ private:
     ImageMeta m_info_meta;
     std::vector<std::pair<D2D1_RECT_F, std::wstring>> m_panel_clickable;
     int m_panel_sel = -1;           // selected clickable index (brief highlight)
+    float m_panel_scroll_y = 0;     // side panel scroll offset
     std::wstring m_panel_copied;    // last copied text for toast
     UINT_PTR m_toast_timer = 0;     // toast dismiss timer
     UINT_PTR m_sel_timer = 0;       // selection clear timer
