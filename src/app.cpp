@@ -235,7 +235,22 @@ int App::run(const std::wstring& initial_path) {
 
     start_preloader();
 
-    if (!initial_path.empty()) open_image(initial_path);
+    if (!initial_path.empty()) {
+        DWORD attr = GetFileAttributesW(initial_path.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            // Directory: scan and enter grid mode
+            m_index.scan(initial_path, m_recursive);
+            save_last_dir(initial_path);
+            if (!m_index.empty()) {
+                m_current_idx = 0;
+                m_current_path = m_index.path_at(0);
+                m_has_image = true;
+                toggle_grid();
+            }
+        } else {
+            open_image(initial_path);
+        }
+    }
 
     int ret = m_window.run();
     stop_preloader();
@@ -967,24 +982,31 @@ static void thumb_loader_worker(
 
 void App::start_thumb_loader() {
     m_thumb_running = true;
-    try {
-        m_thumb_thread = std::thread(thumb_loader_worker,
-            std::ref(m_thumb_running),
-            std::ref(m_thumb_mutex),
-            std::ref(m_thumb_cv),
-            std::ref(m_thumb_queue),
-            std::ref(m_thumbs),
-            std::ref(m_index));
-    } catch (...) {
-        m_thumb_running = false;
+    m_thumb_threads.clear();
+    int num_threads = 3;
+    for (int i = 0; i < num_threads; ++i) {
+        try {
+            m_thumb_threads.emplace_back(thumb_loader_worker,
+                std::ref(m_thumb_running),
+                std::ref(m_thumb_mutex),
+                std::ref(m_thumb_cv),
+                std::ref(m_thumb_queue),
+                std::ref(m_thumbs),
+                std::ref(m_index));
+        } catch (...) {
+            m_thumb_running = false;
+            break;
+        }
     }
 }
 
 void App::stop_thumb_loader() {
     m_thumb_running = false;
     m_thumb_cv.notify_all();
-    if (m_thumb_thread.joinable())
-        m_thumb_thread.join();
+    for (auto& t : m_thumb_threads) {
+        if (t.joinable()) t.join();
+    }
+    m_thumb_threads.clear();
 }
 
 void App::request_thumb(int idx) {

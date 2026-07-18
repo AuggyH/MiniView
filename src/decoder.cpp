@@ -76,7 +76,7 @@ ComPtr<IWICBitmapSource> Decoder::decode_scaled(const std::wstring& path, uint32
         hr = m_factory->CreateBitmapScaler(&scaler);
         if (FAILED(hr))
             throw std::runtime_error("Failed to create bitmap scaler");
-        hr = scaler->Initialize(frame.Get(), sw, sh, WICBitmapInterpolationModeFant);
+        hr = scaler->Initialize(frame.Get(), sw, sh, WICBitmapInterpolationModeLinear);
         if (FAILED(hr))
             throw std::runtime_error("Failed to scale bitmap");
 

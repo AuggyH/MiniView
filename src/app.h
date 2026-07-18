@@ -119,8 +119,8 @@ private:
     // D2D bitmap cache (main-thread only, populated during render)
     std::unordered_map<int, Microsoft::WRL::ComPtr<ID2D1Bitmap1>> m_thumb_d2d;
 
-    // Thumb loader thread
-    std::thread m_thumb_thread;
+    // Thumb loader threads
+    std::vector<std::thread> m_thumb_threads;
     std::mutex  m_thumb_mutex;
     std::condition_variable m_thumb_cv;
     std::vector<int> m_thumb_queue;
