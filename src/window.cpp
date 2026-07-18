@@ -40,7 +40,7 @@ bool Window::create(const std::wstring& /*title*/, int width, int height) {
     int pos_y = (screen_h - win_h) / 2;
 
     m_hwnd = CreateWindowExW(
-        WS_EX_APPWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+        WS_EX_APPWINDOW,
         CLASS_NAME, L"",  // No title — we draw our own
         WS_OVERLAPPEDWINDOW & ~WS_CAPTION,  // custom title bar, keeps resize borders
         pos_x, pos_y, win_w, win_h,
