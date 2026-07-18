@@ -778,7 +778,7 @@ float Renderer::measure_text(const std::wstring& text, float font_size) {
     return m.width;
 }
 
-void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int active_idx) {
+void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int active_idx, float y) {
     if (!m_d2d_context || !m_dwrite_factory) return;
 
     float h = 28.0f * m_dpi_y / 96.0f;
@@ -787,7 +787,7 @@ void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.8f, 0.8f, 0.82f, 1.0f), &text_brush);
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.18f, 0.18f, 0.22f, 1.0f), &hover_bg);
 
-    D2D1_RECT_F rc = {0, 0, w, h};
+    D2D1_RECT_F rc = {0, y, w, y + h};
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
     ComPtr<IDWriteTextFormat> tf;
@@ -805,14 +805,77 @@ void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int
         float iw = m.width + 24.0f;
 
         if (i == active_idx) {
-            D2D1_RECT_F hr = {x, 2, x + iw, h - 2};
+            D2D1_RECT_F hr = {x, y + 2, x + iw, y + h - 2};
             m_d2d_context->FillRectangle(&hr, hover_bg.Get());
         }
 
-        D2D1_POINT_2F pt = {x + 12.0f, (h - m.height) / 2.0f};
+        D2D1_POINT_2F pt = {x + 12.0f, y + (h - m.height) / 2.0f};
         m_d2d_context->DrawTextLayout(pt, layout.Get(), text_brush.Get());
         x += iw;
     }
+}
+
+void Renderer::draw_title_bar(float w, int hover_btn, int press_btn) {
+    if (!m_d2d_context || !m_dwrite_factory) return;
+
+    float dpi_s = m_dpi_y / 96.0f;
+    float h = std::max(28.0f * dpi_s, GetSystemMetrics(SM_CYCAPTION) + 2.0f);
+    float pad = 12.0f * dpi_s;
+    float btn_w = 46.0f * dpi_s;
+    float btn_area = btn_w * 3;
+
+    // ── Background ──
+    ComPtr<ID2D1SolidColorBrush> bg;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.06f, 0.06f, 0.08f, 1.0f), &bg);
+    D2D1_RECT_F rc = {0, 0, w, h};
+    m_d2d_context->FillRectangle(&rc, bg.Get());
+
+    // ── Title ──
+    ComPtr<ID2D1SolidColorBrush> txt;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &txt);
+    D2D1_RECT_F tr = {pad, 0, w - btn_area - pad, h};
+    ComPtr<IDWriteTextFormat> tf;
+    float fs = 12.0f * dpi_s;
+    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        fs, L"en-US", &tf);
+    tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    m_d2d_context->DrawText(L"MinView", 7, tf.Get(), &tr, txt.Get());
+
+    // ── Buttons (right to left: close, max, min) ──
+    auto draw_btn = [&](float bx, int id, const wchar_t* sym) {
+        bool hover = (hover_btn == id);
+        bool press = (press_btn == id);
+        bool is_close = (id == 2);
+
+        // Hover/press background
+        if (hover) {
+            ComPtr<ID2D1SolidColorBrush> bb;
+            float a = press ? 0.7f : 0.35f;
+            m_d2d_context->CreateSolidColorBrush(is_close
+                ? D2D1::ColorF(0.91f, 0.30f, 0.24f, a)
+                : D2D1::ColorF(0.70f, 0.70f, 0.70f, a), &bb);
+            D2D1_RECT_F br = {bx, 0, bx + btn_w, h};
+            m_d2d_context->FillRectangle(&br, bb.Get());
+        }
+
+        // Symbol
+        ComPtr<ID2D1SolidColorBrush> sb;
+        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.88f, 0.88f, 0.88f, 1.0f), &sb);
+        ComPtr<IDWriteTextFormat> stf;
+        float sfs = 10.0f * dpi_s;
+        m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            sfs, L"en-US", &stf);
+        stf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        stf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        D2D1_RECT_F sr = {bx, 0, bx + btn_w, h};
+        m_d2d_context->DrawText(sym, 1, stf.Get(), &sr, sb.Get());
+    };
+
+    draw_btn(w - btn_w, 2, L"\u2715");                // close
+    draw_btn(w - btn_w * 2, 1, L"\u25A1");            // maximize
+    draw_btn(w - btn_w * 3, 0, L"\u2014");            // minimize
 }
 
 } // namespace mv
