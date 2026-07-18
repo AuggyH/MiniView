@@ -973,7 +973,7 @@ static void thumb_loader_worker(
             if (thumbs[idx].loaded) continue;
 
             try {
-                auto wic = decoder.decode_scaled(index.path_at(idx), 320);
+                auto wic = decoder.decode_scaled(index.path_at(idx), 200);
                 std::lock_guard lock(mtx);
                 thumbs[idx].wic = wic;
                 thumbs[idx].loaded = true;
