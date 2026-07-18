@@ -272,4 +272,71 @@ void Renderer::set_offset(float x, float y) {
     m_offset_y = y;
 }
 
+// ── Grid drawing ─────────────────────────────────────────────
+
+HRESULT Renderer::create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** out) {
+    if (!m_d2d_context || !wic) return E_INVALIDARG;
+    return m_d2d_context->CreateBitmapFromWicBitmap(wic, nullptr, out);
+}
+
+void Renderer::draw_grid_placeholder(float x, float y, float size,
+                                      const std::wstring& name, bool selected) {
+    if (!m_d2d_context) return;
+
+    // Background
+    D2D1_RECT_F rc = {x, y, x + size, y + size};
+    float r = selected ? 0.20f : 0.15f;
+    float g = selected ? 0.22f : 0.15f;
+    float b = selected ? 0.25f : 0.15f;
+    float radius = 4.0f;
+
+    ComPtr<ID2D1SolidColorBrush> brush;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(r, g, b), &brush);
+    m_d2d_context->FillRoundedRectangle(
+        D2D1::RoundedRect(rc, radius, radius), brush.Get());
+
+    // Selection border
+    if (selected) {
+        ComPtr<ID2D1SolidColorBrush> sel;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.35f, 0.55f, 0.85f), &sel);
+        m_d2d_context->DrawRoundedRectangle(
+            D2D1::RoundedRect(rc, radius, radius), sel.Get(), 2.0f);
+    }
+
+    // Filename text (centered at bottom)
+    if (m_text_format && m_overlay_brush && !name.empty()) {
+        float text_y = y + size - 20.0f;
+        D2D1_RECT_F tr = {x + 3.0f, text_y, x + size - 3.0f, y + size - 2.0f};
+
+        // Shadow
+        ComPtr<ID2D1SolidColorBrush> shadow;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.55f), &shadow);
+        D2D1_RECT_F sr = {x + 4.0f, text_y + 1.0f, x + size - 2.0f, y + size - 1.0f};
+        m_d2d_context->DrawText(name.c_str(), static_cast<uint32_t>(name.size()),
+            m_text_format.Get(), &sr, shadow.Get());
+        m_d2d_context->DrawText(name.c_str(), static_cast<uint32_t>(name.size()),
+            m_text_format.Get(), &tr, m_overlay_brush.Get());
+    }
+}
+
+void Renderer::draw_grid_thumbnail(float x, float y, float size, ID2D1Bitmap1* thumb) {
+    if (!m_d2d_context || !thumb) return;
+
+    D2D1_SIZE_F bmp_size = thumb->GetSize();
+    if (bmp_size.width == 0 || bmp_size.height == 0) return;
+
+    // Scale to fit inside the cell, centered
+    float scale = std::min(size / bmp_size.width, size / bmp_size.height);
+    float dw = bmp_size.width * scale;
+    float dh = bmp_size.height * scale;
+    float ox = x + (size - dw) / 2.0f;
+    float oy = y + (size - dh) / 2.0f;
+
+    D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
+    m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+}
+
 } // namespace mv

@@ -56,6 +56,36 @@ ComPtr<IWICBitmapSource> Decoder::decode(const std::wstring& path) {
     return convert_to_pbgra(frame.Get());
 }
 
+ComPtr<IWICBitmapSource> Decoder::decode_scaled(const std::wstring& path, uint32_t max_size) {
+    auto decoder = create_decoder(path);
+
+    ComPtr<IWICBitmapFrameDecode> frame;
+    HRESULT hr = decoder->GetFrame(0, &frame);
+    if (FAILED(hr))
+        throw std::runtime_error("Failed to get image frame");
+
+    // Scale down if needed
+    uint32_t fw, fh;
+    frame->GetSize(&fw, &fh);
+    if (fw > max_size || fh > max_size) {
+        float scale = static_cast<float>(max_size) / std::max(fw, fh);
+        uint32_t sw = static_cast<uint32_t>(fw * scale);
+        uint32_t sh = static_cast<uint32_t>(fh * scale);
+
+        ComPtr<IWICBitmapScaler> scaler;
+        hr = m_factory->CreateBitmapScaler(&scaler);
+        if (FAILED(hr))
+            throw std::runtime_error("Failed to create bitmap scaler");
+        hr = scaler->Initialize(frame.Get(), sw, sh, WICBitmapInterpolationModeFant);
+        if (FAILED(hr))
+            throw std::runtime_error("Failed to scale bitmap");
+
+        return convert_to_pbgra(scaler.Get());
+    }
+
+    return convert_to_pbgra(frame.Get());
+}
+
 std::optional<ImageInfo> Decoder::probe(const std::wstring& path) {
     try {
         auto decoder = create_decoder(path);

@@ -149,7 +149,7 @@ static void preload_worker(
 // ── App lifecycle ────────────────────────────────────────────
 
 App::App()  = default;
-App::~App() { stop_preloader(); }
+App::~App() { stop_preloader(); stop_thumb_loader(); }
 
 int App::run(const std::wstring& initial_path) {
     if (!m_window.create(L"MinView", 1200, 800))
@@ -195,6 +195,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_MOUSEWHEEL: {
+        if (m_grid_mode) {
+            float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
+            m_grid_scroll_y -= static_cast<int>(delta * 60);
+            if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
+            m_window.invalidate();
+            return 0;
+        }
         if (!m_has_image) return 0;
         float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
         float factor = (delta > 0) ? 1.15f : 1.0f / 1.15f;
@@ -226,6 +233,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_LBUTTONDOWN:
+        if (m_grid_mode) {
+            grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            return 0;
+        }
         if (!m_has_image) return -1;
         m_drag_pending = true;
         m_dragging = false;
@@ -277,6 +288,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_LBUTTONDBLCLK:
+        if (m_grid_mode) {
+            if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size())) {
+                toggle_grid();  // exit grid
+                navigate_to(m_grid_sel);
+            }
+            return 0;
+        }
         fit_to_window();
         m_window.invalidate();
         return 0;
@@ -298,15 +316,36 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         switch (wp) {
         case VK_ESCAPE:
+            if (m_grid_mode) { toggle_grid(); return 0; }
             if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
             DestroyWindow(hwnd); return 0;
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
-        case VK_LEFT:  navigate_to(m_current_idx - 1); return 0;
-        case VK_RIGHT: navigate_to(m_current_idx + 1); return 0;
-        case VK_HOME:  navigate_to(0); return 0;
-        case VK_END:   navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
+        case 'G':
+            if (!m_index.empty()) toggle_grid();
+            return 0;
+        case VK_LEFT:
+            if (m_grid_mode) { grid_navigate(-1); return 0; }
+            navigate_to(m_current_idx - 1); return 0;
+        case VK_RIGHT:
+            if (m_grid_mode) { grid_navigate(1); return 0; }
+            navigate_to(m_current_idx + 1); return 0;
+        case VK_UP:
+            if (m_grid_mode) { grid_navigate(-m_grid_cols); return 0; }
+            return -1;
+        case VK_DOWN:
+            if (m_grid_mode) { grid_navigate(m_grid_cols); return 0; }
+            return -1;
+        case VK_HOME:
+            if (m_grid_mode) { m_grid_sel = 0; grid_ensure_visible(); m_window.invalidate(); return 0; }
+            navigate_to(0); return 0;
+        case VK_END:
+            if (m_grid_mode) { m_grid_sel = static_cast<int>(m_index.size()) - 1; grid_ensure_visible(); m_window.invalidate(); return 0; }
+            navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
         case VK_SPACE: navigate_to(m_current_idx + 1); return 0;
         case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
+        case VK_RETURN:
+            if (m_grid_mode && m_grid_sel >= 0) { toggle_grid(); navigate_to(m_grid_sel); return 0; }
+            return -1;
         case VK_DELETE: delete_current_file(shift); return 0;
         }
         break;
@@ -663,7 +702,216 @@ void App::zoom_at_center(float factor) {
     m_window.invalidate();
 }
 
+// ── Grid mode ────────────────────────────────────────────────
+
+static void thumb_loader_worker(
+    std::atomic<bool>& running,
+    std::mutex& mtx,
+    std::condition_variable& cv,
+    std::vector<int>& queue,
+    std::vector<App::ThumbEntry>& thumbs,
+    ImageIndex& index)
+{
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    Decoder decoder;
+    while (running) {
+        int idx;
+        {
+            std::unique_lock lock(mtx);
+            cv.wait(lock, [&] { return !running || !queue.empty(); });
+            if (!running) break;
+            if (queue.empty()) continue;
+            idx = queue.back();
+            queue.pop_back();
+        }
+        if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
+        if (thumbs[idx].loaded) continue;
+
+        try {
+            auto wic = decoder.decode_scaled(index.path_at(idx), 320);
+            std::lock_guard lock(mtx);
+            thumbs[idx].wic = wic;
+            thumbs[idx].loaded = true;
+        } catch (...) {
+            std::lock_guard lock(mtx);
+            thumbs[idx].loaded = true;  // mark done even on failure
+        }
+    }
+    CoUninitialize();
+}
+
+void App::start_thumb_loader() {
+    m_thumb_running = true;
+    try {
+        m_thumb_thread = std::thread(thumb_loader_worker,
+            std::ref(m_thumb_running),
+            std::ref(m_thumb_mutex),
+            std::ref(m_thumb_cv),
+            std::ref(m_thumb_queue),
+            std::ref(m_thumbs),
+            std::ref(m_index));
+    } catch (...) {
+        m_thumb_running = false;
+    }
+}
+
+void App::stop_thumb_loader() {
+    m_thumb_running = false;
+    m_thumb_cv.notify_all();
+    if (m_thumb_thread.joinable())
+        m_thumb_thread.join();
+}
+
+void App::request_thumb(int idx) {
+    if (idx < 0 || idx >= static_cast<int>(m_thumbs.size())) return;
+    if (m_thumbs[idx].loaded) return;
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        for (int q : m_thumb_queue) if (q == idx) return;
+        m_thumb_queue.push_back(idx);
+    }
+    m_thumb_cv.notify_one();
+}
+
+void App::toggle_grid() {
+    m_grid_mode = !m_grid_mode;
+
+    if (m_grid_mode) {
+        // Enter grid: init thumb cache
+        int n = static_cast<int>(m_index.size());
+        m_thumbs.clear();
+        m_thumbs.resize(n);
+        m_thumb_d2d.clear();
+        m_grid_scroll_y = 0;
+        m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
+        start_thumb_loader();
+
+        // Request first visible page of thumbnails
+        int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - THUMB_PAD * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP));
+        m_grid_cols = cols;
+        int rows = (static_cast<int>(m_renderer.target_size().height) - THUMB_PAD * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP);
+        for (int i = 0; i < std::min(n, cols * (rows + 2)); ++i)
+            request_thumb(i);
+
+        grid_ensure_visible();
+        SetWindowTextW(m_window.handle(),
+            (L"Grid [" + std::to_wstring(m_index.size()) + L" images]").c_str());
+    } else {
+        // Exit grid
+        stop_thumb_loader();
+        m_thumbs.clear();
+        m_thumb_d2d.clear();
+        update_title();
+    }
+    m_window.invalidate();
+}
+
+void App::grid_click(int x, int y) {
+    int col = (x - THUMB_PAD) / (THUMB_SIZE + THUMB_GAP);
+    int row = (y - THUMB_PAD + m_grid_scroll_y) / (THUMB_SIZE + THUMB_GAP);
+    if (col < 0 || col >= m_grid_cols) return;
+    int idx = row * m_grid_cols + col;
+    if (idx >= 0 && idx < static_cast<int>(m_index.size())) {
+        m_grid_sel = idx;
+        m_window.invalidate();
+    }
+}
+
+void App::grid_navigate(int dir) {
+    int total = static_cast<int>(m_index.size());
+    if (total == 0) return;
+    int next = m_grid_sel + dir;
+    if (dir == -1 && m_grid_sel <= 0) return;
+    if (dir == 1 && m_grid_sel >= total - 1) return;
+    // Handle column edge: -1 wraps same row, +1 wraps same row
+    if (dir == -1 && (m_grid_sel % m_grid_cols) == 0) return;
+    if (dir == 1 && ((m_grid_sel + 1) % m_grid_cols) == 0) return;
+    if (dir == -m_grid_cols && m_grid_sel < m_grid_cols) return;
+    if (dir == m_grid_cols && m_grid_sel + m_grid_cols >= total) return;
+    if (next < 0) next = 0;
+    if (next >= total) next = total - 1;
+    m_grid_sel = next;
+    grid_ensure_visible();
+    m_window.invalidate();
+}
+
+void App::grid_ensure_visible() {
+    if (m_grid_cols == 0) return;
+    int row = m_grid_sel / m_grid_cols;
+    int cell_h = THUMB_SIZE + THUMB_GAP;
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - THUMB_PAD * 2) / cell_h;
+
+    int top_y = row * cell_h;
+    int bot_y = top_y + cell_h;
+    int view_top = m_grid_scroll_y;
+    int view_bot = m_grid_scroll_y + visible_rows * cell_h;
+
+    if (top_y < view_top) m_grid_scroll_y = top_y - THUMB_PAD;
+    else if (bot_y > view_bot) m_grid_scroll_y = bot_y - visible_rows * cell_h + THUMB_PAD;
+    if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
+}
+
+void App::grid_render() {
+    if (!m_renderer.begin_frame()) return;
+    m_renderer.clear();
+
+    int total = static_cast<int>(m_index.size());
+    int cols = std::max(1, (static_cast<int>(m_renderer.target_size().width) - THUMB_PAD * 2 + THUMB_GAP) / (THUMB_SIZE + THUMB_GAP));
+    m_grid_cols = cols;
+    int cell = THUMB_SIZE + THUMB_GAP;
+    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - THUMB_PAD * 2 + THUMB_GAP) / cell;
+    int top_row = m_grid_scroll_y / cell;
+    int bot_row = top_row + visible_rows + 1;  // +1 for partial
+
+    // Request thumbs for visible range
+    for (int i = top_row * cols; i < std::min(total, (bot_row + 1) * cols); ++i)
+        request_thumb(i);
+
+    for (int r = top_row; r <= bot_row; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            int idx = r * cols + c;
+            if (idx >= total) break;
+
+            float x = static_cast<float>(THUMB_PAD + c * cell);
+            float y = static_cast<float>(THUMB_PAD + r * cell - m_grid_scroll_y);
+
+            // Check if we have a D2D bitmap cached; if not, create one from WIC
+            auto dit = m_thumb_d2d.find(idx);
+            if (dit == m_thumb_d2d.end() && idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].loaded) {
+                auto& te = m_thumbs[idx];
+                if (te.wic) {
+                    ComPtr<ID2D1Bitmap1> d2d_bmp;
+                    HRESULT hr = m_renderer.create_bitmap_from_wic(te.wic.Get(), &d2d_bmp);
+                    if (SUCCEEDED(hr) && d2d_bmp) {
+                        m_thumb_d2d[idx] = d2d_bmp;
+                        dit = m_thumb_d2d.find(idx);
+                    }
+                }
+            }
+
+            bool sel = (idx == m_grid_sel);
+            if (dit != m_thumb_d2d.end() && dit->second) {
+                // Draw placeholder bg + thumbnail on top
+                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(THUMB_SIZE), L"", sel);
+                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(THUMB_SIZE), dit->second.Get());
+            } else {
+                // Placeholder with filename
+                std::wstring name = m_index.path_at(idx);
+                size_t pos = name.find_last_of(L"\\/");
+                if (pos != std::wstring::npos) name = name.substr(pos + 1);
+                m_renderer.draw_grid_placeholder(x, y, static_cast<float>(THUMB_SIZE), name, sel);
+            }
+        }
+    }
+
+    m_renderer.end_frame();
+}
+
 void App::render_frame() {
+    if (m_grid_mode) {
+        grid_render();
+        return;
+    }
     if (!m_renderer.begin_frame()) {
         // GDI fallback — paint dark background with status text
         PAINTSTRUCT ps;

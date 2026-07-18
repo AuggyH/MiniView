@@ -20,6 +20,12 @@ public:
 
     int run(const std::wstring& initial_path = L"");
 
+    // Thumb cache entry (public for background thread access)
+    struct ThumbEntry {
+        Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
+        bool loaded = false;
+    };
+
 private:
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     void    open_image(const std::wstring& path);
@@ -42,6 +48,20 @@ private:
     void    request_preload(const std::wstring& path);
     Microsoft::WRL::ComPtr<IWICBitmapSource> get_preloaded(const std::wstring& path);
     void    preload_neighbors();
+
+    // Grid mode
+    void    toggle_grid();
+    void    grid_click(int x, int y);
+    void    grid_navigate(int dir);
+    void    grid_ensure_visible();
+    void    grid_render();
+    void    start_thumb_loader();
+    void    stop_thumb_loader();
+    void    request_thumb(int idx);
+
+    static constexpr int THUMB_SIZE = 160;
+    static constexpr int THUMB_GAP   = 6;
+    static constexpr int THUMB_PAD   = 12;
 
     Window     m_window;
     Renderer   m_renderer;
@@ -72,6 +92,26 @@ private:
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IWICBitmapSource>> m_preload_cache;
     std::vector<std::wstring> m_preload_queue;
     std::atomic<bool> m_preload_running{false};
+
+    // Grid state
+    bool  m_grid_mode = false;
+    int   m_grid_scroll_y = 0;
+    int   m_grid_sel = -1;       // selected thumbnail index
+    int   m_grid_cols = 0;
+    int   m_grid_total_rows = 0;
+
+    // Thumb cache (WIC bitmaps — thread-safe, loaded by background thread)
+    std::vector<ThumbEntry> m_thumbs;
+
+    // D2D bitmap cache (main-thread only, populated during render)
+    std::unordered_map<int, Microsoft::WRL::ComPtr<ID2D1Bitmap1>> m_thumb_d2d;
+
+    // Thumb loader thread
+    std::thread m_thumb_thread;
+    std::mutex  m_thumb_mutex;
+    std::condition_variable m_thumb_cv;
+    std::vector<int> m_thumb_queue;
+    std::atomic<bool> m_thumb_running{false};
 };
 
 } // namespace mv
