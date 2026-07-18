@@ -67,6 +67,11 @@ bool Window::create(const std::wstring& /*title*/, int width, int height) {
     BOOL dark = TRUE;
     DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
+    // Mica backdrop — Windows 11 native blur material
+    int backdrop = 2;  // DWMSBT_MAINWINDOW
+    DwmSetWindowAttribute(m_hwnd, 38 /*DWMWA_SYSTEMBACKDROP_TYPE*/,
+        &backdrop, sizeof(backdrop));
+
     // Rounded corners (Windows 11)
     DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
     DwmSetWindowAttribute(m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,

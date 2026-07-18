@@ -72,6 +72,7 @@ bool Renderer::create_device_resources() {
     scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     scd.BufferCount = 2;
     scd.SwapEffect  = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+    scd.AlphaMode   = DXGI_ALPHA_MODE_PREMULTIPLIED;
 
     hr = dxgi_factory->CreateSwapChainForHwnd(
         m_d3d_device.Get(), m_hwnd, &scd, nullptr, nullptr, &m_swap_chain);
@@ -225,9 +226,9 @@ bool Renderer::end_frame() {
     return true;
 }
 
-void Renderer::clear(float r, float g, float b) {
+void Renderer::clear(float /*r*/, float /*g*/, float /*b*/) {
     if (!m_d2d_context) return;
-    m_d2d_context->Clear(D2D1::ColorF(r, g, b));
+    m_d2d_context->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
 }
 
 void Renderer::draw_image() {
