@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # Windows subsystem (no console window)
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /MANIFEST:NO")
 
 # Source files
 set(SOURCES
@@ -20,6 +20,7 @@ set(SOURCES
     src/app.cpp
     src/indexer.cpp
     src/metadata.cpp
+    src/MinView.rc
 )
 
 set(HEADERS
@@ -48,6 +49,7 @@ target_link_libraries(MinView
     comdlg32
     shell32
     shlwapi
+    dwmapi
 )
 
 # MSVC warnings

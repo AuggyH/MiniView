@@ -1,5 +1,6 @@
 #include "window.h"
 #include <stdexcept>
+#include <dwmapi.h>
 
 namespace mv {
 
@@ -21,7 +22,7 @@ bool Window::create(const std::wstring& title, int width, int height) {
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hinst;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.hbrBackground = CreateSolidBrush(RGB(26, 26, 26));  // dark background
     wc.lpszClassName = CLASS_NAME;
 
     RegisterClassExW(&wc);
@@ -39,6 +40,16 @@ bool Window::create(const std::wstring& title, int width, int height) {
         nullptr, nullptr, hinst, this);
 
     if (!m_hwnd) return false;
+
+    // Dark mode title bar (Windows 10 1809+)
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &dark, sizeof(dark));
+
+    // Rounded corners (Windows 11)
+    DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+        &corner, sizeof(corner));
 
     ShowWindow(m_hwnd, SW_SHOW);
     UpdateWindow(m_hwnd);
@@ -80,7 +91,6 @@ Window* Window::get_this(HWND hwnd) {
 }
 
 LRESULT Window::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    // WM_NCCREATE: store this pointer, return TRUE to continue
     if (msg == WM_NCCREATE) {
         auto* cs = reinterpret_cast<CREATESTRUCT*>(lp);
         auto* w  = static_cast<Window*>(cs->lpCreateParams);
@@ -91,14 +101,12 @@ LRESULT Window::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     auto* w = get_this(hwnd);
 
-    // WM_DESTROY: post quit
     if (msg == WM_DESTROY) {
         PostQuitMessage(0);
         if (w) w->m_hwnd = nullptr;
         return 0;
     }
 
-    // Custom callback
     if (w && w->m_callback) {
         LRESULT result = w->m_callback(hwnd, msg, wp, lp);
         if (result != -1) return result;
