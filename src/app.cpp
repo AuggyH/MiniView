@@ -251,6 +251,15 @@ int App::run(const std::wstring& initial_path) {
 
     SetMenu(m_window.handle(), build_menu_bar());
 
+    // Dark menu bar
+    HMENU hmenu = GetMenu(m_window.handle());
+    if (hmenu) {
+        MENUINFO mi = {sizeof(MENUINFO)};
+        mi.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
+        mi.hbrBack = CreateSolidBrush(RGB(32, 32, 36));
+        SetMenuInfo(hmenu, &mi);
+    }
+
     start_preloader();
 
     if (!initial_path.empty()) {
@@ -1060,10 +1069,9 @@ static void thumb_loader_worker(
             try {
                 auto path = index.path_at(idx);
                 // Try shell thumbnail cache first (instant for previously-viewed files)
-                auto wic = get_shell_thumb(path, 320);
+                auto wic = get_shell_thumb(path, 256);
                 if (!wic) {
-                    // Fall back to WIC decode
-                    wic = decoder.decode_scaled(path, 320);
+                    wic = decoder.decode_scaled(path, 256);
                 }
                 std::lock_guard lock(mtx);
                 thumbs[idx].wic = wic;
@@ -1354,12 +1362,15 @@ void App::grid_render() {
         }
     }
 
-    // Create D2D bitmaps outside the mutex (GPU upload, can be slow)
+    // Create D2D bitmaps outside the mutex (limit to 4/frame to avoid blocking render)
+    int d2d_count = 0;
     for (auto& [idx, wic] : ready) {
+        if (d2d_count >= 4) break;
         ComPtr<ID2D1Bitmap1> d2d_bmp;
         HRESULT hr = m_renderer.create_bitmap_from_wic(wic.Get(), &d2d_bmp);
         if (SUCCEEDED(hr) && d2d_bmp) {
             m_thumb_d2d[idx] = d2d_bmp;
+            ++d2d_count;
         }
     }
 
