@@ -916,15 +916,14 @@ void Renderer::draw_fade_overlay(float t) {
 
 void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
     if (!m_d2d_context || !bmp) return;
-    // Ease-out: t' = 1 - (1-t)^2
-    float et = 1.0f - (1.0f - t) * (1.0f - t);
+    // Ease-out cubic: snappier
+    float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
     float x = src.left   + (dst.left   - src.left)   * et;
     float y = src.top    + (dst.top    - src.top)    * et;
     float w = (src.right - src.left) + ((dst.right - dst.left) - (src.right - src.left)) * et;
     float h = (src.bottom - src.top) + ((dst.bottom - dst.top) - (src.bottom - src.top)) * et;
     D2D1_RECT_F rc = {x, y, x + w, y + h};
-    float alpha = std::clamp(t * 2.0f, 0.0f, 1.0f);  // fade in thumbnail over first half
-    m_d2d_context->DrawBitmap(bmp, &rc, alpha, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+    m_d2d_context->DrawBitmap(bmp, &rc, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
 }
 
 void Renderer::push_clip_below(float y) {

@@ -127,10 +127,11 @@ private:
     bool  m_animating = false;
     float m_anim_t = 0.0f;
     UINT_PTR m_anim_timer = 0;
-    Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_anim_thumb;  // thumbnail bitmap
-    D2D1_RECT_F m_anim_src = {};   // thumbnail grid position
-    D2D1_RECT_F m_anim_dst = {};   // fitted image position
-    bool  m_anim_forward = true;   // grid→image or image→grid
+    ULONGLONG m_anim_start = 0;  // QPC timestamp
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_anim_thumb;
+    D2D1_RECT_F m_anim_src = {};
+    D2D1_RECT_F m_anim_dst = {};
+    bool  m_anim_forward = true;
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     int   m_toolbar_h = 28;
