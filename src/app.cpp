@@ -1047,10 +1047,11 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         {
             HMENU sort_menu = CreatePopupMenu();
-            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_NAME,   L"按名称排序\tN");
-            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_DATE,   L"按日期排序\tD");
-            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_SIZE,   L"按大小排序\tS");
-            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_RANDOM, L"随机排序\tR");
+            SortMode cur = m_index.sort_mode();
+            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Name   ? MF_CHECKED : 0), IDM_SORT_NAME,   L"按名称排序\tN");
+            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Date   ? MF_CHECKED : 0), IDM_SORT_DATE,   L"按日期排序\tD");
+            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Size   ? MF_CHECKED : 0), IDM_SORT_SIZE,   L"按大小排序\tS");
+            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Random ? MF_CHECKED : 0), IDM_SORT_RANDOM, L"随机排序\tR");
             AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"排序方式");
         }
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
