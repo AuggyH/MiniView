@@ -672,21 +672,8 @@ void App::open_image(const std::wstring& path) {
         if (cached) {
             m_renderer.upload_image(cached.Get());
         } else {
-            // Try thumbnail cache as instant preview
-            int thumb_idx = m_index.index_of(path);
-            bool used_thumb = false;
-            if (thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
-                std::lock_guard lock(m_thumb_mutex);
-                if (m_thumbs[thumb_idx].loaded && m_thumbs[thumb_idx].wic) {
-                    m_renderer.upload_image(m_thumbs[thumb_idx].wic.Get());
-                    used_thumb = true;
-                    m_using_thumb_preview = true;
-                }
-            }
-            if (!used_thumb) {
-                auto bitmap = m_decoder.decode(path);
-                m_renderer.upload_image(bitmap.Get());
-            }
+            auto bitmap = m_decoder.decode(path);
+            m_renderer.upload_image(bitmap.Get());
         }
         m_current_path = path;
         m_has_image = true;
@@ -703,11 +690,6 @@ void App::open_image(const std::wstring& path) {
         m_current_idx = m_index.index_of(path);
 
         update_title();
-
-        // Queue full decode if showing thumbnail preview
-        if (m_using_thumb_preview) {
-            request_preload(path);
-        }
 
         // Preload neighbors in background
         preload_neighbors();
@@ -1728,14 +1710,6 @@ void App::render_frame() {
     float tw = static_cast<float>(m_renderer.target_size().width);
     m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
     if (m_has_image) {
-        // Upgrade from thumbnail preview to full image when ready
-        if (m_using_thumb_preview) {
-            auto full = get_preloaded(m_current_path);
-            if (full) {
-                m_renderer.upload_image(full.Get());
-                m_using_thumb_preview = false;
-            }
-        }
         m_renderer.draw_image();
         m_renderer.draw_overlay();
         if (m_show_info) {
