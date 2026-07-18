@@ -827,7 +827,7 @@ void App::request_preload(const std::wstring& path) {
         if (m_preload_cache.count(path)) return;
         for (auto& q : m_preload_queue)
             if (q == path) return;
-        m_preload_queue.push_back(path);
+        m_preload_queue.insert(m_preload_queue.begin(), path);  // front = high priority
     }
     m_preload_cv.notify_one();
 }
