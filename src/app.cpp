@@ -808,6 +808,7 @@ void App::toggle_recursive() {
     if (m_grid_mode) {
         stop_thumb_loader();
         m_thumbs.clear();
+        m_thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
         m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
         clear_selection();
@@ -839,8 +840,14 @@ void App::set_sort_mode(SortMode mode) {
     if (m_grid_mode) {
         stop_thumb_loader();
         m_thumbs.clear();
+        m_thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
         m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
+        clear_selection();
+        m_selected.resize(m_index.size(), false);
+        if (m_grid_sel < static_cast<int>(m_index.size()))
+            m_selected[m_grid_sel] = true;
+        m_sel_anchor = m_grid_sel;
         start_thumb_loader();
         grid_ensure_visible();
     }
