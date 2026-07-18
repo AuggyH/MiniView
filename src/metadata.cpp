@@ -360,45 +360,45 @@ ImageMeta parse_comfyui(const std::string& prompt_json, const std::string* workf
             }
         };
 
-        // Positive prompt: try "easy positive", then "CLIPTextEncode" with positive title
-        if (m.positive_prompt.empty()) {
-            std::string text = wf_widget("easy positive");
-            if (!text.empty()) m.positive_prompt = utf8_to_wstring(text);
-        }
-        if (m.positive_prompt.empty()) {
-            // Find CLIPTextEncode with "positive" in title, get its widget value
-            size_t cp = 0;
-            while ((cp = wf.find("\"type\": \"CLIPTextEncode\"", cp)) != std::string::npos) {
-                // Check title for "positive" or "正"
-                size_t tp = wf.find("\"title\": \"", cp);
-                if (tp != std::string::npos && tp < cp + 500) {
-                    tp += 10;
-                    size_t te = wf.find('"', tp);
-                    if (te != std::string::npos) {
-                        std::string title = wf.substr(tp, te - tp);
-                        if (title.find("\\u6b63") != std::string::npos || title.find("positive") != std::string::npos) {
-                            size_t wv = wf.find("\"widgets_values\"", cp);
-                            if (wv != std::string::npos && wv < cp + 5000) {
-                                size_t ws = wf.find('[', wv);
-                                if (ws != std::string::npos && ws < wv + 30) {
-                                    ws++;
-                                    while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t')) ws++;
-                                    if (ws < wf.size() && wf[ws] == '"') {
-                                        size_t we = wf.find('"', ws + 1);
-                                        if (we != std::string::npos) {
-                                            std::string t = wf.substr(ws + 1, we - ws - 1);
-                                            if (!t.empty() && t.find_first_not_of("0123456789., []") != std::string::npos) {
-                                                m.positive_prompt = utf8_to_wstring(t);
-                                            }
-                                        }
+        // Positive prompt: collect ALL "easy positive" node texts
+        {
+            std::string all_pos;
+            size_t ep = 0;
+            while ((ep = wf.find("\"type\": \"easy positive\"", ep)) != std::string::npos) {
+                size_t wv = wf.find("\"widgets_values\"", ep);
+                if (wv != std::string::npos && wv < ep + 5000) {
+                    size_t ws = wf.find('[', wv);
+                    if (ws != std::string::npos && ws < wv + 30) {
+                        ws++;
+                        while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t' || wf[ws] == '\n')) ws++;
+                        if (ws < wf.size() && wf[ws] == '"') {
+                            std::string val;
+                            size_t i = ws + 1;
+                            while (i < wf.size()) {
+                                if (wf[i] == '\\' && i + 1 < wf.size()) {
+                                    switch (wf[i+1]) {
+                                        case 'n': val += '\n'; break;
+                                        case 't': val += '\t'; break;
+                                        case 'r': val += '\r'; break;
+                                        case '\\': val += '\\'; break;
+                                        case '"': val += '"'; break;
+                                        default: val += wf[i+1]; break;
                                     }
+                                    i += 2;
                                 }
+                                else if (wf[i] == '"') break;
+                                else { val += wf[i]; i++; }
+                            }
+                            if (!val.empty()) {
+                                if (!all_pos.empty()) all_pos += ", ";
+                                all_pos += val;
                             }
                         }
                     }
                 }
-                cp += 20;
+                ep += 20;
             }
+            if (!all_pos.empty()) m.positive_prompt = utf8_to_wstring(all_pos);
         }
 
         // ── LoRA extraction ──
