@@ -51,6 +51,7 @@ private:
 
     // Grid mode
     void    toggle_grid();
+    void    set_sort_mode(SortMode mode);
     void    grid_click(int x, int y);
     void    grid_navigate(int dir);
     void    grid_ensure_visible();

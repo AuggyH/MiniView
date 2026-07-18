@@ -2,8 +2,16 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <random>
 
 namespace mv {
+
+enum class SortMode {
+    Name,     // filename, case-insensitive
+    Date,     // last-modified, newest first
+    Size,     // file size, largest first
+    Random,   // Fisher-Yates shuffle
+};
 
 struct ImageEntry {
     std::wstring path;
@@ -28,14 +36,25 @@ public:
     /// Remove entry at sorted index. Returns true if removed.
     bool remove(int idx);
 
+    /// Re-sort existing entries by the given mode.
+    void sort_by(SortMode mode);
+
+    /// Get current sort mode.
+    SortMode sort_mode() const { return m_sort_mode; }
+
 private:
     void sort_by_name();
     void sort_by_path();
+    void sort_by_date();
+    void sort_by_size();
+    void sort_random();
     void rebuild_map();
 
     std::vector<ImageEntry>                  m_files;
     std::unordered_map<std::wstring, int>   m_path_to_idx;
     std::wstring                             m_root_dir;
+    SortMode                                 m_sort_mode = SortMode::Name;
+    std::mt19937                             m_rng{std::random_device{}()};
 };
 
 } // namespace mv

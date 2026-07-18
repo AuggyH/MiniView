@@ -323,6 +323,18 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case 'G':
             if (!m_index.empty()) toggle_grid();
             return 0;
+        case 'N':
+            if (!ctrl) { set_sort_mode(SortMode::Name); return 0; }
+            return -1;
+        case 'D':
+            if (!ctrl) { set_sort_mode(SortMode::Date); return 0; }
+            return -1;
+        case 'S':
+            if (!ctrl) { set_sort_mode(SortMode::Size); return 0; }
+            return -1;
+        case 'R':
+            if (!ctrl) { set_sort_mode(SortMode::Random); return 0; }
+            return -1;
         case VK_LEFT:
             if (m_grid_mode) { grid_navigate(-1); return 0; }
             navigate_to(m_current_idx - 1); return 0;
@@ -455,6 +467,32 @@ void App::toggle_recursive() {
     m_window.invalidate();
 }
 
+// ── Sort mode ────────────────────────────────────────────────
+
+void App::set_sort_mode(SortMode mode) {
+    if (m_index.empty()) return;
+    std::wstring current = m_current_path;
+    m_index.sort_by(mode);
+
+    // Re-locate current image
+    if (!current.empty()) {
+        m_current_idx = m_index.index_of(current);
+    }
+
+    // Reset grid if in grid mode (thumbnails need reload)
+    if (m_grid_mode) {
+        stop_thumb_loader();
+        m_thumbs.clear();
+        m_thumb_d2d.clear();
+        m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
+        start_thumb_loader();
+        grid_ensure_visible();
+    }
+
+    update_title();
+    m_window.invalidate();
+}
+
 // ── Preloader ────────────────────────────────────────────────
 
 void App::start_preloader() {
@@ -556,6 +594,17 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         AppendMenuW(menu, MF_STRING, 1, L"Open in Explorer");
         AppendMenuW(menu, MF_STRING, 2, L"Copy Image\tCtrl+C");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+        // Sort submenu
+        HMENU sort_menu = CreatePopupMenu();
+        auto sm = m_index.sort_mode();
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Name   ? MF_CHECKED : 0), 10, L"By Name\tN");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Date   ? MF_CHECKED : 0), 11, L"By Date\tD");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Size   ? MF_CHECKED : 0), 12, L"By Size\tS");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Random ? MF_CHECKED : 0), 13, L"Random Shuffle\tR");
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"Sort By");
+
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, 3, L"Delete\tDel");
         AppendMenuW(menu, MF_STRING, 4, L"Delete Permanently\tShift+Del");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -598,6 +647,10 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         break;
     }
     case 6: toggle_recursive(); break;
+    case 10: set_sort_mode(SortMode::Name);   break;
+    case 11: set_sort_mode(SortMode::Date);   break;
+    case 12: set_sort_mode(SortMode::Size);   break;
+    case 13: set_sort_mode(SortMode::Random); break;
     }
 
     DestroyMenu(menu);
