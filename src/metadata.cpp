@@ -72,100 +72,122 @@ std::unordered_map<std::string, std::string> read_png_texts(const std::wstring& 
     return result;
 }
 
-// ── Simple JSON value extractor (no full parser — targeted extraction) ─
+// ── SD WebUI parser ──────────────────────────────────────────
 
-int extract_json_int(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":";
-    auto pos = json.find(search);
-    if (pos == std::string::npos) return -1;
-    pos += search.size();
-    // Skip whitespace
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n'))
-        pos++;
-    try {
-        return std::stoi(json.substr(pos));
-    } catch (...) { return -1; }
-}
-
-float extract_json_float(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":";
-    auto pos = json.find(search);
-    if (pos == std::string::npos) return 0.0f;
-    pos += search.size();
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n'))
-        pos++;
-    try {
-        return std::stof(json.substr(pos));
-    } catch (...) { return 0.0f; }
-}
-
-std::string extract_json_string(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":\"";
-    auto pos = json.find(search);
+/// Simple JSON-like extractor: find key in JSON text and return value as string
+static std::string json_str_val(const std::string& json, const std::string& key) {
+    auto pos = json.find("\"" + key + "\":");
     if (pos == std::string::npos) return "";
-    pos += search.size();
-    auto end = json.find('"', pos);
-    if (end == std::string::npos) return "";
-    return json.substr(pos, end - pos);
+    pos = json.find(':', pos) + 1;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
+    if (pos < json.size() && json[pos] == '"') {
+        size_t end = json.find('"', pos + 1);
+        if (end != std::string::npos) return json.substr(pos + 1, end - pos - 1);
+    }
+    // Numeric — read until , or }
+    size_t end = json.find_first_of(",}", pos);
+    if (end != std::string::npos) return json.substr(pos, end - pos);
+    return "";
 }
 
-// ── ComfyUI workflow parser ──────────────────────────────────
+static int json_int(const std::string& json, const std::string& key) {
+    auto s = json_str_val(json, key);
+    if (s.empty()) return -1;
+    try { return std::stoi(s); } catch (...) { return -1; }
+}
+
+static float json_float(const std::string& json, const std::string& key) {
+    auto s = json_str_val(json, key);
+    if (s.empty()) return 0.0f;
+    try { return std::stof(s); } catch (...) { return 0.0f; }
+}
+
+/// Find a node by class_type, return the "inputs" sub-object
+static std::string find_node(const std::string& json, const std::string& class_type) {
+    std::string key = "\"class_type\":\"" + class_type + "\"";
+    size_t pos = json.find(key);
+    if (pos == std::string::npos) return "";
+
+    // Backtrack to find the node's opening brace
+    size_t node_start = pos;
+    int depth = 0;
+    while (node_start > 0) {
+        if (json[node_start] == '}') depth++;
+        else if (json[node_start] == '{') {
+            if (depth == 0) break;
+            depth--;
+        }
+        node_start--;
+    }
+    if (node_start == 0) return "";
+
+    // Find the "inputs" section within this node
+    std::string node = json.substr(node_start, pos - node_start + key.size() + 70); // rough cut
+    size_t inp = node.find("\"inputs\":");
+    if (inp == std::string::npos) return "";
+
+    // Extract inputs object (brace-balanced)
+    size_t start = node.find('{', inp);
+    if (start == std::string::npos) return "";
+    depth = 1;
+    size_t end = start + 1;
+    while (end < node.size() && depth > 0) {
+        if (node[end] == '{') depth++;
+        else if (node[end] == '}') depth--;
+        end++;
+    }
+    return node.substr(start, end - start);
+}
 
 ImageMeta parse_comfyui(const std::string& json) {
     ImageMeta m;
 
-    // Find seed from KSampler
-    m.seed = extract_json_int(json, "seed");
-    m.steps = extract_json_int(json, "steps");
-    m.cfg = extract_json_float(json, "cfg");
-    m.sampler = utf8_to_wstring(extract_json_string(json, "sampler_name"));
-    m.scheduler = utf8_to_wstring(extract_json_string(json, "scheduler"));
-
-    // Find model from CheckpointLoaderSimple
-    m.model = utf8_to_wstring(extract_json_string(json, "ckpt_name"));
-    if (m.model.empty())
-        m.model = utf8_to_wstring(extract_json_string(json, "model_name"));
-
-    // Find VAE from VAELoader
-    m.vae = utf8_to_wstring(extract_json_string(json, "vae_name"));
-
-    // Find resolution from EmptyLatentImage
-    m.width = extract_json_int(json, "width");
-    m.height = extract_json_int(json, "height");
-
-    // Extract CLIPTextEncode text values (prompts)
-    // Look for "text":"..." patterns and take the longest ones
-    std::vector<std::string> texts;
-    std::string search = "\"text\":\"";
-    size_t pos = 0;
-    while ((pos = json.find(search, pos)) != std::string::npos) {
-        pos += search.size();
-        auto end = json.find('"', pos);
-        if (end != std::string::npos && end - pos > 3) {
-            std::string text = json.substr(pos, end - pos);
-            texts.push_back(text);
-        }
-        pos = end + 1;
+    auto ksampler = find_node(json, "KSampler");
+    if (!ksampler.empty()) {
+        m.seed = json_int(ksampler, "seed");
+        m.steps = json_int(ksampler, "steps");
+        m.cfg = json_float(ksampler, "cfg");
+        m.sampler = utf8_to_wstring(json_str_val(ksampler, "sampler_name"));
+        m.scheduler = utf8_to_wstring(json_str_val(ksampler, "scheduler"));
     }
 
-    if (!texts.empty()) {
-        // Sort by length: longest is usually the main positive prompt
-        std::sort(texts.begin(), texts.end(),
-            [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
-        m.positive_prompt = utf8_to_wstring(texts[0]);
-        if (texts.size() > 1 && texts[1].size() > 3)
-            m.negative_prompt = utf8_to_wstring(texts[1]);
+    auto loader = find_node(json, "CheckpointLoaderSimple");
+    if (!loader.empty()) {
+        m.model = utf8_to_wstring(json_str_val(loader, "ckpt_name"));
     }
 
-    // Also look for a node titled "negative" for negative prompt
-    // Simple heuristic: find second-longest text
-    if (texts.size() > 1 && m.negative_prompt.empty()) {
-        // The negative prompt node often has "negative" in its title nearby
-        for (size_t i = 1; i < texts.size(); ++i) {
-            if (texts[i].size() > 3) {
-                m.negative_prompt = utf8_to_wstring(texts[i]);
-                break;
-            }
+    auto vae = find_node(json, "VAELoader");
+    if (!vae.empty()) {
+        m.vae = utf8_to_wstring(json_str_val(vae, "vae_name"));
+    }
+
+    auto latent = find_node(json, "EmptyLatentImage");
+    if (!latent.empty()) {
+        m.width = json_int(latent, "width");
+        m.height = json_int(latent, "height");
+    }
+
+    // Extract prompts from CLIPTextEncode nodes — first is positive, second is negative
+    {
+        std::string search = "\"class_type\":\"CLIPTextEncode\"";
+        size_t pos = 0, found = 0;
+        while (found < 2 && (pos = json.find(search, pos)) != std::string::npos) {
+            pos += search.size();
+            // Find the node object
+            auto node_inputs = json.substr(pos - search.size() - 4, 200); // rough
+            size_t inp = node_inputs.find("\"inputs\":");
+            if (inp == std::string::npos) continue;
+            size_t ts = node_inputs.find("\"text\":\"", inp);
+            if (ts == std::string::npos) continue;
+            ts += 8;
+            size_t te = node_inputs.find('\"', ts);
+            if (te == std::string::npos) continue;
+            std::string txt = node_inputs.substr(ts, te - ts);
+            if (found == 0)
+                m.positive_prompt = utf8_to_wstring(txt);
+            else
+                m.negative_prompt = utf8_to_wstring(txt);
+            found++;
         }
     }
 
@@ -233,31 +255,132 @@ ImageMeta parse_webui(const std::string& text) {
 
 // ── Public API ───────────────────────────────────────────────
 
+// Forward declaration for JPEG reader
+std::string read_jpeg_comment(const std::wstring& path);
+
 ImageMeta extract_metadata(const std::wstring& path) {
-    // Only process PNG files
     auto ext_pos = path.rfind(L'.');
     if (ext_pos == std::wstring::npos) return {};
     std::wstring ext = path.substr(ext_pos);
     std::transform(ext.begin(), ext.end(), ext.begin(), towlower);
-    if (ext != L".png") return {};
 
-    auto texts = read_png_texts(path);
+    // PNG: read tEXt chunks
+    if (ext == L".png") {
+        auto texts = read_png_texts(path);
 
-    // Check for ComfyUI workflow (keywords: "prompt" or "workflow")
-    auto it = texts.find("prompt");
-    if (it == texts.end()) it = texts.find("workflow");
-    if (it != texts.end()) {
-        return parse_comfyui(it->second);
+        // ComfyUI: "prompt" or "workflow" keywords
+        auto it = texts.find("prompt");
+        if (it == texts.end()) it = texts.find("workflow");
+        if (it != texts.end()) return parse_comfyui(it->second);
+
+        // SD WebUI: "parameters"
+        it = texts.find("parameters");
+        if (it != texts.end()) return parse_webui(it->second);
+
+        // Some tools use "Description" or "Comment"
+        it = texts.find("Description");
+        if (it == texts.end()) it = texts.find("Comment");
+        if (it != texts.end()) return parse_webui(it->second);
     }
 
-    // Check for SD WebUI (keyword "parameters")
-    it = texts.find("parameters");
-    if (it != texts.end()) {
-        return parse_webui(it->second);
+    // JPEG / WebP: check EXIF UserComment for SD-style parameters
+    if (ext == L".jpg" || ext == L".jpeg" || ext == L".webp") {
+        auto comment = read_jpeg_comment(path);
+        if (!comment.empty()) {
+            // Try ComfyUI JSON first
+            if (comment.find("\"class_type\"") != std::string::npos)
+                return parse_comfyui(comment);
+            // Otherwise treat as SD WebUI parameters
+            return parse_webui(comment);
+        }
     }
 
-    // Also check for "Description" (some tools use this)
     return {};
+}
+
+// ── JPEG EXIF reader ─────────────────────────────────────────
+
+// Read EXIF UserComment (tag 0x9286) from a JPEG file
+std::string read_jpeg_comment(const std::wstring& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) return "";
+
+    // Check SOI
+    char soi[2]; f.read(soi, 2);
+    if (f.gcount() != 2 || (unsigned char)soi[0] != 0xFF || (unsigned char)soi[1] != 0xD8)
+        return "";
+
+    while (f.good()) {
+        unsigned char marker[2];
+        f.read(reinterpret_cast<char*>(marker), 2);
+        if (f.gcount() != 2 || marker[0] != 0xFF) break;
+        if (marker[1] == 0xD9) break; // EOI
+
+        // APP1 (EXIF)
+        if (marker[1] == 0xE1) {
+            unsigned char len_be[2];
+            f.read(reinterpret_cast<char*>(len_be), 2);
+            if (f.gcount() != 2) break;
+            uint16_t seg_len = (len_be[0] << 8) | len_be[1];
+            if (seg_len < 8) { f.seekg(seg_len - 2, std::ios::cur); continue; }
+
+            std::vector<char> data(seg_len - 2);
+            f.read(data.data(), seg_len - 2);
+            if (f.gcount() != seg_len - 2) break;
+
+            // Check "Exif\0\0" header
+            if (seg_len < 8 || memcmp(data.data(), "Exif\0\0", 6) != 0) continue;
+
+            // TIFF header: byte order + magic
+            size_t off = 6;
+            bool big_endian = (data[off] == 'M');
+            off += 2; // byte order mark
+            uint16_t magic = big_endian ? ((data[off]<<8)|data[off+1]) : (data[off]|(data[off+1]<<8));
+            if (magic != 0x002A) continue;
+            off += 2;
+
+            // First IFD offset
+            uint32_t ifd_off = big_endian
+                ? ((uint32_t)data[off]<<24)|(data[off+1]<<16)|(data[off+2]<<8)|data[off+3]
+                : (data[off]|(data[off+1]<<8)|(data[off+2]<<16)|(data[off+3]<<24));
+            off = ifd_off;
+
+            // Read IFD entry count
+            uint16_t count = big_endian ? ((data[off]<<8)|data[off+1]) : (data[off]|(data[off+1]<<8));
+            off += 2;
+
+            for (uint16_t i = 0; i < count; ++i) {
+                uint16_t tag = big_endian ? ((data[off]<<8)|data[off+1]) : (data[off]|(data[off+1]<<8));
+                uint16_t type = big_endian ? ((data[off+2]<<8)|data[off+3]) : (data[off+2]|(data[off+3]<<8));
+                uint32_t val_or_off = big_endian
+                    ? ((uint32_t)data[off+8]<<24)|(data[off+9]<<16)|(data[off+10]<<8)|data[off+11]
+                    : (data[off+8]|(data[off+9]<<8)|(data[off+10]<<16)|(data[off+11]<<24));
+
+                if (tag == 0x9286) { // UserComment
+                    // type 7 = undefined, type 2 = ASCII
+                    // First 8 bytes of the pointer area = character code ("UNICODE\0" or "ASCII\0\0\0\0\0")
+                    uint32_t count2 = big_endian
+                        ? ((uint32_t)data[off+4]<<24)|(data[off+5]<<16)|(data[off+6]<<8)|data[off+7]
+                        : (data[off+4]|(data[off+5]<<8)|(data[off+6]<<16)|(data[off+7]<<24));
+                    if (count2 > 8 && val_or_off + count2 <= data.size()) {
+                        const char* p = &data[val_or_off + 8]; // skip charset prefix
+                        return std::string(p, count2 - 8);
+                    }
+                    break;
+                }
+                off += 12;
+            }
+            break;
+        } else {
+            unsigned char len_be[2];
+            f.read(reinterpret_cast<char*>(len_be), 2);
+            if (f.gcount() != 2) break;
+            uint16_t len = (len_be[0] << 8) | len_be[1];
+            if (len < 2) break;
+            f.seekg(len - 2, std::ios::cur);
+        }
+    }
+    return "";
 }
 
 } // namespace mv
