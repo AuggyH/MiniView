@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include <dwrite_1.h>
 #include <fstream>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
@@ -583,7 +584,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
         float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
         float vw = 0;
         float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                  value, value_br.Get(), 10.0f, &vw);
+                                  value, value_br.Get(), 10.0f, &vw, 10);
         if (out_clickable && !value.empty()) {
             D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
             out_clickable->push_back({cr, value, label});
@@ -624,7 +625,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
             float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
             float vw = 0;
             float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                      value, value_br.Get(), 10.0f, &vw);
+                                      value, value_br.Get(), 10.0f, &vw, 10);
             if (out_clickable && !value.empty()) {
                 D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
                 out_clickable->push_back({cr, value, label});
@@ -700,7 +701,7 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
 
 float Renderer::draw_text_line(float x, float y, float w,
     const std::wstring& text, ID2D1SolidColorBrush* brush,
-    float font_size, float* out_width)
+    float font_size, float* out_width, int max_lines)
 {
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return y + 20;
 
@@ -717,11 +718,23 @@ float Renderer::draw_text_line(float x, float y, float w,
     ComPtr<IDWriteTextLayout> layout;
     HRESULT hr = m_dwrite_factory->CreateTextLayout(
         text.c_str(), static_cast<uint32_t>(text.size()),
-        fmt, w, 200.0f, &layout);
+        fmt, w, max_lines > 0 ? font_size * m_dpi_y / 96.0f * 1.4f * max_lines : 200.0f, &layout);
     if (FAILED(hr)) return y + 20;
 
     DWRITE_TEXT_METRICS metrics;
     layout->GetMetrics(&metrics);
+
+    // Ellipsis trimming when max_lines is set
+    if (max_lines > 0) {
+        ComPtr<IDWriteTextLayout1> layout1;
+        layout.As(&layout1);
+        if (layout1) {
+            DWRITE_TRIMMING trimming = { DWRITE_TRIMMING_GRANULARITY_CHARACTER };
+            ComPtr<IDWriteInlineObject> ellipsis;
+            m_dwrite_factory->CreateEllipsisTrimmingSign(fmt, &ellipsis);
+            layout1->SetTrimming(&trimming, ellipsis.Get());
+            }
+    }
     if (out_width) *out_width = metrics.widthIncludingTrailingWhitespace;
     float h = metrics.height;
 
