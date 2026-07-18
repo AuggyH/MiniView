@@ -803,6 +803,22 @@ void App::toggle_recursive() {
     if (!m_current_path.empty()) {
         m_current_idx = m_index.index_of(m_current_path);
     }
+
+    // Reset grid thumbnails for new file list
+    if (m_grid_mode) {
+        stop_thumb_loader();
+        m_thumbs.clear();
+        m_thumb_d2d.clear();
+        m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
+        clear_selection();
+        m_selected.resize(m_index.size(), false);
+        if (m_grid_sel < static_cast<int>(m_index.size()))
+            m_selected[m_grid_sel] = true;
+        m_sel_anchor = m_grid_sel;
+        start_thumb_loader();
+        grid_ensure_visible();
+    }
+
     update_title();
     m_window.invalidate();
 }
@@ -1018,20 +1034,16 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         AppendMenuW(popup, MF_STRING, 1, L"打开文件...\tCtrl+O");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING, 4, L"在资源管理器中打开");
-        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, 2, L"移动到回收站\tDel");
-        AppendMenuW(popup, MF_STRING, 3, L"永久删除\tShift+Del");
         break;
     case 1: // 查看
         AppendMenuW(popup, MF_STRING, 10, L"全屏\tF11");
-        AppendMenuW(popup, MF_STRING, 11, L"缩略图网格\tG");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         {
             HMENU sort_menu = CreatePopupMenu();
-            AppendMenuW(sort_menu, MF_STRING, 12, L"按名称排序\tN");
-            AppendMenuW(sort_menu, MF_STRING, 13, L"按日期排序\tD");
-            AppendMenuW(sort_menu, MF_STRING, 14, L"按大小排序\tS");
-            AppendMenuW(sort_menu, MF_STRING, 15, L"随机排序\tR");
+            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_NAME,   L"按名称排序\tN");
+            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_DATE,   L"按日期排序\tD");
+            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_SIZE,   L"按大小排序\tS");
+            AppendMenuW(sort_menu, MF_STRING, IDM_SORT_RANDOM, L"随机排序\tR");
             AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"排序方式");
         }
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
@@ -1043,6 +1055,9 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     case 2: // 编辑
         AppendMenuW(popup, MF_STRING, 20, L"复制文件\tCtrl+C");
         AppendMenuW(popup, MF_STRING, 21, L"复制图片数据");
+        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(popup, MF_STRING, 2, L"移动到回收站\tDel");
+        AppendMenuW(popup, MF_STRING, 3, L"永久删除\tShift+Del");
         break;
     case 3: // 帮助
         AppendMenuW(popup, MF_STRING, 31, L"关于 MinView...");
@@ -1111,8 +1126,10 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     // Handle commands
     switch (cmd) {
-    case 1: case 10: case 11: case 12: case 13: case 14: case 15:
-    case 16: case 17: case 20: case 21: case 30: case 31:
+    case 1: case 2: case 3: case 10: case 16: case 17:
+    case 20: case 21: case 30: case 31:
+    case IDM_SORT_NAME: case IDM_SORT_DATE:
+    case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
         SendMessageW(hwnd, WM_COMMAND, cmd, 0); break;
     }
 }
@@ -1611,7 +1628,9 @@ void App::grid_ensure_visible() {
 }
 
 void App::toggle_info() {
-    if (!m_has_image) return;
+    // Works in both viewer and grid mode
+    if (!m_has_image && !m_grid_mode) return;
+    if (m_grid_mode && (m_grid_sel < 0 || m_grid_sel >= static_cast<int>(m_index.size()))) return;
 
     std::wstring target = m_grid_mode && m_grid_sel >= 0
         ? m_index.path_at(m_grid_sel) : m_current_path;
