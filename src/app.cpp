@@ -546,7 +546,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     // Toast: "已复制" + label
                     m_panel_copied = L"\u5df2\u590d\u5236" + pc.label;  // 已复制
                     if (m_toast_timer) KillTimer(hwnd, m_toast_timer);
-                    m_toast_timer = SetTimer(hwnd, 2, 2000, nullptr);
+                    m_toast_timer = SetTimer(hwnd, 2, 1000, nullptr);
                     m_window.invalidate();
                     return 0;
                 }
