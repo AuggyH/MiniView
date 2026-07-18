@@ -38,8 +38,10 @@ private:
     void    update_title();
 
     void    delete_current_file(bool permanent);
+    void    delete_selected(bool permanent);
     void    open_in_explorer();
     void    copy_to_clipboard();
+    void    copy_selected();
     void    show_context_menu(HWND hwnd, int x, int y);
 
     // Preloader
@@ -53,8 +55,11 @@ private:
     void    toggle_grid();
     void    set_sort_mode(SortMode mode);
     void    toggle_thumb_square();
-    void    grid_click(int x, int y);
-    void    grid_navigate(int dir);
+    bool    has_selection() const;
+    void    clear_selection();
+    void    select_range(int start, int end);
+    void    grid_click(int x, int y, bool shift, bool ctrl);
+    void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
     void    grid_render();
     void    start_thumb_loader();
@@ -98,10 +103,14 @@ private:
     // Grid state
     bool  m_grid_mode = false;
     int   m_grid_scroll_y = 0;
-    int   m_grid_sel = -1;       // selected thumbnail index
+    int   m_grid_sel = -1;
     int   m_grid_cols = 0;
     int   m_grid_total_rows = 0;
     bool  m_thumb_square = false;
+
+    // Multi-select (grid only)
+    std::vector<bool> m_selected;
+    int  m_sel_anchor = -1;
 
     // Thumb cache (WIC bitmaps — thread-safe, loaded by background thread)
     std::vector<ThumbEntry> m_thumbs;
