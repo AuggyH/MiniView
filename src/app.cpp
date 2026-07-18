@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <filesystem>
 #include <algorithm>
+#include <functional>
 #include <windowsx.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -10,6 +11,7 @@
 #include <ole2.h>
 
 extern void save_last_dir(const std::wstring& dir);
+extern std::wstring get_config_dir();
 
 namespace mv {
 
@@ -1005,6 +1007,37 @@ void App::zoom_at_center(float factor) {
 
 // ── Grid mode ────────────────────────────────────────────────
 
+// Save a WIC bitmap as JPEG to disk (for thumbnail cache)
+static void save_wic_as_jpeg(IWICBitmapSource* src, const std::wstring& path) {
+    ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) return;
+
+    ComPtr<IWICStream> stream;
+    hr = factory->CreateStream(&stream);
+    if (FAILED(hr)) return;
+    hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    if (FAILED(hr)) return;
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = factory->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, &encoder);
+    if (FAILED(hr)) return;
+    encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+
+    ComPtr<IWICBitmapFrameEncode> frame;
+    hr = encoder->CreateNewFrame(&frame, nullptr);
+    if (FAILED(hr)) return;
+    frame->Initialize(nullptr);
+
+    uint32_t w, h;
+    src->GetSize(&w, &h);
+    frame->SetSize(w, h);
+    frame->WriteSource(src, nullptr);
+    frame->Commit();
+    encoder->Commit();
+}
+
 // Get a WIC bitmap from the Windows shell thumbnail cache (fast path)
 static ComPtr<IWICBitmapSource> get_shell_thumb(const std::wstring& path, uint32_t max_size) {
     ComPtr<IShellItemImageFactory> factory;
@@ -1068,11 +1101,40 @@ static void thumb_loader_worker(
 
             try {
                 auto path = index.path_at(idx);
-                // Try shell thumbnail cache first (instant for previously-viewed files)
-                auto wic = get_shell_thumb(path, 256);
-                if (!wic) {
-                    wic = decoder.decode_scaled(path, 256);
+
+                // Check disk cache first
+                std::hash<std::wstring> hasher;
+                wchar_t key[32];
+                swprintf_s(key, L"%016llx", hasher(path));
+                std::wstring cache_file = get_config_dir() + L"\\thumbs\\" + key + L".jpg";
+
+                ComPtr<IWICBitmapSource> wic;
+                WIN32_FILE_ATTRIBUTE_DATA src_attr, cache_attr;
+                bool cache_hit = false;
+                if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &src_attr) &&
+                    GetFileAttributesExW(cache_file.c_str(), GetFileExInfoStandard, &cache_attr)) {
+                    ULONGLONG src_time = (static_cast<ULONGLONG>(src_attr.ftLastWriteTime.dwHighDateTime) << 32)
+                        | src_attr.ftLastWriteTime.dwLowDateTime;
+                    ULONGLONG cache_time = (static_cast<ULONGLONG>(cache_attr.ftLastWriteTime.dwHighDateTime) << 32)
+                        | cache_attr.ftLastWriteTime.dwLowDateTime;
+                    if (cache_time >= src_time) {
+                        try { wic = decoder.decode_scaled(cache_file, 256); cache_hit = true; }
+                        catch (...) {}
+                    }
                 }
+
+                if (!cache_hit) {
+                    wic = get_shell_thumb(path, 256);
+                    if (!wic) {
+                        wic = decoder.decode_scaled(path, 256);
+                    }
+                    // Save to disk cache
+                    if (wic) {
+                        CreateDirectoryW((get_config_dir() + L"\\thumbs").c_str(), nullptr);
+                        save_wic_as_jpeg(wic.Get(), cache_file);
+                    }
+                }
+
                 std::lock_guard lock(mtx);
                 thumbs[idx].wic = wic;
                 thumbs[idx].loaded = true;
