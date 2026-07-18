@@ -37,6 +37,7 @@ private:
     void    zoom_at_center(float factor);
     void    toggle_fullscreen(HWND hwnd);
     void    start_transition(HWND hwnd, bool forward);
+    void    begin_animation(HWND hwnd);
     void    toggle_recursive();
     void    render_frame();
     void    update_title();
