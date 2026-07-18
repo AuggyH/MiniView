@@ -285,6 +285,13 @@ ImageMeta parse_comfyui(const std::string& json) {
                                 std::string title = json.substr(tc + 1, te - tc - 1);
                                 auto text = get_node_text();
                                 if (!text.empty()) {
+                                    // Debug: dump found title and text
+                                    {
+                                        std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
+                                        dbg << "Title: " << title << std::endl;
+                                        dbg << "Text: " << text << std::endl;
+                                        dbg << "---" << std::endl;
+                                    }
                                     // Match common ComfyUI title patterns for positive/negative
                                     // \u6b63\u9762\u63d0\u793a\u8bcd = 正面提示词
                                     // \u6b63\u5411\u63d0\u793a\u8bcd = 正向提示词
