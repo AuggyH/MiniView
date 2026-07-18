@@ -828,7 +828,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_mode && m_grid_sel >= 0) {
                 start_transition(hwnd, true);
                 m_from_grid = true;
-                m_temp_preview = true;
                 m_anim_action = ACT_ENTER_IMAGE;
                 begin_animation(hwnd);
                 m_window.invalidate();
