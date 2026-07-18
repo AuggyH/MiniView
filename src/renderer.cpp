@@ -100,7 +100,7 @@ bool Renderer::create_device_resources() {
     if (FAILED(hr)) return false;
 
     m_d2d_context->SetTarget(target_bitmap.Get());
-    m_d2d_context->SetDpi(96.0f, 96.0f);
+    m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
     m_d2d_context->SetUnitMode(D2D1_UNIT_MODE_PIXELS);
 
     return create_text_resources();
@@ -355,6 +355,12 @@ void Renderer::set_offset(float x, float y) {
 
 void Renderer::set_scroll_y(float y) {
     m_scroll_y = y;
+}
+
+void Renderer::set_dpi(float dpi_x, float dpi_y) {
+    if (dpi_x > 0) m_dpi_x = dpi_x;
+    if (dpi_y > 0) m_dpi_y = dpi_y;
+    if (m_d2d_context) m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
 }
 
 // ── Grid drawing ─────────────────────────────────────────────
