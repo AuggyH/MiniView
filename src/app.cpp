@@ -1015,33 +1015,37 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     HMENU popup = CreatePopupMenu();
     switch (idx) {
     case 0: // 文件
-        AppendMenuW(popup, MF_STRING, 1, L"打开文件\tCtrl+O");
-        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, 2, L"删除\tDel");
-        AppendMenuW(popup, MF_STRING, 3, L"永久删除\tShift+Del");
+        AppendMenuW(popup, MF_STRING, 1, L"打开文件...\tCtrl+O");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING, 4, L"在资源管理器中打开");
+        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(popup, MF_STRING, 2, L"移动到回收站\tDel");
+        AppendMenuW(popup, MF_STRING, 3, L"永久删除\tShift+Del");
         break;
     case 1: // 查看
         AppendMenuW(popup, MF_STRING, 10, L"全屏\tF11");
         AppendMenuW(popup, MF_STRING, 11, L"缩略图网格\tG");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, 12, L"排序: 名称\tN");
-        AppendMenuW(popup, MF_STRING, 13, L"排序: 日期\tD");
-        AppendMenuW(popup, MF_STRING, 14, L"排序: 大小\tS");
-        AppendMenuW(popup, MF_STRING, 15, L"排序: 随机\tR");
+        {
+            HMENU sort_menu = CreatePopupMenu();
+            AppendMenuW(sort_menu, MF_STRING, 12, L"按名称排序\tN");
+            AppendMenuW(sort_menu, MF_STRING, 13, L"按日期排序\tD");
+            AppendMenuW(sort_menu, MF_STRING, 14, L"按大小排序\tS");
+            AppendMenuW(sort_menu, MF_STRING, 15, L"随机排序\tR");
+            AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"排序方式");
+        }
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, 16, L"递归浏览\tCtrl+R");
+        AppendMenuW(popup, MF_STRING, 16, L"递归浏览子文件夹\tCtrl+R");
         AppendMenuW(popup, MF_STRING, 17, L"方形缩略图\tA");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING, 30, L"查看生成信息\tI");
         break;
     case 2: // 编辑
-        AppendMenuW(popup, MF_STRING, 20, L"复制\tCtrl+C");
-        AppendMenuW(popup, MF_STRING, 21, L"复制图片");
+        AppendMenuW(popup, MF_STRING, 20, L"复制文件\tCtrl+C");
+        AppendMenuW(popup, MF_STRING, 21, L"复制图片数据");
         break;
     case 3: // 帮助
-        AppendMenuW(popup, MF_STRING, 31, L"关于 MinView");
+        AppendMenuW(popup, MF_STRING, 31, L"关于 MinView...");
         break;
     }
 
