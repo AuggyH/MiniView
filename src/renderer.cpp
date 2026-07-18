@@ -512,7 +512,7 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,
     const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
     std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable,
-    int sel_idx, const std::wstring* toast)
+    int sel_idx, const std::wstring* toast, float scroll_y)
 {
     if (!m_d2d_context || !m_text_format) return;
 
@@ -522,9 +522,13 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     float sec_gap = 24.0f * dpi_s;
 
     float y0 = y_off;
-    float y = y0 + pad;
+    float y = y0 + pad - scroll_y;
 
-    // Panel background
+    // Clip drawing to panel area
+    D2D1_RECT_F clip_rect = {x, y_off, x + w, y_off + h};
+    m_d2d_context->PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE_ALIASED);
+
+    // Panel background (fixed, not scrolled)
     ComPtr<ID2D1SolidColorBrush> bg;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.10f, 0.10f, 0.12f, 0.95f), &bg);
     D2D1_RECT_F rc = {x, y_off, x + w, y_off + h};
@@ -651,6 +655,16 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.88f, 1.0f), &toast_txt);
         draw_text_line(x + pad + 10.0f * dpi_s, toast_y + 7.0f * dpi_s,
                        toast_tw, *toast, toast_txt.Get(), 11.0f);
+    }
+
+    // Pop panel clip
+    m_d2d_context->PopAxisAlignedClip();
+
+    // Scrollbar on panel right edge
+    float total_h = y - y0 - pad + scroll_y;  // undo scroll offset to get real content height
+    if (total_h > h) {
+        float sb_w = 6.0f * dpi_s;
+        draw_scrollbar(x + w - sb_w - 2.0f * dpi_s, y_off, sb_w, h, total_h, h, scroll_y);
     }
 }
 
