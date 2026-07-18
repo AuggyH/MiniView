@@ -187,49 +187,93 @@ ImageMeta parse_comfyui(const std::string& json) {
 
     // Extract prompts by tracing KSampler inputs to CLIPTextEncode nodes
     if (!ksampler.empty()) {
-        auto extract_prompt = [&](const std::string& port) {
-            // Find "port": [node_id, slot] or "port": ["node_id", slot]
+        // Helper: resolve a value that could be a string or a link [node_id, slot]
+        auto resolve_text = [&](const std::string& val) -> std::string {
+            if (val.empty()) return val;
+            // If it's a string (not starting with '['), return as-is
+            if (val.front() != '[') return val;
+            // It's a link: ["162", 0] — extract node ID and follow
+            size_t s = 1;
+            while (s < val.size() && (val[s] == ' ' || val[s] == '\t')) s++;
+            bool q = (s < val.size() && val[s] == '"');
+            if (q) s++;
+            size_t e = val.find_first_of(q ? "\"" : ",]", s);
+            if (e == std::string::npos) return "";
+            std::string wid = val.substr(s, e - s);
+
+            // Find widget node: "\"id\": {"
+            std::string wkey = "\"" + wid + "\"";
+            size_t wp = json.find(wkey);
+            if (wp == std::string::npos) return "";
+            size_t wb = json.find('{', wp + wkey.size());
+            if (wb == std::string::npos || wb > wp + wkey.size() + 10) return "";
+            // Find "text" or "value" in the widget node's inputs
+            size_t wi = json.find("\"inputs\"", wp);
+            if (wi == std::string::npos || wi > wb + 500) return "";
+            // Look for "text" first, then "string", then "value"
+            for (auto* field : {"\"text\"", "\"string\"", "\"value\""}) {
+                size_t f = json.find(field, wi);
+                if (f == std::string::npos || f > wi + 500) continue;
+                size_t fc = json.find(':', f + strlen(field));
+                if (fc == std::string::npos || fc > f + 10) continue;
+                fc++;
+                while (fc < json.size() && (json[fc] == ' ' || json[fc] == '\t')) fc++;
+                if (fc < json.size() && json[fc] == '"') {
+                    size_t fe = json.find('"', fc + 1);
+                    if (fe != std::string::npos)
+                        return json.substr(fc + 1, fe - fc - 1);
+                }
+            }
+            return "";
+        };
+
+        auto extract_prompt = [&](const std::string& port) -> std::string {
             std::string key = "\"" + port + "\"";
             size_t kp = ksampler.find(key);
-            if (kp == std::string::npos) return std::string();
+            if (kp == std::string::npos) return "";
             kp = ksampler.find('[', kp + key.size());
-            if (kp == std::string::npos) return std::string();
+            if (kp == std::string::npos) return "";
             kp++;
             while (kp < ksampler.size() && (ksampler[kp] == ' ' || ksampler[kp] == '\t')) kp++;
-            // Read node ID (string or number)
-            size_t id_end = ksampler.find_first_of(",]", kp);
-            if (id_end == std::string::npos) return std::string();
+            bool quoted = (kp < ksampler.size() && ksampler[kp] == '"');
+            if (quoted) kp++;
+            size_t id_end = ksampler.find_first_of(quoted ? "\"" : ",]", kp);
+            if (id_end == std::string::npos) return "";
             std::string node_id = ksampler.substr(kp, id_end - kp);
-            // Strip quotes if present
-            if (!node_id.empty() && node_id.front() == '"')
-                node_id = node_id.substr(1, node_id.size() - 2);
 
-            // Find node with this ID in the workflow JSON
+            // Find CLIPTextEncode node
             std::string nkey = "\"" + node_id + "\"";
             size_t np = json.find(nkey);
-            if (np == std::string::npos) return std::string();
-            // Find CLIPTextEncode
+            if (np == std::string::npos) return "";
+            size_t br = json.find('{', np + nkey.size());
+            if (br == std::string::npos || br > np + nkey.size() + 10) return "";
             size_t ct = json.find("CLIPTextEncode", np);
-            if (ct == std::string::npos || ct > np + 100) return std::string();
-            // Find text input
+            if (ct == std::string::npos || ct > br + 500) return "";
+            // Find text value within this node's inputs
             size_t inp = json.find("\"inputs\"", np);
-            if (inp == std::string::npos || inp > np + 500) return std::string();
+            if (inp == std::string::npos || inp > br + 500) return "";
             size_t ts = json.find("\"text\"", inp);
-            if (ts == std::string::npos || ts > inp + 300) return std::string();
+            if (ts == std::string::npos || ts > inp + 500) return "";
             size_t tvs = json.find(':', ts + 6);
-            if (tvs == std::string::npos) return std::string();
+            if (tvs == std::string::npos || tvs > ts + 10) return "";
             tvs++;
             while (tvs < json.size() && (json[tvs] == ' ' || json[tvs] == '\t')) tvs++;
-            if (tvs >= json.size() || json[tvs] != '"') return std::string();
+            if (tvs >= json.size()) return "";
+            // If value starts with [, it's a link — resolve it
+            if (json[tvs] == '[') {
+                size_t end = json.find(']', tvs);
+                if (end == std::string::npos) return "";
+                return resolve_text(json.substr(tvs, end - tvs + 1));
+            }
+            // Direct string value
+            if (json[tvs] != '"') return "";
             size_t tve = json.find('"', tvs + 1);
-            if (tve == std::string::npos) return std::string();
+            if (tve == std::string::npos) return "";
             return json.substr(tvs + 1, tve - tvs - 1);
         };
 
-        auto pos_text = extract_prompt("positive");
-        auto neg_text = extract_prompt("negative");
-        if (!pos_text.empty()) m.positive_prompt = utf8_to_wstring(pos_text);
-        if (!neg_text.empty()) m.negative_prompt = utf8_to_wstring(neg_text);
+        m.positive_prompt = utf8_to_wstring(extract_prompt("positive"));
+        m.negative_prompt = utf8_to_wstring(extract_prompt("negative"));
     }
 
     m.valid = (m.seed >= 0 || !m.model.empty() || !m.positive_prompt.empty());
