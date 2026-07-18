@@ -59,6 +59,7 @@ private:
     LONG            m_saved_exstyle = 0;
 
     bool  m_dragging = false;
+    bool  m_drag_pending = false;
     int   m_drag_start_x = 0;
     int   m_drag_start_y = 0;
     float m_drag_offset_x = 0;
