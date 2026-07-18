@@ -821,7 +821,7 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     if (!m_d2d_context || !m_dwrite_factory) return;
 
     float dpi_s = m_dpi_y / 96.0f;
-    float h = std::max(28.0f * dpi_s, GetSystemMetrics(SM_CYCAPTION) + 2.0f);
+    float h = std::max(40.0f * dpi_s, GetSystemMetrics(SM_CYCAPTION) + 2.0f);
     float pad = 12.0f * dpi_s;
     float btn_w = 46.0f * dpi_s;
 
