@@ -234,7 +234,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDOWN:
         if (m_grid_mode) {
-            grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            bool sd = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            bool cd = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), sd, cd);
             return 0;
         }
         if (!m_has_image) return -1;
@@ -308,7 +310,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             case '0': case VK_NUMPAD0: fit_to_window(); m_window.invalidate(); return 0;
             case VK_OEM_PLUS: case VK_ADD:   zoom_at_center(1.25f); return 0;
             case VK_OEM_MINUS: case VK_SUBTRACT: zoom_at_center(1.0f/1.25f); return 0;
-            case 'C': copy_to_clipboard(); return 0;
+            case 'C':
+                if (m_grid_mode && has_selection()) copy_selected();
+                else copy_to_clipboard();
+                return 0;
             case 'R': toggle_recursive(); return 0;
             }
             return -1;
@@ -339,16 +344,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!ctrl) { set_sort_mode(SortMode::Random); return 0; }
             return -1;
         case VK_LEFT:
-            if (m_grid_mode) { grid_navigate(-1); return 0; }
+            if (m_grid_mode) { grid_navigate(-1, shift); return 0; }
             navigate_to(m_current_idx - 1); return 0;
         case VK_RIGHT:
-            if (m_grid_mode) { grid_navigate(1); return 0; }
+            if (m_grid_mode) { grid_navigate(1, shift); return 0; }
             navigate_to(m_current_idx + 1); return 0;
         case VK_UP:
-            if (m_grid_mode) { grid_navigate(-m_grid_cols); return 0; }
+            if (m_grid_mode) { grid_navigate(-m_grid_cols, shift); return 0; }
             return -1;
         case VK_DOWN:
-            if (m_grid_mode) { grid_navigate(m_grid_cols); return 0; }
+            if (m_grid_mode) { grid_navigate(m_grid_cols, shift); return 0; }
             return -1;
         case VK_HOME:
             if (m_grid_mode) { m_grid_sel = 0; grid_ensure_visible(); m_window.invalidate(); return 0; }
@@ -361,7 +366,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_RETURN:
             if (m_grid_mode && m_grid_sel >= 0) { toggle_grid(); navigate_to(m_grid_sel); return 0; }
             return -1;
-        case VK_DELETE: delete_current_file(shift); return 0;
+        case VK_DELETE:
+            if (m_grid_mode && has_selection()) {
+                delete_selected(shift);
+            } else {
+                delete_current_file(shift);
+            }
+            return 0;
         }
         break;
     }
@@ -840,6 +851,10 @@ void App::toggle_grid() {
         m_thumb_d2d.clear();
         m_grid_scroll_y = 0;
         m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
+        m_selected.clear();
+        m_selected.resize(n, false);
+        if (m_grid_sel < n) m_selected[m_grid_sel] = true;
+        m_sel_anchor = m_grid_sel;
         start_thumb_loader();
 
         // Request first visible page of thumbnails
@@ -862,24 +877,35 @@ void App::toggle_grid() {
     m_window.invalidate();
 }
 
-void App::grid_click(int x, int y) {
+void App::grid_click(int x, int y, bool shift, bool ctrl) {
     int col = (x - THUMB_PAD) / (THUMB_SIZE + THUMB_GAP);
     int row = (y - THUMB_PAD + m_grid_scroll_y) / (THUMB_SIZE + THUMB_GAP);
     if (col < 0 || col >= m_grid_cols) return;
     int idx = row * m_grid_cols + col;
-    if (idx >= 0 && idx < static_cast<int>(m_index.size())) {
-        m_grid_sel = idx;
-        m_window.invalidate();
+    if (idx < 0 || idx >= static_cast<int>(m_index.size())) return;
+
+    if (shift && m_sel_anchor >= 0) {
+        select_range(m_sel_anchor, idx);
+    } else if (ctrl) {
+        if (idx < static_cast<int>(m_selected.size()))
+            m_selected[idx] = !m_selected[idx];
+        m_sel_anchor = idx;
+    } else {
+        clear_selection();
+        if (idx < static_cast<int>(m_selected.size()))
+            m_selected[idx] = true;
+        m_sel_anchor = idx;
     }
+    m_grid_sel = idx;
+    m_window.invalidate();
 }
 
-void App::grid_navigate(int dir) {
+void App::grid_navigate(int dir, bool shift) {
     int total = static_cast<int>(m_index.size());
     if (total == 0) return;
     int next = m_grid_sel + dir;
     if (dir == -1 && m_grid_sel <= 0) return;
     if (dir == 1 && m_grid_sel >= total - 1) return;
-    // Handle column edge: -1 wraps same row, +1 wraps same row
     if (dir == -1 && (m_grid_sel % m_grid_cols) == 0) return;
     if (dir == 1 && ((m_grid_sel + 1) % m_grid_cols) == 0) return;
     if (dir == -m_grid_cols && m_grid_sel < m_grid_cols) return;
@@ -887,6 +913,16 @@ void App::grid_navigate(int dir) {
     if (next < 0) next = 0;
     if (next >= total) next = total - 1;
     m_grid_sel = next;
+
+    if (shift && m_sel_anchor >= 0) {
+        select_range(m_sel_anchor, m_grid_sel);
+    } else if (!shift) {
+        clear_selection();
+        if (m_grid_sel < static_cast<int>(m_selected.size()))
+            m_selected[m_grid_sel] = true;
+        m_sel_anchor = m_grid_sel;
+    }
+
     grid_ensure_visible();
     m_window.invalidate();
 }
@@ -911,6 +947,89 @@ void App::toggle_thumb_square() {
     m_thumb_square = !m_thumb_square;
     m_thumb_d2d.clear();  // force redraw with new aspect
     m_window.invalidate();
+}
+
+// ── Multi-select helpers ─────────────────────────────────
+
+bool App::has_selection() const {
+    for (auto s : m_selected) if (s) return true;
+    return false;
+}
+
+void App::clear_selection() {
+    std::fill(m_selected.begin(), m_selected.end(), false);
+    m_sel_anchor = -1;
+}
+
+void App::select_range(int start, int end) {
+    clear_selection();
+    if (start > end) std::swap(start, end);
+    for (int i = start; i <= end && i < static_cast<int>(m_selected.size()); ++i)
+        m_selected[i] = true;
+}
+
+void App::delete_selected(bool permanent) {
+    std::vector<int> to_delete;
+    for (int i = 0; i < static_cast<int>(m_selected.size()); ++i)
+        if (m_selected[i]) to_delete.push_back(i);
+    if (to_delete.empty()) return;
+
+    std::wstring from;
+    for (auto rit = to_delete.rbegin(); rit != to_delete.rend(); ++rit) {
+        from += m_index.path_at(*rit);
+        from.push_back(L'\0');
+    }
+    from.push_back(L'\0');
+
+    SHFILEOPSTRUCTW fos = {};
+    fos.wFunc  = FO_DELETE;
+    fos.pFrom  = from.c_str();
+    fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+    if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
+    if (SHFileOperationW(&fos) != 0) return;
+
+    std::sort(to_delete.begin(), to_delete.end(), std::greater<int>());
+    for (int idx : to_delete) m_index.remove(idx);
+    clear_selection();
+
+    if (m_index.empty()) {
+        m_has_image = false; m_current_path.clear(); m_current_idx = -1;
+        m_grid_mode = false; stop_thumb_loader();
+        m_thumbs.clear(); m_thumb_d2d.clear();
+        SetWindowTextW(m_window.handle(), L"MinView");
+        m_window.invalidate(); return;
+    }
+    m_grid_sel = std::min(m_grid_sel, static_cast<int>(m_index.size()) - 1);
+    if (m_current_idx >= static_cast<int>(m_index.size()))
+        m_current_idx = static_cast<int>(m_index.size()) - 1;
+}
+
+void App::copy_selected() {
+    std::vector<std::wstring> paths;
+    for (int i = 0; i < static_cast<int>(m_selected.size()); ++i)
+        if (m_selected[i]) paths.push_back(m_index.path_at(i));
+    if (paths.empty()) return;
+
+    int total_bytes = sizeof(DROPFILES);
+    for (auto& p : paths) total_bytes += static_cast<int>((p.size() + 1) * sizeof(wchar_t));
+    total_bytes += static_cast<int>(sizeof(wchar_t));
+
+    if (!OpenClipboard(m_window.handle())) return;
+    EmptyClipboard();
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, total_bytes);
+    if (!hMem) { CloseClipboard(); return; }
+    auto* df = static_cast<DROPFILES*>(GlobalLock(hMem));
+    df->pFiles = sizeof(DROPFILES);
+    df->fWide  = TRUE;
+    auto* dst = reinterpret_cast<wchar_t*>(reinterpret_cast<char*>(df) + sizeof(DROPFILES));
+    for (auto& p : paths) {
+        wcscpy_s(dst, p.size() + 1, p.c_str());
+        dst += p.size() + 1;
+    }
+    *dst = L'\0';
+    GlobalUnlock(hMem);
+    SetClipboardData(CF_HDROP, hMem);
+    CloseClipboard();
 }
 
 void App::grid_render() {
@@ -951,7 +1070,7 @@ void App::grid_render() {
                 }
             }
 
-            bool sel = (idx == m_grid_sel);
+            bool sel = (idx == m_grid_sel) || (idx < static_cast<int>(m_selected.size()) && m_selected[idx]);
             if (dit != m_thumb_d2d.end() && dit->second) {
                 // Draw placeholder bg + thumbnail on top
                 m_renderer.draw_grid_placeholder(x, y, static_cast<float>(THUMB_SIZE), L"", sel);
