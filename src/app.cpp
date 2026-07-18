@@ -751,13 +751,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode) {
             if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
                 m_from_grid = true;
-                start_transition(hwnd);
+                start_transition(hwnd, true);
                 toggle_grid();
                 navigate_to(m_grid_sel);
             }
             return 0;
         }
-        if (m_has_image) { start_transition(hwnd); toggle_grid(); return 0; }
+        if (m_has_image) { start_transition(hwnd, false); toggle_grid(); return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -794,7 +794,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
-                start_transition(hwnd);
+                start_transition(hwnd, false);
                 toggle_grid();
                 m_window.invalidate();
                 return 0;
@@ -806,13 +806,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
-                start_transition(hwnd);
+                start_transition(hwnd, false);
                 toggle_grid();
                 m_window.invalidate();
                 return 0;
             }
             if (m_grid_mode && m_grid_sel >= 0) {
-                start_transition(hwnd);
+                start_transition(hwnd, true);
                 open_image(m_index.path_at(m_grid_sel));
                 m_from_grid = true;
                 m_temp_preview = true;
@@ -1359,9 +1359,41 @@ void App::copy_to_clipboard() {
 
 // ── Fullscreen ───────────────────────────────────────────────
 
-void App::start_transition(HWND hwnd) {
+void App::start_transition(HWND hwnd, bool forward) {
     if (m_animating) return;
-    // Snapshot already captured from previous frame's render
+
+    m_anim_forward = forward;
+    m_anim_thumb.Reset();
+
+    if (forward) {
+        // grid→image: save thumbnail bitmap, compute dest from image fit
+        auto it = m_thumb_d2d.find(m_grid_sel);
+        if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
+
+        // Compute destination rect (fitted image)
+        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
+        D2D1_SIZE_U ts = m_renderer.target_size();
+        float scale = std::min(static_cast<float>(ts.width) / iw,
+                               static_cast<float>(ts.height - m_toolbar_h) / ih);
+        float dw = iw * scale, dh = ih * scale;
+        float dx = (ts.width - dw) * 0.5f;
+        float dy = m_toolbar_h + (ts.height - m_toolbar_h - dh) * 0.5f;
+        m_anim_dst = {dx, dy, dx + dw, dy + dh};
+    } else {
+        // image→grid: swap src/dst
+        m_anim_dst = m_anim_src;  // dest = thumbnail pos
+        // Source = current fitted image position
+        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
+        D2D1_SIZE_U ts = m_renderer.target_size();
+        float scale = m_renderer.scale();
+        float dw = iw * scale, dh = ih * scale;
+        float dx = (ts.width - dw) * 0.5f + m_renderer.offset_x();
+        float dy = (ts.height - dh) * 0.5f + m_renderer.offset_y() + m_renderer.scroll_y();
+        m_anim_src = {dx, dy, dx + dw, dy + dh};
+    }
+
     m_animating = true;
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
@@ -2110,6 +2142,25 @@ void App::grid_render() {
     }
     }  // end justified layout
     m_grid_total_rows = static_cast<int>(rows.size());
+
+    // Cache selected thumbnail rect for transition animation
+    if (m_grid_sel >= 0) {
+        for (auto& ri : rows) {
+            if (m_grid_sel >= ri.start_idx && m_grid_sel < ri.end_idx) {
+                int j = m_grid_sel - ri.start_idx;
+                if (j < static_cast<int>(ri.img_x.size())) {
+                    m_anim_src = {
+                        ri.img_x[j] + m_thumb_pad,
+                        static_cast<float>(m_toolbar_h + ri.row_y),
+                        ri.img_x[j] + m_thumb_pad + ri.img_w[j],
+                        static_cast<float>(m_toolbar_h + ri.row_y + ri.row_h)
+                    };
+                }
+                break;
+            }
+        }
+    }
+
     m_row_heights.clear();
     for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap_v + ri.label_extra);
     int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
@@ -2268,12 +2319,9 @@ void App::grid_render() {
 
     m_renderer.pop_clip();
     if (m_animating) {
-        if (m_snapshot)
-            m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
-        else
-            m_renderer.draw_fade_overlay(m_anim_t);
-    } else {
-        m_renderer.capture_snapshot(&m_snapshot);
+        m_renderer.draw_fade_overlay(m_anim_t);
+        if (m_anim_thumb)
+            m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
     m_renderer.end_frame();
 }
@@ -2291,12 +2339,9 @@ void App::render_frame() {
             m_renderer.draw_overlay();
         }
         if (m_animating) {
-            if (m_snapshot)
-                m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
-            else
-                m_renderer.draw_fade_overlay(m_anim_t);
-        } else {
-            m_renderer.capture_snapshot(&m_snapshot);
+            m_renderer.draw_fade_overlay(m_anim_t);
+            if (m_anim_thumb)
+                m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
         }
         m_renderer.end_frame();
         return;
@@ -2365,12 +2410,9 @@ void App::render_frame() {
     }
     m_renderer.pop_clip();
     if (m_animating) {
-        if (m_snapshot)
-            m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
-        else
-            m_renderer.draw_fade_overlay(m_anim_t);
-    } else {
-        m_renderer.capture_snapshot(&m_snapshot);
+        m_renderer.draw_fade_overlay(m_anim_t);
+        if (m_anim_thumb)
+            m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
     m_renderer.end_frame();
 }

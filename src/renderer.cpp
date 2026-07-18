@@ -914,22 +914,17 @@ void Renderer::draw_fade_overlay(float t) {
     m_d2d_context->FillRectangle(&rc, br.Get());
 }
 
-HRESULT Renderer::capture_snapshot(ID2D1Bitmap1** out) {
-    if (!m_d2d_context) return E_FAIL;
-    D2D1_SIZE_U sz = m_target_size;
-    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_TARGET,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-    HRESULT hr = m_d2d_context->CreateBitmap(sz, nullptr, 0, &props, out);
-    if (FAILED(hr)) return hr;
-    return (*out)->CopyFromRenderTarget(nullptr, m_d2d_context.Get(), nullptr);
-}
-
-void Renderer::draw_bitmap_alpha(ID2D1Bitmap1* bmp, float alpha) {
+void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
     if (!m_d2d_context || !bmp) return;
-    D2D1_SIZE_F sz = bmp->GetSize();
-    D2D1_RECT_F rc = {0, 0, sz.width, sz.height};
-    m_d2d_context->DrawBitmap(bmp, &rc, alpha, D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
+    // Ease-out: t' = 1 - (1-t)^2
+    float et = 1.0f - (1.0f - t) * (1.0f - t);
+    float x = src.left   + (dst.left   - src.left)   * et;
+    float y = src.top    + (dst.top    - src.top)    * et;
+    float w = (src.right - src.left) + ((dst.right - dst.left) - (src.right - src.left)) * et;
+    float h = (src.bottom - src.top) + ((dst.bottom - dst.top) - (src.bottom - src.top)) * et;
+    D2D1_RECT_F rc = {x, y, x + w, y + h};
+    float alpha = std::clamp(t * 2.0f, 0.0f, 1.0f);  // fade in thumbnail over first half
+    m_d2d_context->DrawBitmap(bmp, &rc, alpha, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
 }
 
 void Renderer::push_clip_below(float y) {
