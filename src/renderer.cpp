@@ -521,10 +521,15 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     // Info rows — 2-column layout with text measurement
     float lw = 80.0f, col_gap = 4.0f;
-    for (auto& [label, value] : info) {
+    for (size_t i = 0; i < info.size(); ++i) {
+        auto& [label, value] = info[i];
         if (y + 20 > h) break;
-        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get());
-        float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap, value, white.Get());
+        // Labels: 12pt grey; values: first row (filename) 14pt white, rest 12pt white
+        bool is_filename = (i == 0);
+        float vsize = is_filename ? 14.0f : 12.0f;
+        float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
+        float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap,
+                                  value, white.Get(), vsize);
         y = std::max(y1, y2);
     }
 
@@ -536,8 +541,9 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         y += 30;
         for (auto& [label, value] : gen_info) {
             if (y + 20 > h) break;
-            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get());
-            float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap, value, white.Get());
+            float y1 = draw_text_line(x + pad, y, lw, label, grey.Get(), 12.0f);
+            float y2 = draw_text_line(x + pad + lw + col_gap, y, w - pad - lw - col_gap,
+                                      value, white.Get(), 12.0f);
             y = std::max(y1, y2);
         }
     }
@@ -563,14 +569,26 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
 }
 
 float Renderer::draw_text_line(float x, float y, float w,
-    const std::wstring& text, ID2D1SolidColorBrush* brush)
+    const std::wstring& text, ID2D1SolidColorBrush* brush,
+    float font_size)
 {
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return y + 20;
+
+    // Use m_text_format with default font size, or create a sized one
+    IDWriteTextFormat* fmt = m_text_format.Get();
+    ComPtr<IDWriteTextFormat> sized_fmt;
+    if (font_size > 0.0f && m_dwrite_factory) {
+        m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            font_size * m_dpi_y / 96.0f, L"en-US", &sized_fmt);
+        if (sized_fmt) fmt = sized_fmt.Get();
+    }
 
     ComPtr<IDWriteTextLayout> layout;
     HRESULT hr = m_dwrite_factory->CreateTextLayout(
         text.c_str(), static_cast<uint32_t>(text.size()),
-        m_text_format.Get(), w, 200.0f, &layout);
+        fmt, w, 200.0f, &layout);
     if (FAILED(hr)) return y + 20;
 
     DWRITE_TEXT_METRICS metrics;

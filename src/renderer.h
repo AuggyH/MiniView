@@ -37,7 +37,8 @@ public:
     void draw_scrollbar(float x, float y, float w, float h,
         float total, float view, float pos);
     float draw_text_line(float x, float y, float w,
-        const std::wstring& text, ID2D1SolidColorBrush* brush);
+        const std::wstring& text, ID2D1SolidColorBrush* brush,
+        float font_size = 0.0f);  // 0 = use m_text_format size
     void draw_toolbar(float w, const std::vector<std::wstring>& items,
         int active_idx);
     float measure_text(const std::wstring& text, float font_size);
