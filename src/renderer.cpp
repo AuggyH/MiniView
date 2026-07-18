@@ -267,58 +267,91 @@ void Renderer::draw_hint(const std::wstring& text) {
 }
 
 void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wstring>>& items) {
-    if (!m_d2d_context || !m_text_format || items.empty()) return;
+    if (!m_d2d_context || !m_dwrite_factory || items.empty()) return;
 
-    float card_w = std::min(560.0f, static_cast<float>(m_target_size.width) - 40.0f);
-    float line_h = 22.0f;
-    float pad = 16.0f;
-    float card_h = pad * 2 + line_h * items.size() + 8.0f;
-    float card_x = (m_target_size.width - card_w) / 2.0f;
-    float card_y = (m_target_size.height - card_h) / 2.0f;
+    float dpi_s = m_dpi_y / 96.0f;
+    float font_size = 13.0f;           // logical pt, draw_text_line will DPI-scale
+    float pad = 16.0f * dpi_s;
+    float label_w = 70.0f * dpi_s;
+    float gap = 10.0f * dpi_s;         // label–value gap
+    float item_spacing = 8.0f * dpi_s;
+    float card_w = std::min(600.0f * dpi_s, m_target_size.width - 40.0f * dpi_s);
+    float value_w = card_w - pad * 2 - label_w - gap;
+    float min_h = font_size * dpi_s * 1.6f;
+    int   max_lines = 3;
 
-    // Card background
-    ComPtr<ID2D1SolidColorBrush> bg;
-    m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.08f, 0.08f, 0.10f, 0.92f), &bg);
+    // ── Pass 1: measure item heights ──
+    std::vector<float> heights;
+    heights.reserve(items.size());
+    for (auto& [label, value] : items) {
+        float h = label_height(value, value_w, font_size);
+        float capped = max_lines * font_size * dpi_s * 1.44f;
+        if (h > capped) h = capped;
+        if (h < min_h) h = min_h;
+        heights.push_back(h);
+    }
+
+    float card_h = pad * 2;
+    for (float h : heights) card_h += h + item_spacing;
+    if (!heights.empty()) card_h -= item_spacing;  // no trailing gap
+
+    // Clamp to viewport
+    float max_card_h = m_target_size.height - 40.0f * dpi_s;
+    if (card_h > max_card_h) card_h = max_card_h;
+
+    float card_x = (m_target_size.width - card_w) * 0.5f;
+    float card_y = (m_target_size.height - card_h) * 0.5f;
+    float radius = 8.0f * dpi_s;
+
+    // ── Card background ──
+    ComPtr<ID2D1SolidColorBrush> bg, border;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.06f, 0.06f, 0.08f, 0.94f), &bg);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.22f, 0.22f, 0.28f, 0.7f), &border);
+
     D2D1_RECT_F rc = {card_x, card_y, card_x + card_w, card_y + card_h};
-    m_d2d_context->FillRoundedRectangle(
-        D2D1::RoundedRect(rc, 8.0f, 8.0f), bg.Get());
+    D2D1_ROUNDED_RECT rr = {rc, radius, radius};
+    m_d2d_context->FillRoundedRectangle(&rr, bg.Get());
+    m_d2d_context->DrawRoundedRectangle(&rr, border.Get(), 1.0f * dpi_s);
 
-    // Border
-    ComPtr<ID2D1SolidColorBrush> border;
-    m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.25f, 0.25f, 0.30f, 0.8f), &border);
-    m_d2d_context->DrawRoundedRectangle(
-        D2D1::RoundedRect(rc, 8.0f, 8.0f), border.Get(), 1.0f);
+    // ── Brushes ──
+    ComPtr<ID2D1SolidColorBrush> label_brush, value_brush, dim_brush;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.45f, 0.45f, 0.50f, 1.0f), &label_brush);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.88f, 0.88f, 0.90f, 1.0f), &value_brush);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.35f, 0.35f, 0.38f, 1.0f), &dim_brush);
 
-    // Items
-    ComPtr<ID2D1SolidColorBrush> label_brush, value_brush;
-    m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.5f, 0.5f, 0.55f, 1.0f), &label_brush);
-    m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.9f, 0.9f, 0.9f, 1.0f), &value_brush);
-
-    float label_w = 80.0f;
-    float value_x = card_x + pad + label_w + 8.0f;
-    float value_w = card_w - pad * 2 - label_w - 8.0f;
-
+    // ── Pass 2: draw items ──
+    float cur_y = card_y + pad;
     for (size_t i = 0; i < items.size(); ++i) {
-        float y = card_y + pad + i * line_h;
+        float h = heights[i];
 
-        // Label
-        D2D1_RECT_F lr = {card_x + pad, y, card_x + pad + label_w, y + line_h};
+        // Label (top-aligned, single-line)
+        D2D1_RECT_F lr = {card_x + pad, cur_y, card_x + pad + label_w, cur_y + min_h};
         m_d2d_context->DrawText(items[i].first.c_str(),
             static_cast<uint32_t>(items[i].first.size()),
             m_text_format.Get(), &lr, label_brush.Get());
 
-        // Value
+        // Value (wrapped, up to max_lines)
         if (!items[i].second.empty()) {
-            D2D1_RECT_F vr = {value_x, y, value_x + value_w, y + line_h};
-            m_d2d_context->DrawText(items[i].second.c_str(),
-                static_cast<uint32_t>(items[i].second.size()),
-                m_text_format.Get(), &vr, value_brush.Get());
+            int lines = (h > min_h * 1.1f) ? max_lines : 1;
+            draw_text_line(card_x + pad + label_w + gap, cur_y, value_w,
+                items[i].second, value_brush.Get(), font_size, nullptr, lines);
         }
+
+        cur_y += h + item_spacing;
     }
+
+    // ── Hint: press Esc or click to dismiss ──
+    ComPtr<IDWriteTextFormat> hint_fmt;
+    float hint_size = 10.0f * dpi_s;
+    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        hint_size, L"en-US", &hint_fmt);
+    hint_fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    std::wstring hint = L"Esc / \u70B9\u51FB\u5173\u95ED";  // Esc / 点击关闭
+    D2D1_RECT_F hr = {card_x, card_y + card_h + 4.0f * dpi_s,
+                      card_x + card_w, card_y + card_h + 20.0f * dpi_s};
+    m_d2d_context->DrawText(hint.c_str(), static_cast<uint32_t>(hint.size()),
+        hint_fmt.Get(), &hr, dim_brush.Get());
 }
 
 void Renderer::draw_overlay() {
