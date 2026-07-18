@@ -27,6 +27,7 @@ private:
     void    fit_to_window();
     void    zoom_at_center(float factor);
     void    toggle_fullscreen(HWND hwnd);
+    void    toggle_recursive();
     void    render_frame();
     void    update_title();
 
@@ -51,6 +52,7 @@ private:
     int          m_current_idx = -1;
     bool         m_has_image = false;
     bool         m_fullscreen = false;
+    bool         m_recursive = false;
 
     WINDOWPLACEMENT m_saved_placement = {sizeof(WINDOWPLACEMENT)};
     LONG            m_saved_style = 0;
