@@ -256,7 +256,7 @@ int App::run(const std::wstring& initial_path) {
     m_thumb_pad   = static_cast<int>(8 * scale);   // uniform padding
     m_cell_size   = m_thumb_cell + m_thumb_gap_h;
     m_panel_width = static_cast<int>(280 * scale);
-    m_toolbar_h  = static_cast<int>((m_title_h + 28) * scale);
+    m_toolbar_h  = static_cast<int>(m_title_h * scale);
 
     // No native menu bar — custom toolbar drawn via D2D
     SetMenu(m_window.handle(), nullptr);
@@ -519,7 +519,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_LBUTTONDOWN: {
-        // Title bar: buttons act, rest returns (drag via NCHITTEST)
+        // Title bar: buttons → menu items → drag
         {
             int ty2 = GET_Y_LPARAM(lp);
             float ts = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
@@ -528,33 +528,35 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 int tx2 = GET_X_LPARAM(lp);
                 float tw2 = static_cast<float>(m_renderer.target_size().width);
                 float bw = 46.0f * ts;
+
+                // Window buttons
                 if (tx2 >= tw2 - bw)      { m_title_btn_press = 2; m_window.invalidate(); return 0; }
                 if (tx2 >= tw2 - bw * 2)  { m_title_btn_press = 1; m_window.invalidate(); return 0; }
                 if (tx2 >= tw2 - bw * 3)  { m_title_btn_press = 0; m_window.invalidate(); return 0; }
-                return 0;  // title bar drag area — NCHITTEST handles it
+
+                // Menu items (after "MinView" title)
+                float mx = 12.0f * ts + 80.0f * ts + 8.0f * ts;
+                float fsize = 12.0f * ts;
+                m_toolbar_active = -1;
+                for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
+                    float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + 16.0f * ts;
+                    if (tx2 >= static_cast<int>(mx) && tx2 < static_cast<int>(mx + iw)) {
+                        m_toolbar_active = i;
+                        POINT pt = {static_cast<int>(mx), th};
+                        ClientToScreen(hwnd, &pt);
+                        show_toolbar_menu(hwnd, i, pt.x, pt.y);
+                        m_window.invalidate();
+                        return 0;
+                    }
+                    mx += iw;
+                }
+                return 0;  // title bar drag area
             }
         }
-        // Toolbar click?
+        // Below title bar: panel, grid clicks
         int ty = GET_Y_LPARAM(lp);
         if (ty < m_toolbar_h) {
-            int tx = GET_X_LPARAM(lp);
-            float x = 12.0f;
-            float f_dpi = static_cast<float>(GetDpiForWindow(hwnd));
-            float fsize = 13.0f * f_dpi / 96.0f;
-            m_toolbar_active = -1;
-            for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + 24.0f;
-                if (tx >= static_cast<int>(x) && tx < static_cast<int>(x + iw)) {
-                    m_toolbar_active = i;
-                    POINT pt = {static_cast<int>(x), m_toolbar_h};
-                    ClientToScreen(hwnd, &pt);
-                    show_toolbar_menu(hwnd, i, pt.x, pt.y);
-                    m_window.invalidate();
-                    return 0;
-                }
-                x += iw;
-            }
-            return 0;
+            return 0;  // title bar area already handled above
         }
         // Panel value click → copy + brief highlight + toast
         if (m_grid_mode && !m_panel_clickable.empty()) {
@@ -642,17 +644,19 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_window.invalidate();
             }
         }
-        // Toolbar hover tracking
+        // Menu hover tracking (in title bar)
         {
             int ty = GET_Y_LPARAM(lp);
             int prev = m_toolbar_active;
             m_toolbar_active = -1;
-            if (ty < m_toolbar_h) {
+            if (ty >= 0 && ty < m_toolbar_h) {
+                float dpi_m = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
                 int tx = GET_X_LPARAM(lp);
-                float x = 12.0f;
-                float fs = 13.0f * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+                // Menu items start after "MinView" title
+                float x = 12.0f * dpi_m + 80.0f * dpi_m + 8.0f * dpi_m;  // pad + title_w + gap
+                float fs = 12.0f * dpi_m;
                 for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                    float iw = m_renderer.measure_text(m_toolbar_items[i], fs) + 24.0f;
+                    float iw = m_renderer.measure_text(m_toolbar_items[i], fs) + 16.0f * dpi_m;
                     if (tx >= static_cast<int>(x) && tx < static_cast<int>(x + iw)) {
                         m_toolbar_active = i; break;
                     }
@@ -1166,14 +1170,14 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
 }
 
 void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
-    // Precompute toolbar item bounds for hover-switching detection
-    float dpi = static_cast<float>(GetDpiForWindow(hwnd));
-    float fsize = 13.0f * dpi / 96.0f;
-    float item_x = 12.0f;
+    // Precompute menu item bounds (after "MinView" title, matching draw_title_bar)
+    float dpi_s_tb = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+    float fsize = 12.0f * dpi_s_tb;
+    float item_x = 12.0f * dpi_s_tb + 80.0f * dpi_s_tb + 8.0f * dpi_s_tb;
     struct TbItem { float left, right; };
     std::vector<TbItem> tb_bounds;
     for (auto& item : m_toolbar_items) {
-        float iw = m_renderer.measure_text(item, fsize) + 24.0f;
+        float iw = m_renderer.measure_text(item, fsize) + 16.0f * dpi_s_tb;
         tb_bounds.push_back({item_x, item_x + iw});
         item_x += iw;
     }
@@ -1257,7 +1261,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         }, nullptr, GetCurrentThreadId());
 
     // Offset popup left by menu gutter so text aligns with toolbar text
-    x -= static_cast<int>(24 * dpi / 96.0f);
+    x -= static_cast<int>(24 * dpi_s_tb);
 
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
@@ -2160,10 +2164,9 @@ void App::grid_render() {
     m_renderer.draw_scrollbar(sb_x0, static_cast<float>(m_toolbar_h), sb_w, view_h - m_toolbar_h,
         static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y), sb_active);
 
-    // Title bar + toolbar on top
-    float tb_y = m_title_h * (static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
-    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press);
-    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active, tb_y);
+    // Title bar with menus
+    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
+        m_toolbar_items, m_toolbar_active);
 
     // Side info panel
     {
@@ -2262,12 +2265,10 @@ void App::render_frame() {
         return;
     }
     m_renderer.clear();
-    // Draw custom title bar then toolbar
+    // Draw custom title bar (includes menu items)
     float tw = static_cast<float>(m_renderer.target_size().width);
-    float dpi_s_title = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    float title_h = m_title_h * dpi_s_title;
-    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press);
-    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active, title_h);
+    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
+        m_toolbar_items, m_toolbar_active);
     if (m_has_image) {
         m_renderer.draw_image();
         m_renderer.draw_overlay();

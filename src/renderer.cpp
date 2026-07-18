@@ -815,14 +815,15 @@ void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int
     }
 }
 
-void Renderer::draw_title_bar(float w, int hover_btn, int press_btn) {
+void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
+    const std::vector<std::wstring>& menu_items, int active_menu)
+{
     if (!m_d2d_context || !m_dwrite_factory) return;
 
     float dpi_s = m_dpi_y / 96.0f;
     float h = std::max(28.0f * dpi_s, GetSystemMetrics(SM_CYCAPTION) + 2.0f);
     float pad = 12.0f * dpi_s;
     float btn_w = 46.0f * dpi_s;
-    float btn_area = btn_w * 3;
 
     // ── Background ──
     ComPtr<ID2D1SolidColorBrush> bg;
@@ -830,25 +831,55 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn) {
     D2D1_RECT_F rc = {0, 0, w, h};
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
-    // ── Title ──
-    ComPtr<ID2D1SolidColorBrush> txt;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &txt);
-    D2D1_RECT_F tr = {pad, 0, w - btn_area - pad, h};
+    // ── Brushes ──
+    ComPtr<ID2D1SolidColorBrush> title_br, menu_br, menu_hover_bg;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &title_br);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.72f, 0.72f, 0.75f, 1.0f), &menu_br);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.22f, 0.22f, 0.26f, 1.0f), &menu_hover_bg);
+
+    // ── Title text (left) ──
     ComPtr<IDWriteTextFormat> tf;
     float fs = 12.0f * dpi_s;
     m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    m_d2d_context->DrawText(L"MinView", 7, tf.Get(), &tr, txt.Get());
+    float title_w = 80.0f * dpi_s;
+    D2D1_RECT_F trc = {pad, 0, pad + title_w, h};
+    m_d2d_context->DrawText(L"MinView", 7, tf.Get(), &trc, title_br.Get());
 
-    // ── Buttons (right to left: close, max, min) ──
+    // ── Menu items (after title) ──
+    ComPtr<IDWriteTextFormat> mtf;
+    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        fs, L"en-US", &mtf);
+    float mx = pad + title_w + 8.0f * dpi_s;
+    for (int i = 0; i < static_cast<int>(menu_items.size()); ++i) {
+        ComPtr<IDWriteTextLayout> layout;
+        m_dwrite_factory->CreateTextLayout(menu_items[i].c_str(),
+            static_cast<uint32_t>(menu_items[i].size()), mtf.Get(), 200.0f, h, &layout);
+        DWRITE_TEXT_METRICS m;
+        layout->GetMetrics(&m);
+        float mw = m.width + 16.0f * dpi_s;  // padding each side
+
+        // Hover highlight
+        if (i == active_menu) {
+            D2D1_RECT_F hr = {mx - 4.0f * dpi_s, 2.0f * dpi_s,
+                              mx + mw + 4.0f * dpi_s, h - 2.0f * dpi_s};
+            m_d2d_context->FillRoundedRectangle(
+                D2D1::RoundedRect(hr, 4.0f * dpi_s, 4.0f * dpi_s), menu_hover_bg.Get());
+        }
+
+        D2D1_POINT_2F pt = {mx + 4.0f * dpi_s, (h - m.height) * 0.5f};
+        m_d2d_context->DrawTextLayout(pt, layout.Get(), menu_br.Get());
+        mx += mw;
+    }
+
+    // ── Window buttons (right) ──
     auto draw_btn = [&](float bx, int id, const wchar_t* sym) {
         bool hover = (hover_btn == id);
         bool press = (press_btn == id);
         bool is_close = (id == 2);
-
-        // Hover/press background
         if (hover) {
             ComPtr<ID2D1SolidColorBrush> bb;
             float a = press ? 0.7f : 0.35f;
@@ -858,8 +889,6 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn) {
             D2D1_RECT_F br = {bx, 0, bx + btn_w, h};
             m_d2d_context->FillRectangle(&br, bb.Get());
         }
-
-        // Symbol
         ComPtr<ID2D1SolidColorBrush> sb;
         m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.88f, 0.88f, 0.88f, 1.0f), &sb);
         ComPtr<IDWriteTextFormat> stf;
@@ -872,7 +901,6 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn) {
         D2D1_RECT_F sr = {bx, 0, bx + btn_w, h};
         m_d2d_context->DrawText(sym, 1, stf.Get(), &sr, sb.Get());
     };
-
     draw_btn(w - btn_w, 2, L"\u2715");                // close
     draw_btn(w - btn_w * 2, 1, L"\u25A1");            // maximize
     draw_btn(w - btn_w * 3, 0, L"\u2014");            // minimize
