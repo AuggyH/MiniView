@@ -3,6 +3,39 @@
 
 #include "app.h"
 #include <shellapi.h>
+#include <shlobj.h>
+#include <fstream>
+
+// ── Config persistence (non-anonymous — callable from app.cpp) ─
+
+std::wstring get_config_dir() {
+    wchar_t appdata[MAX_PATH];
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appdata))) {
+        std::wstring dir = std::wstring(appdata) + L"\\MinView";
+        CreateDirectoryW(dir.c_str(), nullptr);
+        return dir;
+    }
+    return L".";
+}
+
+std::wstring load_last_dir() {
+    auto path = get_config_dir() + L"\\lastdir.txt";
+    std::wifstream f(path);
+    if (!f.is_open()) return L"";
+    std::wstring line;
+    std::getline(f, line);
+    DWORD attr = GetFileAttributesW(line.c_str());
+    if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY))
+        return L"";
+    return line;
+}
+
+void save_last_dir(const std::wstring& dir) {
+    if (dir.empty()) return;
+    auto path = get_config_dir() + L"\\lastdir.txt";
+    std::wofstream f(path, std::ios::trunc);
+    if (f.is_open()) f << dir;
+}
 
 namespace {
 
@@ -31,7 +64,6 @@ bool forward_to_existing(const std::wstring& path) {
     return true;
 }
 
-// Get absolute path to this executable
 std::wstring get_exe_path() {
     wchar_t buf[MAX_PATH];
     DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);
@@ -42,11 +74,9 @@ bool register_file_associations() {
     std::wstring exe = get_exe_path();
     if (exe.empty()) return false;
 
-    // ── ProgID ──
     std::wstring prog_key = L"Software\\Classes\\" + std::wstring(PROG_ID);
     HKEY hk;
 
-    // DefaultIcon
     if (RegCreateKeyExW(HKEY_CURRENT_USER,
         (prog_key + L"\\DefaultIcon").c_str(),
         0, nullptr, 0, KEY_WRITE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
@@ -57,7 +87,6 @@ bool register_file_associations() {
         RegCloseKey(hk);
     }
 
-    // shell/open/command
     if (RegCreateKeyExW(HKEY_CURRENT_USER,
         (prog_key + L"\\shell\\open\\command").c_str(),
         0, nullptr, 0, KEY_WRITE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
@@ -68,7 +97,6 @@ bool register_file_associations() {
         RegCloseKey(hk);
     }
 
-    // ── File extensions ──
     for (auto ext : IMAGE_EXTS) {
         std::wstring ext_key = L"Software\\Classes\\" + std::wstring(ext);
         if (RegCreateKeyExW(HKEY_CURRENT_USER, ext_key.c_str(),
@@ -80,7 +108,6 @@ bool register_file_associations() {
         }
     }
 
-    // ── Registered Applications (for "Open with" menu) ──
     std::wstring app_key = L"Software\\Classes\\Applications\\MinView.exe\\shell\\open\\command";
     if (RegCreateKeyExW(HKEY_CURRENT_USER, app_key.c_str(),
         0, nullptr, 0, KEY_WRITE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
@@ -95,11 +122,9 @@ bool register_file_associations() {
 }
 
 bool unregister_file_associations() {
-    // Remove ProgID
     RegDeleteTreeW(HKEY_CURRENT_USER,
         (L"Software\\Classes\\" + std::wstring(PROG_ID)).c_str());
 
-    // Remove extension associations
     for (auto ext : IMAGE_EXTS) {
         std::wstring ext_key = L"Software\\Classes\\" + std::wstring(ext);
         HKEY hk;
@@ -111,7 +136,6 @@ bool unregister_file_associations() {
             if (RegQueryValueExW(hk, nullptr, 0, &type,
                 reinterpret_cast<BYTE*>(val), &size) == ERROR_SUCCESS) {
                 if (type == REG_SZ && wcscmp(val, PROG_ID) == 0) {
-                    // Only remove if it points to us
                     RegCloseKey(hk);
                     RegDeleteTreeW(HKEY_CURRENT_USER, ext_key.c_str());
                     continue;
@@ -121,7 +145,6 @@ bool unregister_file_associations() {
         }
     }
 
-    // Remove application registration
     RegDeleteTreeW(HKEY_CURRENT_USER,
         L"Software\\Classes\\Applications\\MinView.exe");
 
@@ -136,7 +159,6 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE, PWSTR, int /*nCmdShow*/)
 
     int exit_code = 0;
     try {
-        // Parse command line
         int argc;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         std::wstring arg1;
@@ -145,7 +167,6 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE, PWSTR, int /*nCmdShow*/)
             LocalFree(argv);
         }
 
-        // --register / --unregister
         if (arg1 == L"--register") {
             bool ok = register_file_associations();
             CoUninitialize();
@@ -157,13 +178,17 @@ int WINAPI wWinMain(HINSTANCE /*hInstance*/, HINSTANCE, PWSTR, int /*nCmdShow*/)
             return ok ? 0 : 1;
         }
 
-        // Single instance: if already running, forward path and exit
         HANDLE mutex = CreateMutexW(nullptr, TRUE, MUTEX_NAME);
         if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
             if (!arg1.empty()) forward_to_existing(arg1);
             CloseHandle(mutex);
             CoUninitialize();
             return 0;
+        }
+
+        // Restore last directory if no path given
+        if (arg1.empty()) {
+            arg1 = load_last_dir();
         }
 
         mv::App app;

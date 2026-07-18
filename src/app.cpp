@@ -8,6 +8,8 @@
 #include <commdlg.h>
 #include <ole2.h>
 
+extern void save_last_dir(const std::wstring& dir);
+
 namespace mv {
 
 // ── OLE Drag source helpers ──────────────────────────────────
@@ -418,6 +420,7 @@ void App::open_image(const std::wstring& path) {
 
         if (m_index.directory() != dir) {
             m_index.scan(dir, m_recursive);
+            save_last_dir(dir);
         }
         m_current_idx = m_index.index_of(path);
 
@@ -472,6 +475,7 @@ void App::toggle_recursive() {
     if (dir.empty()) return;
 
     m_index.scan(dir, m_recursive);
+    save_last_dir(dir);
 
     // Re-locate current image in new index
     if (!m_current_path.empty()) {
