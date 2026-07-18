@@ -185,49 +185,51 @@ ImageMeta parse_comfyui(const std::string& json) {
         m.height = json_int(latent, "height");
     }
 
-    // Extract prompts — find all CLIPTextEncode texts, longest = positive, shortest = negative
-    {
-        std::vector<std::string> texts;
-        std::string search = "\"class_type\"";
-        size_t pos = 0;
-        while ((pos = json.find(search, pos)) != std::string::npos) {
-            size_t colon = json.find(':', pos + search.size());
-            if (colon == std::string::npos) break;
-            size_t vs = colon + 1;
-            while (vs < json.size() && (json[vs] == ' ' || json[vs] == '\t')) vs++;
-            if (vs >= json.size() || json[vs] != '"') { pos = vs; continue; }
-            size_t ve = json.find('"', vs + 1);
-            if (ve == std::string::npos) { pos = vs + 1; continue; }
-            std::string ct = json.substr(vs + 1, ve - vs - 1);
-            pos = ve + 1;
-            if (ct != "CLIPTextEncode") continue;
+    // Extract prompts by tracing KSampler inputs to CLIPTextEncode nodes
+    if (!ksampler.empty()) {
+        auto extract_prompt = [&](const std::string& port) {
+            // Find "port": [node_id, slot] or "port": ["node_id", slot]
+            std::string key = "\"" + port + "\"";
+            size_t kp = ksampler.find(key);
+            if (kp == std::string::npos) return std::string();
+            kp = ksampler.find('[', kp + key.size());
+            if (kp == std::string::npos) return std::string();
+            kp++;
+            while (kp < ksampler.size() && (ksampler[kp] == ' ' || ksampler[kp] == '\t')) kp++;
+            // Read node ID (string or number)
+            size_t id_end = ksampler.find_first_of(",]", kp);
+            if (id_end == std::string::npos) return std::string();
+            std::string node_id = ksampler.substr(kp, id_end - kp);
+            // Strip quotes if present
+            if (!node_id.empty() && node_id.front() == '"')
+                node_id = node_id.substr(1, node_id.size() - 2);
 
-            // Find text value
-            size_t inp = json.find("\"inputs\"", pos);
-            if (inp == std::string::npos || inp > ve + 1000) continue;
+            // Find node with this ID in the workflow JSON
+            std::string nkey = "\"" + node_id + "\"";
+            size_t np = json.find(nkey);
+            if (np == std::string::npos) return std::string();
+            // Find CLIPTextEncode
+            size_t ct = json.find("CLIPTextEncode", np);
+            if (ct == std::string::npos || ct > np + 100) return std::string();
+            // Find text input
+            size_t inp = json.find("\"inputs\"", np);
+            if (inp == std::string::npos || inp > np + 500) return std::string();
             size_t ts = json.find("\"text\"", inp);
-            if (ts == std::string::npos || ts > inp + 500) continue;
+            if (ts == std::string::npos || ts > inp + 300) return std::string();
             size_t tvs = json.find(':', ts + 6);
-            if (tvs == std::string::npos) continue;
+            if (tvs == std::string::npos) return std::string();
             tvs++;
             while (tvs < json.size() && (json[tvs] == ' ' || json[tvs] == '\t')) tvs++;
-            if (tvs >= json.size() || json[tvs] != '"') continue;
+            if (tvs >= json.size() || json[tvs] != '"') return std::string();
             size_t tve = json.find('"', tvs + 1);
-            if (tve == std::string::npos) continue;
-            texts.push_back(json.substr(tvs + 1, tve - tvs - 1));
-        }
-        if (!texts.empty()) {
-            std::sort(texts.begin(), texts.end(),
-                [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
-            m.positive_prompt = utf8_to_wstring(texts[0]);
-            // Negative = shortest non-empty text (if more than one)
-            for (size_t i = texts.size() - 1; i > 0; --i) {
-                if (!texts[i].empty() && texts[i] != texts[0]) {
-                    m.negative_prompt = utf8_to_wstring(texts[i]);
-                    break;
-                }
-            }
-        }
+            if (tve == std::string::npos) return std::string();
+            return json.substr(tvs + 1, tve - tvs - 1);
+        };
+
+        auto pos_text = extract_prompt("positive");
+        auto neg_text = extract_prompt("negative");
+        if (!pos_text.empty()) m.positive_prompt = utf8_to_wstring(pos_text);
+        if (!neg_text.empty()) m.negative_prompt = utf8_to_wstring(neg_text);
     }
 
     m.valid = (m.seed >= 0 || !m.model.empty() || !m.positive_prompt.empty());
