@@ -2126,6 +2126,8 @@ void App::grid_render() {
                 if (meta.steps > 0) pgen.push_back({L"\u6B65\u6570", std::to_wstring(meta.steps)});
                 if (meta.cfg > 0) { wchar_t buf[16]; swprintf_s(buf, L"%.1f", meta.cfg); pgen.push_back({L"CFG", buf}); }
                 if (!meta.sampler.empty()) pgen.push_back({L"\u91C7\u6837\u5668", meta.sampler});
+                if (!meta.positive_prompt.empty()) pgen.push_back({L"\u6B63\u5411\u63D0\u793A\u8BCD", meta.positive_prompt});
+                if (!meta.negative_prompt.empty()) pgen.push_back({L"\u53CD\u5411\u63D0\u793A\u8BCD", meta.negative_prompt});
             }
         } else {
             pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
