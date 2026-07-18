@@ -739,6 +739,10 @@ float Renderer::draw_text_line(float x, float y, float w,
     }
     if (out_width) *out_width = metrics.widthIncludingTrailingWhitespace;
     float h = metrics.height;
+    if (max_lines > 0) {
+        float max_h = max_lines * font_size * m_dpi_y / 96.0f * 1.44f;
+        if (h > max_h) h = max_h;
+    }
 
     D2D1_POINT_2F origin = {x, y};
     m_d2d_context->DrawTextLayout(origin, layout.Get(), brush);
