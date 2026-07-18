@@ -119,7 +119,7 @@ private:
     bool  m_show_labels = true;
     bool  m_show_info = false;
     bool  m_using_thumb_preview = false;
-    bool  m_temp_preview = false;
+    bool  m_from_grid = false;  // entered image/fullscreen from grid → Esc returns
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     int   m_toolbar_h = 28;
