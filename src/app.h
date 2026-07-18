@@ -62,7 +62,7 @@ private:
     bool    has_selection() const;
     void    clear_selection();
     void    select_range(int start, int end);
-    void    grid_click(int x, int y, bool shift, bool ctrl);
+    bool    grid_click(int x, int y, bool shift, bool ctrl);
     void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
     void    grid_render();
