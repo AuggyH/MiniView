@@ -1644,9 +1644,6 @@ static void thumb_loader_worker(
                 thumbs[idx].wic = wic;
                 thumbs[idx].loaded = true;
                 thumbs[idx].dominant_color = dom;
-                // Store original dimensions via probe
-                auto info = decoder.probe(index.path_at(idx));
-                if (info) { thumbs[idx].orig_w = info->width; thumbs[idx].orig_h = info->height; }
             } catch (...) {
                 std::lock_guard lock(mtx);
                 thumbs[idx].loaded = true;
