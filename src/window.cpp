@@ -41,10 +41,24 @@ bool Window::create(const std::wstring& title, int width, int height) {
 
     if (!m_hwnd) return false;
 
-    // Dark mode title bar (Windows 10 1809+)
+    // Enable full dark mode (menus, controls) before showing window
+    HMODULE uxtheme = LoadLibraryW(L"uxtheme.dll");
+    if (uxtheme) {
+        auto pSetPreferredAppMode = reinterpret_cast<void(WINAPI*)(int)>(
+            GetProcAddress(uxtheme, MAKEINTRESOURCEA(135)));
+        auto pAllowDarkMode = reinterpret_cast<BOOL(WINAPI*)(HWND, BOOL)>(
+            GetProcAddress(uxtheme, MAKEINTRESOURCEA(133)));
+        auto pFlushMenuThemes = reinterpret_cast<void(WINAPI*)()>(
+            GetProcAddress(uxtheme, MAKEINTRESOURCEA(136)));
+        if (pSetPreferredAppMode) pSetPreferredAppMode(1);
+        if (pAllowDarkMode) pAllowDarkMode(m_hwnd, TRUE);
+        if (pFlushMenuThemes) pFlushMenuThemes();
+        FreeLibrary(uxtheme);
+    }
+
+    // Dark mode title bar
     BOOL dark = TRUE;
-    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-        &dark, sizeof(dark));
+    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
     // Rounded corners (Windows 11)
     DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
