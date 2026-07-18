@@ -741,7 +741,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode) {
             // Only open if clicking on a thumbnail
             if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
-                m_temp_preview = true;  // Esc will return to grid
+                m_from_grid = true;  // Esc will return to grid
                 toggle_grid();
                 navigate_to(m_grid_sel);
             }
@@ -781,12 +781,40 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         switch (wp) {
         case VK_ESCAPE:
-            if (m_temp_preview) { m_temp_preview = false; toggle_grid(); m_window.invalidate(); }
+            if (m_from_grid) {
+                m_from_grid = false;
+                toggle_grid();
+                m_window.invalidate();
+                return 0;
+            }
+            if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
             return 0;
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
-        case 'G':
-            if (!m_index.empty()) toggle_grid();
-            return 0;
+        case VK_SPACE:
+            if (m_from_grid) {
+                m_from_grid = false;
+                toggle_grid();
+                m_window.invalidate();
+                return 0;
+            }
+            if (m_grid_mode && m_grid_sel >= 0) {
+                open_image(m_index.path_at(m_grid_sel));
+                m_from_grid = true;
+                m_window.invalidate();
+                return 0;
+            }
+            navigate_to(m_current_idx + 1); return 0;
+        case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
+        case VK_RETURN:
+            if (m_grid_mode && m_grid_sel >= 0) {
+                m_from_grid = true;
+                toggle_grid();
+                navigate_to(m_grid_sel);
+                toggle_fullscreen(hwnd);
+                return 0;
+            }
+            if (m_has_image && !m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
+            return -1;
         case 'A':
             if (m_grid_mode) { toggle_thumb_square(); return 0; }
             return -1;
@@ -825,24 +853,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_END:
             if (m_grid_mode) { m_grid_sel = static_cast<int>(m_index.size()) - 1; grid_ensure_visible(); m_window.invalidate(); return 0; }
             navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
-        case VK_SPACE:
-            if (m_temp_preview) {
-                m_temp_preview = false;
-                toggle_grid();
-                m_window.invalidate();
-                return 0;
-            }
-            if (m_grid_mode && m_grid_sel >= 0) {
-                open_image(m_index.path_at(m_grid_sel));
-                m_temp_preview = true;
-                m_window.invalidate();
-                return 0;
-            }
-            navigate_to(m_current_idx + 1); return 0;
-        case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
-        case VK_RETURN:
-            if (m_has_image && !m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
-            return -1;
         case VK_DELETE:
             if (m_grid_mode && has_selection()) {
                 delete_selected(shift);
@@ -891,7 +901,7 @@ void App::open_image(const std::wstring& path) {
             m_grid_scroll_saved = m_grid_scroll_y;
             m_grid_saved_idx = m_grid_sel;
             m_grid_mode = false;
-            m_temp_preview = true;  // Esc will return to grid
+            m_from_grid = true;  // Esc/Space will return to grid
             if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
             stop_thumb_loader();
         }
@@ -2243,7 +2253,7 @@ void App::grid_render() {
 }
 
 void App::render_frame() {
-    if (m_temp_preview) {
+    if (m_from_grid) {
         if (!m_renderer.begin_frame()) return;
         m_renderer.clear();
         if (m_has_image) {
