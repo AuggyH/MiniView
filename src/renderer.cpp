@@ -508,14 +508,14 @@ float Renderer::label_height(const std::wstring& text, float w, float font_size)
     return m.height;
 }
 
-void Renderer::draw_side_panel(float x, float y_off, float w, float h,
+float Renderer::draw_side_panel(float x, float y_off, float w, float h,
     ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,
     const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
     std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable,
     int sel_idx, const std::wstring* toast, float scroll_y)
 {
-    if (!m_d2d_context || !m_text_format) return;
+    if (!m_d2d_context || !m_text_format) return 0.0f;
 
     float dpi_s = m_dpi_y / 96.0f;
     float pad   = 24.0f * dpi_s;
@@ -663,11 +663,12 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     m_d2d_context->PopAxisAlignedClip();
 
     // Scrollbar on panel right edge
-    float total_h = y - y0 - pad + scroll_y;  // undo scroll offset to get real content height
+    float total_h = y - y0 - pad + scroll_y;
     if (total_h > h) {
         float sb_w = 6.0f * dpi_s;
         draw_scrollbar(x + w - sb_w - 2.0f * dpi_s, y_off, sb_w, h, total_h, h, scroll_y);
     }
+    return total_h;
 }
 
 void Renderer::draw_scrollbar(float x, float y, float w, float h,

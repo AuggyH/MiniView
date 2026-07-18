@@ -30,7 +30,7 @@ public:
     void draw_overlay();
     void draw_hint(const std::wstring& text);
     void draw_info_card(const std::vector<std::pair<std::wstring, std::wstring>>& items);
-    void draw_side_panel(float x, float y_off, float w, float h,
+    float draw_side_panel(float x, float y_off, float w, float h,
         ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
         const std::vector<std::pair<std::wstring, std::wstring>>& info,
         const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,

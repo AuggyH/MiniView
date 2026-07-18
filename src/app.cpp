@@ -2147,10 +2147,12 @@ void App::grid_render() {
             pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
         }
         m_panel_clickable.clear();
-        m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h,
+        float panel_h = m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h,
             preview_bmp, pvw, pvh, pinfo, pgen, &m_panel_clickable,
             m_panel_sel, m_panel_copied.empty() ? nullptr : &m_panel_copied,
             m_panel_scroll_y);
+        float max_scroll = std::max(0.0f, panel_h - (ph - m_toolbar_h));
+        if (m_panel_scroll_y > max_scroll) m_panel_scroll_y = max_scroll;
     }
 
     m_renderer.end_frame();
