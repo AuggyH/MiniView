@@ -735,6 +735,14 @@ void App::open_image(const std::wstring& path) {
     try {
         m_using_thumb_preview = false;
 
+        // Exit grid mode if active (file dialog, drag-drop, IPC)
+        if (m_grid_mode) {
+            m_grid_scroll_saved = m_grid_scroll_y;
+            m_grid_saved_idx = m_grid_sel;
+            m_grid_mode = false;
+            if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
+        }
+
         // Try preload cache first
         auto cached = get_preloaded(path);
         if (cached) {
