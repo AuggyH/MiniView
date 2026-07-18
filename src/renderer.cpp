@@ -474,7 +474,7 @@ void Renderer::draw_side_panel(float x, float w, float h,
     // Preview thumbnail
     if (preview && pw > 0 && ph > 0) {
         float thumb_w = w - pad * 2;
-        float thumb_h = thumb_w * 0.6f;
+        float thumb_h = thumb_w * 0.75f;  // taller preview
         float scale = std::min(thumb_w / pw, thumb_h / ph);
         float dw = pw * scale, dh = ph * scale;
         float ox = x + pad + (thumb_w - dw) / 2.0f;
