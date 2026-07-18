@@ -1336,30 +1336,51 @@ void App::toggle_grid() {
 }
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
-    int thumb_w = (grid_area_w - (m_grid_cols - 1) * m_thumb_gap) / m_grid_cols;
-    int cell_w = thumb_w + m_thumb_gap;
-    int cell_h = thumb_w + m_thumb_gap;
-    int col = x / cell_w;
-    int row = (y - m_toolbar_h + m_grid_scroll_y) / cell_h;
-    if (col < 0 || col >= m_grid_cols) return;
-    int idx = row * m_grid_cols + col;
-    if (idx < 0 || idx >= static_cast<int>(m_index.size())) return;
+    int cols = m_grid_cols, gap = m_thumb_gap;
+    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int usable_w = gw - (cols - 1) * gap;
+    int total = static_cast<int>(m_index.size());
 
-    if (shift && m_sel_anchor >= 0) {
-        select_range(m_sel_anchor, idx);
-    } else if (ctrl) {
-        if (idx < static_cast<int>(m_selected.size()))
-            m_selected[idx] = !m_selected[idx];
-        m_sel_anchor = idx;
-    } else {
-        clear_selection();
-        if (idx < static_cast<int>(m_selected.size()))
-            m_selected[idx] = true;
-        m_sel_anchor = idx;
+    // Find row
+    int ty = y - m_toolbar_h + m_grid_scroll_y;
+    int row = -1, row_y = 0;
+    for (int r = 0; r < static_cast<int>(m_row_heights.size()); ++r) {
+        if (ty < row_y + m_row_heights[r]) { row = r; break; }
+        row_y += m_row_heights[r];
     }
-    m_grid_sel = idx;
-    m_window.invalidate();
+    if (row < 0) return;
+
+    // Recompute row layout to find clicked column
+    int start = row * cols;
+    int end = std::min(start + cols, total);
+    float H = 120.0f;
+    double tw = 0;
+    for (int i = start; i < end; ++i) {
+        uint32_t iw = 1, ih = 1;
+        if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
+        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
+        tw += (double)H * iw / ih;
+    }
+    float scale = (tw > 0) ? static_cast<float>(usable_w / tw) : 1.0f;
+    int row_h = std::max(40, static_cast<int>(H * scale));
+    float cx = 0;
+    for (int i = start; i < end; ++i) {
+        uint32_t iw = 1, ih = 1;
+        if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
+        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
+        float iw2 = static_cast<float>(row_h) * iw / ih;
+        if (x >= static_cast<int>(cx) && x < static_cast<int>(cx + iw2)) {
+            int idx = i;
+            if (idx < 0 || idx >= total) return;
+            if (shift && m_sel_anchor >= 0) select_range(m_sel_anchor, idx);
+            else if (ctrl) { if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = !m_selected[idx]; m_sel_anchor = idx; }
+            else { clear_selection(); if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = true; m_sel_anchor = idx; }
+            m_grid_sel = idx;
+            m_window.invalidate();
+            return;
+        }
+        cx += iw2 + gap;
+    }
 }
 
 void App::grid_navigate(int dir, bool shift) {
@@ -1518,186 +1539,124 @@ void App::grid_render() {
     int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
     int cols = std::max(1, (grid_area_w + m_thumb_gap) / (m_thumb_size + m_thumb_gap));
     m_grid_cols = cols;
-    int thumb_w = (grid_area_w - (cols - 1) * m_thumb_gap) / cols;
-    int cell_w = thumb_w + m_thumb_gap;
-    int tx = 0;
+    int gap = m_thumb_gap;
+    int usable_w = grid_area_w - (cols - 1) * gap;
 
-    // First pass: compute row heights from image aspect ratios
-    std::vector<int> row_heights;
-    std::vector<int> row_start_y;
-    int cur_y = 0;
-    for (int r = 0; ; ++r) {
-        int max_h = thumb_w;  // fallback square
-        for (int c = 0; c < cols; ++c) {
-            int idx = r * cols + c;
-            if (idx >= total) break;
-            uint32_t iw = 0, ih = 0;
-            if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].wic)
-                m_thumbs[idx].wic->GetSize(&iw, &ih);
-            if (iw > 0 && ih > 0)
-                max_h = std::max(max_h, static_cast<int>(thumb_w * ih / iw));
+    // --- First pass: justified row heights ---
+    struct RowInfo { int start_idx, end_idx, row_h, row_y; std::vector<float> img_x, img_w; };
+    std::vector<RowInfo> rows;
+    int cur_y = 0, idx = 0;
+
+    while (idx < total) {
+        RowInfo ri;
+        ri.start_idx = idx;
+        ri.end_idx = std::min(idx + cols, total);
+        ri.row_y = cur_y;
+
+        // Gather aspect ratios
+        float H = 120.0f; // initial guess — will be scaled
+        double total_w_at_H = 0;
+        for (int i = ri.start_idx; i < ri.end_idx; ++i) {
+            uint32_t iw = 1, ih = 1;
+            if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic)
+                m_thumbs[i].wic->GetSize(&iw, &ih);
+            if (iw == 0) iw = 1; if (ih == 0) ih = 1;
+            total_w_at_H += (double)H * iw / ih;
         }
-        row_heights.push_back(max_h);
-        row_start_y.push_back(cur_y);
-        cur_y += max_h + m_thumb_gap;
-        if (r * cols >= total) break;
+        // Scale so total width fits usable_w
+        float scale = (total_w_at_H > 0) ? static_cast<float>(usable_w / total_w_at_H) : 1.0f;
+        ri.row_h = static_cast<int>(H * scale);
+        if (ri.row_h < 40) ri.row_h = 40;
+
+        // Compute per-image widths and x-positions
+        float x = 0;
+        for (int i = ri.start_idx; i < ri.end_idx; ++i) {
+            uint32_t iw = 1, ih = 1;
+            if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].wic)
+                m_thumbs[i].wic->GetSize(&iw, &ih);
+            if (iw == 0) iw = 1; if (ih == 0) ih = 1;
+            float img_w = static_cast<float>(ri.row_h) * iw / ih;
+            ri.img_x.push_back(x);
+            ri.img_w.push_back(img_w);
+            x += img_w + gap;
+        }
+        rows.push_back(ri);
+        cur_y += ri.row_h + gap;
+        idx = ri.end_idx;
     }
-    m_grid_total_rows = static_cast<int>(row_heights.size());
+    m_grid_total_rows = static_cast<int>(rows.size());
+    m_row_heights.clear();
+    for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap);
     int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
 
-    // Scroll calc
+    // --- Scroll calc ---
     int top_px = m_grid_scroll_y;
-    int top_row = 0, bot_row = static_cast<int>(row_heights.size()) - 1;
-    for (int i = 0; i < static_cast<int>(row_start_y.size()); ++i) {
-        if (row_start_y[i] + row_heights[i] > top_px) { top_row = i; break; }
+    int top_row = 0, bot_row = static_cast<int>(rows.size()) - 1;
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        if (rows[i].row_y + rows[i].row_h > top_px) { top_row = i; break; }
     }
-    for (int i = top_row; i < static_cast<int>(row_start_y.size()); ++i) {
-        if (row_start_y[i] > top_px + visible_h) { bot_row = i; break; }
+    for (int i = top_row; i < static_cast<int>(rows.size()); ++i) {
+        if (rows[i].row_y > top_px + visible_h) { bot_row = i; break; }
     }
 
-    // Request visible thumbs
+    // --- Request visible thumbs ---
     if (!m_scroll_active) {
-        for (int r = top_row; r <= bot_row; ++r)
-            for (int c = 0; c < cols; ++c) {
-                int idx = r * cols + c;
-                if (idx < total) request_thumb(idx);
-            }
+        for (int r = top_row; r <= bot_row && r < static_cast<int>(rows.size()); ++r)
+            for (int i = rows[r].start_idx; i < rows[r].end_idx; ++i)
+                request_thumb(i);
     }
 
-    // Batch WIC grab
+    // --- Batch WIC grab ---
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
     {
         std::lock_guard lock(m_thumb_mutex);
-        for (int r = top_row; r <= bot_row; ++r) {
-            for (int c = 0; c < cols; ++c) {
-                int idx = r * cols + c;
-                if (idx >= total) break;
-                if (m_thumb_d2d.count(idx)) continue;
-                if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].loaded && m_thumbs[idx].wic)
-                    ready.push_back({idx, m_thumbs[idx].wic});
-            }
-        }
+        for (int r = top_row; r <= bot_row && r < static_cast<int>(rows.size()); ++r)
+            for (int i = rows[r].start_idx; i < rows[r].end_idx; ++i)
+                if (!m_thumb_d2d.count(i) && i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].loaded && m_thumbs[i].wic)
+                    ready.push_back({i, m_thumbs[i].wic});
     }
     int d2d_count = 0;
-    for (auto& [idx, wic] : ready) {
+    for (auto& [i, wic] : ready) {
         if (d2d_count >= 2) break;
         ComPtr<ID2D1Bitmap1> d2d_bmp;
         if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d_bmp)) && d2d_bmp) {
-            m_thumb_d2d[idx] = d2d_bmp;
-            ++d2d_count;
+            m_thumb_d2d[i] = d2d_bmp; ++d2d_count;
         }
     }
 
-    // Second pass: render
-    for (int r = top_row; r <= bot_row && r < static_cast<int>(row_heights.size()); ++r) {
-        int row_h = row_heights[r];
-        int row_y = m_toolbar_h + row_start_y[r] - m_grid_scroll_y;
-        for (int c = 0; c < cols; ++c) {
-            int idx = r * cols + c;
-            if (idx >= total) break;
-            float x = static_cast<float>(tx + c * cell_w);
-            bool sel = (idx == m_grid_sel) || (idx < static_cast<int>(m_selected.size()) && m_selected[idx]);
-
-            // Compute actual display height from aspect ratio
-            uint32_t iw = 0, ih = 0;
-            if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].wic)
-                m_thumbs[idx].wic->GetSize(&iw, &ih);
-            int disp_h = (iw > 0 && ih > 0) ? static_cast<int>(thumb_w * ih / iw) : thumb_w;
-
-            float y = static_cast<float>(row_y + (row_h - disp_h) / 2);  // center in row
-            auto dit = m_thumb_d2d.find(idx);
+    // --- Second pass: render ---
+    for (int r = top_row; r <= bot_row && r < static_cast<int>(rows.size()); ++r) {
+        auto& ri = rows[r];
+        float row_y = static_cast<float>(m_toolbar_h + ri.row_y - m_grid_scroll_y);
+        for (int j = 0; j < ri.end_idx - ri.start_idx; ++j) {
+            int idx2 = ri.start_idx + j;
+            if (idx2 >= total) break;
+            float x = ri.img_x[j];
+            float w = ri.img_w[j];
+            bool sel = (idx2 == m_grid_sel) || (idx2 < static_cast<int>(m_selected.size()) && m_selected[idx2]);
+            auto dit = m_thumb_d2d.find(idx2);
             if (dit != m_thumb_d2d.end() && dit->second) {
-                m_renderer.draw_grid_thumbnail(x, y, static_cast<float>(thumb_w),
-                    static_cast<float>(disp_h), dit->second.Get(), m_thumb_square);
+                m_renderer.draw_grid_thumbnail(x, row_y, w, static_cast<float>(ri.row_h), dit->second.Get(), m_thumb_square);
             }
             if (sel) {
-                // Selection border only
-                D2D1_RECT_F sel_rc = {x - 2, y - 2, x + thumb_w + 2, y + disp_h + 2};
+                D2D1_RECT_F sel_rc = {x - 2, row_y - 2, x + w + 2, row_y + ri.row_h + 2};
                 m_renderer.draw_selection_border(sel_rc);
             }
         }
     }
 
-    // ── Side info panel ──
+    // Toolbar + panel + scrollbar
     float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
-
-    // Custom scrollbar
-    int total_h = 0;
-    for (int h : row_heights) total_h += h + m_thumb_gap;
-    float total_content = static_cast<float>(total_h);
+    float tw = static_cast<float>(m_renderer.target_size().width);
     float view_h = static_cast<float>(m_renderer.target_size().height);
+
+    // Scrollbar
+    int total_h = 0;
+    for (auto& ri : rows) total_h += ri.row_h + gap;
     m_renderer.draw_scrollbar(px - 14.0f, static_cast<float>(m_toolbar_h), 8.0f, view_h - m_toolbar_h,
-        total_content, view_h, static_cast<float>(m_grid_scroll_y));
-    float pw = static_cast<float>(m_panel_width);
-    float ph = static_cast<float>(m_renderer.target_size().height);
-
-    std::vector<std::pair<std::wstring, std::wstring>> pinfo;
-    std::vector<std::pair<std::wstring, std::wstring>> pgen;
-    ID2D1Bitmap1* preview_bmp = nullptr;
-    uint32_t pvw = 0, pvh = 0;
-
-    if (m_grid_sel >= 0 && m_grid_sel < total) {
-        auto& selpath = m_index.path_at(m_grid_sel);
-        size_t pos = selpath.find_last_of(L"\\/");
-        std::wstring name = (pos != std::wstring::npos) ? selpath.substr(pos + 1) : selpath;
-        pinfo.push_back({L"\u6587\u4EF6\u540D", name});
-
-        // Get actual file resolution (not thumbnail size)
-        auto probe = m_decoder.probe(selpath);
-        if (probe) {
-            pvw = probe->width; pvh = probe->height;
-            pinfo.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(pvw) + L"\u00D7" + std::to_wstring(pvh)});
-        }
-
-        // Panel preview thumbnail
-        auto dit2 = m_thumb_d2d.find(m_grid_sel);
-        if (dit2 != m_thumb_d2d.end()) preview_bmp = dit2->second.Get();
-
-        WIN32_FILE_ATTRIBUTE_DATA attr;
-        if (GetFileAttributesExW(selpath.c_str(), GetFileExInfoStandard, &attr)) {
-            ULONGLONG fsize = (static_cast<ULONGLONG>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
-            if (fsize < 1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize) + L" B"});
-            else if (fsize < 1024*1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize/1024) + L" KB"});
-            else { wchar_t buf[32]; swprintf_s(buf, L"%.1f MB", fsize/(1024.0*1024.0)); pinfo.push_back({L"\u5927\u5C0F", buf}); }
-        }
-
-        ImageMeta meta = extract_metadata(selpath);
-        if (meta.valid) {
-            if (!meta.model.empty()) pgen.push_back({L"\u6A21\u578B", meta.model});
-            if (meta.seed >= 0) pgen.push_back({L"Seed", std::to_wstring(meta.seed)});
-            if (meta.steps > 0) pgen.push_back({L"\u6B65\u6570", std::to_wstring(meta.steps)});
-            if (meta.cfg > 0) { wchar_t buf[16]; swprintf_s(buf, L"%.1f", meta.cfg); pgen.push_back({L"CFG", buf}); }
-            if (!meta.sampler.empty()) pgen.push_back({L"\u91C7\u6837\u5668", meta.sampler});
-            if (meta.width > 0) pgen.push_back({L"\u751F\u6210\u5C3A\u5BF8", std::to_wstring(meta.width) + L"\u00D7" + std::to_wstring(meta.height)});
-        }
-    } else {
-        pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
-    }
-
-    m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h, preview_bmp, pvw, pvh, pinfo, pgen);
-
-    // Info card overlay (toggled by I key)
-    if (m_show_info && m_info_meta.valid) {
-        std::vector<std::pair<std::wstring, std::wstring>> items;
-        if (!m_info_meta.positive_prompt.empty())
-            items.push_back({L"\u63D0\u793A\u8BCD", m_info_meta.positive_prompt});
-        if (!m_info_meta.negative_prompt.empty())
-            items.push_back({L"\u53CD\u5411\u8BCD", m_info_meta.negative_prompt});
-        if (!m_info_meta.model.empty())
-            items.push_back({L"\u6A21\u578B", m_info_meta.model});
-        if (m_info_meta.seed >= 0)
-            items.push_back({L"Seed", std::to_wstring(m_info_meta.seed)});
-        if (m_info_meta.steps > 0)
-            items.push_back({L"\u6B65\u6570", std::to_wstring(m_info_meta.steps)});
-        if (m_info_meta.cfg > 0) {
-            wchar_t buf[16]; swprintf_s(buf, L"%.1f", m_info_meta.cfg);
-            items.push_back({L"CFG", buf});
-        }
-        m_renderer.draw_info_card(items);
-    }
+        static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y));
 
     // Toolbar always on top
-    float tw = static_cast<float>(m_renderer.target_size().width);
     m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
 
     m_renderer.end_frame();
