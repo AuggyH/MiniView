@@ -762,7 +762,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDBLCLK:
         if (m_animating) {
             m_anim_forward = !m_anim_forward;
-            std::swap(m_anim_src, m_anim_dst);
             m_anim_t = 1.0f - m_anim_t;
             LARGE_INTEGER now; QueryPerformanceCounter(&now);
             LARGE_INTEGER freq; QueryPerformanceFrequency(&freq);
@@ -842,7 +841,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_SPACE:
             if (m_animating) {
                 m_anim_forward = !m_anim_forward;
-                std::swap(m_anim_src, m_anim_dst);
                 m_anim_t = 1.0f - m_anim_t;
                 LARGE_INTEGER now; QueryPerformanceCounter(&now);
                 LARGE_INTEGER freq; QueryPerformanceFrequency(&freq);
@@ -869,7 +867,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_window.invalidate();
                 return 0;
             }
-            navigate_to(m_current_idx + 1); return 0;
+            return 0;  // in normal image mode, do nothing
         case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
         case VK_RETURN:
             if (m_has_image || m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
