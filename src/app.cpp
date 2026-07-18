@@ -1584,13 +1584,13 @@ void App::grid_render() {
             x += img_w + gap;
         }
         rows.push_back(ri);
-        int label_extra = m_show_labels ? static_cast<int>(32 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
+        int label_extra = m_show_labels ? static_cast<int>(36 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
         cur_y += ri.row_h + gap + label_extra;
         idx = ri.end_idx;
     }
     m_grid_total_rows = static_cast<int>(rows.size());
     m_row_heights.clear();
-    int label_extra2 = m_show_labels ? static_cast<int>(32 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
+    int label_extra2 = m_show_labels ? static_cast<int>(36 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f) : 0;
     for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap + label_extra2);
     int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
 
@@ -1652,7 +1652,7 @@ void App::grid_render() {
                 auto& spath = m_index.path_at(idx2);
                 size_t pos2 = spath.find_last_of(L"\\/");
                 std::wstring fname = (pos2 != std::wstring::npos) ? spath.substr(pos2 + 1) : spath;
-                float ly = row_y + ri.row_h + 2;
+                float ly = row_y + ri.row_h + 4;
                 m_renderer.draw_label(x, ly, w, fname);
 
                 WIN32_FILE_ATTRIBUTE_DATA attr2;
@@ -1662,7 +1662,7 @@ void App::grid_render() {
                     if (fs < 1024) size_str = std::to_wstring(fs) + L" B";
                     else if (fs < 1024*1024) size_str = std::to_wstring(fs/1024) + L" KB";
                     else { wchar_t buf[32]; swprintf_s(buf, L"%.1f MB", fs/(1024.0*1024.0)); size_str = buf; }
-                    m_renderer.draw_label(x, ly + 14, w, size_str);
+                    m_renderer.draw_label(x, ly + 16, w, size_str);
                 }
             }
         }
