@@ -1360,10 +1360,8 @@ void App::copy_to_clipboard() {
 // ── Fullscreen ───────────────────────────────────────────────
 
 void App::start_transition(HWND hwnd) {
-    if (m_animating) return;  // skip if already animating
-    // Capture current frame before mode switch
-    m_snapshot.Reset();
-    m_renderer.capture_snapshot(&m_snapshot);
+    if (m_animating) return;
+    // Snapshot already captured from previous frame's render
     m_animating = true;
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
@@ -2269,8 +2267,13 @@ void App::grid_render() {
     }
 
     m_renderer.pop_clip();
-    if (m_animating && m_snapshot) {
-        m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
+    if (m_animating) {
+        if (m_snapshot)
+            m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
+        else
+            m_renderer.draw_fade_overlay(m_anim_t);
+    } else {
+        m_renderer.capture_snapshot(&m_snapshot);
     }
     m_renderer.end_frame();
 }
@@ -2287,9 +2290,14 @@ void App::render_frame() {
             m_renderer.draw_image();
             m_renderer.draw_overlay();
         }
-        if (m_animating && m_snapshot) {
-        m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
-    }
+        if (m_animating) {
+            if (m_snapshot)
+                m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
+            else
+                m_renderer.draw_fade_overlay(m_anim_t);
+        } else {
+            m_renderer.capture_snapshot(&m_snapshot);
+        }
         m_renderer.end_frame();
         return;
     }
@@ -2356,8 +2364,13 @@ void App::render_frame() {
         m_renderer.draw_hint(L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6");
     }
     m_renderer.pop_clip();
-    if (m_animating && m_snapshot) {
-        m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
+    if (m_animating) {
+        if (m_snapshot)
+            m_renderer.draw_bitmap_alpha(m_snapshot.Get(), 1.0f - m_anim_t);
+        else
+            m_renderer.draw_fade_overlay(m_anim_t);
+    } else {
+        m_renderer.capture_snapshot(&m_snapshot);
     }
     m_renderer.end_frame();
 }
