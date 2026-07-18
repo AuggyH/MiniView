@@ -760,7 +760,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_LBUTTONDBLCLK:
-        if (m_animating) return 0;
+        if (m_animating) {
+            m_anim_forward = !m_anim_forward;
+            std::swap(m_anim_src, m_anim_dst);
+            m_anim_t = 1.0f - m_anim_t;
+            LARGE_INTEGER now; QueryPerformanceCounter(&now);
+            LARGE_INTEGER freq; QueryPerformanceFrequency(&freq);
+            m_anim_start = now.QuadPart - static_cast<LONGLONG>(m_anim_t * 0.30f * freq.QuadPart);
+            m_anim_action = ACT_NONE;
+            m_window.invalidate();
+            return 0;
+        }
         if (m_grid_mode) {
             if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
                 m_from_grid = true;
@@ -804,7 +814,18 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         switch (wp) {
         case VK_ESCAPE:
-            if (m_animating) return 0;
+            if (m_animating) {
+                // Interrupt: reverse animation
+                m_anim_forward = false;
+                std::swap(m_anim_src, m_anim_dst);
+                m_anim_t = 1.0f - m_anim_t;
+                LARGE_INTEGER now; QueryPerformanceCounter(&now);
+                LARGE_INTEGER freq; QueryPerformanceFrequency(&freq);
+                m_anim_start = now.QuadPart - static_cast<LONGLONG>(m_anim_t * 0.30f * freq.QuadPart);
+                m_anim_action = ACT_NONE;  // cancel pending action
+                m_window.invalidate();
+                return 0;
+            }
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
@@ -819,7 +840,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
         case VK_SPACE:
-            if (m_animating) return 0;  // debounce during animation
+            if (m_animating) {
+                m_anim_forward = !m_anim_forward;
+                std::swap(m_anim_src, m_anim_dst);
+                m_anim_t = 1.0f - m_anim_t;
+                LARGE_INTEGER now; QueryPerformanceCounter(&now);
+                LARGE_INTEGER freq; QueryPerformanceFrequency(&freq);
+                m_anim_start = now.QuadPart - static_cast<LONGLONG>(m_anim_t * 0.30f * freq.QuadPart);
+                m_anim_action = ACT_NONE;
+                m_window.invalidate();
+                return 0;
+            }
             if (m_from_grid) {
                 m_from_grid = false;
                 m_temp_preview = false;
