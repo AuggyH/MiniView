@@ -250,10 +250,26 @@ int App::run(const std::wstring& initial_path) {
     m_thumb_gap  = static_cast<int>(6 * scale);
     m_thumb_pad  = static_cast<int>(12 * scale);
     m_cell_size  = m_thumb_size + m_thumb_gap;
+    m_panel_width = static_cast<int>(280 * scale);
 
     SetMenu(m_window.handle(), build_menu_bar());
 
-    // Dark menu bar
+    // Enable dark mode for menus and controls (after SetMenu)
+    HMODULE uxtheme = LoadLibraryW(L"uxtheme.dll");
+    if (uxtheme) {
+        auto pSetPreferredAppMode = reinterpret_cast<void(WINAPI*)(int)>(
+            GetProcAddress(uxtheme, MAKEINTRESOURCEA(135)));
+        auto pAllowDarkMode = reinterpret_cast<BOOL(WINAPI*)(HWND, BOOL)>(
+            GetProcAddress(uxtheme, MAKEINTRESOURCEA(133)));
+        auto pFlushMenuThemes = reinterpret_cast<void(WINAPI*)()>(
+            GetProcAddress(uxtheme, MAKEINTRESOURCEA(136)));
+        if (pSetPreferredAppMode) pSetPreferredAppMode(1);
+        if (pAllowDarkMode) pAllowDarkMode(m_window.handle(), TRUE);
+        if (pFlushMenuThemes) pFlushMenuThemes();
+        FreeLibrary(uxtheme);
+    }
+
+    // Dark menu background via MENUINFO (belt + suspenders)
     HMENU hmenu = GetMenu(m_window.handle());
     if (hmenu) {
         MENUINFO mi = {sizeof(MENUINFO)};
@@ -261,7 +277,6 @@ int App::run(const std::wstring& initial_path) {
         mi.hbrBack = CreateSolidBrush(RGB(32, 32, 36));
         SetMenuInfo(hmenu, &mi);
     }
-
     start_preloader();
 
     if (!initial_path.empty()) {
