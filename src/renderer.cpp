@@ -465,6 +465,20 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
     m_d2d_context->DrawTextLayout(pt, layout.Get(), br.Get());
 }
 
+float Renderer::label_height(const std::wstring& text, float w, float font_size) {
+    if (!m_dwrite_factory || text.empty()) return 0;
+    ComPtr<IDWriteTextFormat> tf;
+    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        font_size * m_dpi_y / 96.0f, L"en-US", &tf);
+    ComPtr<IDWriteTextLayout> layout;
+    m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
+        tf.Get(), w, 100.0f, &layout);
+    DWRITE_TEXT_METRICS m;
+    layout->GetMetrics(&m);
+    return m.height;
+}
+
 void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,
