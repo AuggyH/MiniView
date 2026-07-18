@@ -905,7 +905,7 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
 void Renderer::draw_fade_overlay(float t) {
     if (!m_d2d_context) return;
     float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t) * (1.0f - t);
-    float alpha = 1.0f - et;
+    float alpha = et;  // 0→1, darkness fades in
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(

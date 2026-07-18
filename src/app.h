@@ -133,6 +133,8 @@ private:
     D2D1_RECT_F m_anim_src = {};
     D2D1_RECT_F m_anim_dst = {};
     bool  m_anim_forward = true;
+    enum AnimAction { ACT_NONE, ACT_ENTER_IMAGE, ACT_EXIT_GRID, ACT_QUIT };
+    AnimAction m_anim_action = ACT_NONE;
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     int   m_toolbar_h = 28;
