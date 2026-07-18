@@ -205,11 +205,11 @@ ImageMeta parse_comfyui(const std::string& json) {
             // Get node text from inputs — resolve link if needed
             auto get_node_text = [&]() -> std::string {
                 size_t inp = json.find("\"inputs\"", node_start);
-                if (inp == std::string::npos || inp > pos + 500) return "";
+                if (inp == std::string::npos || inp > pos + 2000) return "";
                 size_t ts = json.find("\"text\"", inp);
-                if (ts == std::string::npos || ts > inp + 500) return "";
+                if (ts == std::string::npos || ts > inp + 2000) return "";
                 size_t tvs = json.find(':', ts + 6);
-                if (tvs == std::string::npos || tvs > ts + 10) return "";
+                if (tvs == std::string::npos || tvs > ts + 20) return "";
                 tvs++;
                 while (tvs < json.size() && (json[tvs] == ' ' || json[tvs] == '\t')) tvs++;
                 if (tvs >= json.size()) return "";
@@ -228,25 +228,42 @@ ImageMeta parse_comfyui(const std::string& json) {
                     size_t le = json.find_first_of(lq ? "\"" : ",]", ls);
                     if (le == std::string::npos) return "";
                     std::string wid = json.substr(ls, le - ls);
-                    // Find widget node
+
+                    // Find widget node: "\"id\": {"
                     std::string wkey = "\"" + wid + "\"";
                     size_t wp = json.find(wkey);
                     if (wp == std::string::npos) return "";
                     size_t wb = json.find('{', wp + wkey.size());
-                    if (wb == std::string::npos || wb > wp + wkey.size() + 10) return "";
+                    if (wb == std::string::npos || wb > wp + wkey.size() + 20) return "";
+                    // Search inputs first, then widgets_values
                     size_t wi = json.find("\"inputs\"", wp);
-                    if (wi == std::string::npos || wi > wb + 500) return "";
-                    for (auto* field : {"\"text\"", "\"string\"", "\"value\"", "\"widget_value\""}) {
-                        size_t f = json.find(field, wi);
-                        if (f == std::string::npos || f > wi + 500) continue;
-                        size_t fc = json.find(':', f + strlen(field));
-                        if (fc == std::string::npos || fc > f + 10) continue;
-                        fc++;
-                        while (fc < json.size() && (json[fc] == ' ' || json[fc] == '\t')) fc++;
-                        if (fc < json.size() && json[fc] == '"') {
-                            size_t fe = json.find('"', fc + 1);
-                            if (fe != std::string::npos)
-                                return json.substr(fc + 1, fe - fc - 1);
+                    if (wi != std::string::npos && wi < wb + 2000) {
+                        for (auto* field : {"\"text\"", "\"string\"", "\"value\"", "\"widget_value\"", "\"multiline\""}) {
+                            size_t f = json.find(field, wi);
+                            if (f == std::string::npos || f > wi + 2000) continue;
+                            size_t fc = json.find(':', f + strlen(field));
+                            if (fc == std::string::npos || fc > f + 20) continue;
+                            fc++;
+                            while (fc < json.size() && (json[fc] == ' ' || json[fc] == '\t')) fc++;
+                            if (fc < json.size() && json[fc] == '"') {
+                                size_t fe = json.find('"', fc + 1);
+                                if (fe != std::string::npos)
+                                    return json.substr(fc + 1, fe - fc - 1);
+                            }
+                        }
+                    }
+                    // Fallback: check widgets_values array
+                    size_t wv = json.find("\"widgets_values\"", wp);
+                    if (wv != std::string::npos && wv < wb + 2000) {
+                        size_t ws = json.find('[', wv);
+                        if (ws != std::string::npos && ws < wv + 20) {
+                            ws++;
+                            while (ws < json.size() && (json[ws] == ' ' || json[ws] == '\t')) ws++;
+                            if (ws < json.size() && json[ws] == '"') {
+                                size_t we = json.find('"', ws + 1);
+                                if (we != std::string::npos)
+                                    return json.substr(ws + 1, we - ws - 1);
+                            }
                         }
                     }
                 }
