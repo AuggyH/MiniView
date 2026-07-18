@@ -1379,10 +1379,11 @@ void App::toggle_fullscreen(HWND hwnd) {
 void App::fit_to_window() {
     uint32_t iw, ih; m_renderer.image_size(iw, ih);
     if (iw == 0 || ih == 0) return;
-    D2D1_SIZE_U ts = m_renderer.target_size();
-    m_renderer.set_scale(std::min(
-        static_cast<float>(ts.width)  / iw,
-        static_cast<float>(ts.height) / ih));
+    RECT rc; GetClientRect(m_window.handle(), &rc);
+    float cw = static_cast<float>(rc.right - rc.left);
+    float ch = static_cast<float>(rc.bottom - rc.top);
+    if (cw <= 0 || ch <= 0) return;
+    m_renderer.set_scale(std::min(cw / iw, ch / ih));
     m_renderer.set_offset(0, 0);
 }
 
