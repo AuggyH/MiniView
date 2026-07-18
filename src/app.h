@@ -67,6 +67,7 @@ private:
     void    grid_ensure_visible();
     void    grid_render();
     void    handle_scrollbar_click(HWND hwnd, int mx, int my);
+    void    select_item(int idx, bool shift, bool ctrl);
     void    start_thumb_loader();
     void    stop_thumb_loader();
     void    request_thumb(int idx);
