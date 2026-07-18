@@ -575,18 +575,17 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
         if (y + gap > y_off + h) break;
         int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
         float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
+        float vw = 0;
         float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                  value, value_br.Get(), 10.0f);
+                                  value, value_br.Get(), 10.0f, &vw);
         if (out_clickable && !value.empty()) {
             D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
             out_clickable->push_back({cr, value});
             if (sel_idx == cur_idx) {
-                // Tight highlight: trim draw_text_line's built-in 4px padding
                 float py = y + 2.0f * dpi_s;
                 float hl_h = (y2 - 4.0f * dpi_s) - py;
                 if (hl_h < 10.0f * dpi_s) hl_h = 10.0f * dpi_s;
-                float tw = measure_text(value, 10.0f * dpi_s);
-                float hw = std::min(tw + 10.0f * dpi_s, val_w);
+                float hw = std::min(vw + 8.0f * dpi_s, val_w);
                 float hx = x + pad + lw + cgap - 4.0f * dpi_s;
                 D2D1_RECT_F hr = {hx, py, hx + hw + 4.0f * dpi_s, py + hl_h};
                 D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
@@ -620,8 +619,9 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
             if (y + gap > y_off + h) break;
             int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
             float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
+            float vw = 0;
             float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                      value, value_br.Get(), 10.0f);
+                                      value, value_br.Get(), 10.0f, &vw);
             if (out_clickable && !value.empty()) {
                 D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
                 out_clickable->push_back({cr, value});
@@ -629,8 +629,7 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                     float py = y + 2.0f * dpi_s;
                     float hl_h = (y2 - 4.0f * dpi_s) - py;
                     if (hl_h < 10.0f * dpi_s) hl_h = 10.0f * dpi_s;
-                    float tw = measure_text(value, 10.0f * dpi_s);
-                    float hw = std::min(tw + 10.0f * dpi_s, val_w);
+                    float hw = std::min(vw + 8.0f * dpi_s, val_w);
                     float hx = x + pad + lw + cgap - 4.0f * dpi_s;
                     D2D1_RECT_F hr = {hx, py, hx + hw + 4.0f * dpi_s, py + hl_h};
                     D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
@@ -690,11 +689,10 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
 
 float Renderer::draw_text_line(float x, float y, float w,
     const std::wstring& text, ID2D1SolidColorBrush* brush,
-    float font_size)
+    float font_size, float* out_width)
 {
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return y + 20;
 
-    // Use m_text_format with default font size, or create a sized one
     IDWriteTextFormat* fmt = m_text_format.Get();
     ComPtr<IDWriteTextFormat> sized_fmt;
     if (font_size > 0.0f && m_dwrite_factory) {
@@ -713,6 +711,7 @@ float Renderer::draw_text_line(float x, float y, float w,
 
     DWRITE_TEXT_METRICS metrics;
     layout->GetMetrics(&metrics);
+    if (out_width) *out_width = metrics.widthIncludingTrailingWhitespace;
     float h = metrics.height;
 
     D2D1_POINT_2F origin = {x, y};
