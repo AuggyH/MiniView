@@ -413,13 +413,20 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / 2.00f;  // 2s for debugging
+            m_anim_t = elapsed / 0.30f;  // 300ms
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
                 m_anim_thumb.Reset();
                 KillTimer(hwnd, 4);
                 m_anim_timer = 0;
+                // Execute pending action
+                switch (m_anim_action) {
+                case ACT_ENTER_IMAGE: open_image(m_index.path_at(m_grid_sel)); break;
+                case ACT_EXIT_GRID:   toggle_grid(); break;
+                case ACT_QUIT:        DestroyWindow(hwnd); return 0;
+                }
+                m_anim_action = ACT_NONE;
             }
             m_window.invalidate();
         }
@@ -757,13 +764,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
                 m_from_grid = true;
                 start_transition(hwnd, true);
-                toggle_grid();
-                navigate_to(m_grid_sel);
+                m_anim_action = ACT_ENTER_IMAGE;
                 begin_animation(hwnd);
             }
             return 0;
         }
-        if (m_has_image) { start_transition(hwnd, false); toggle_grid(); begin_animation(hwnd); return 0; }
+        if (m_has_image) { start_transition(hwnd, false); m_anim_action = ACT_EXIT_GRID; begin_animation(hwnd); return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -801,7 +807,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                toggle_grid();
+                m_anim_action = ACT_EXIT_GRID;
                 begin_animation(hwnd);
                 m_window.invalidate();
                 return 0;
@@ -814,16 +820,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                toggle_grid();
+                m_anim_action = ACT_EXIT_GRID;
                 begin_animation(hwnd);
                 m_window.invalidate();
                 return 0;
             }
             if (m_grid_mode && m_grid_sel >= 0) {
                 start_transition(hwnd, true);
-                open_image(m_index.path_at(m_grid_sel));
                 m_from_grid = true;
                 m_temp_preview = true;
+                m_anim_action = ACT_ENTER_IMAGE;
                 begin_animation(hwnd);
                 m_window.invalidate();
                 return 0;
@@ -2339,10 +2345,8 @@ void App::render_frame() {
                 auto full = get_preloaded(m_current_path);
                 if (full) { m_renderer.upload_image(full.Get()); m_using_thumb_preview = false; }
             }
-            if (!m_animating) {
-                m_renderer.draw_image();
-                m_renderer.draw_overlay();
-            }
+            m_renderer.draw_image();
+            m_renderer.draw_overlay();
         }
         if (m_animating) {
             uint32_t iw, ih; m_renderer.image_size(iw, ih);
@@ -2395,10 +2399,8 @@ void App::render_frame() {
         m_toolbar_items, m_toolbar_active);
     m_renderer.push_clip_below(title_h);
     if (m_has_image) {
-        if (!m_animating) {
-            m_renderer.draw_image();
-            m_renderer.draw_overlay();
-        }
+        m_renderer.draw_image();
+        m_renderer.draw_overlay();
         if (m_show_info) {
             std::vector<std::pair<std::wstring, std::wstring>> items;
             if (!m_info_meta.positive_prompt.empty())
