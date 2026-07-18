@@ -462,7 +462,8 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc) {
     m_d2d_context->DrawRoundedRectangle(&rr, br.Get(), sw);
 }
 
-void Renderer::draw_label(float x, float y, float w, const std::wstring& text, float font_size) {
+void Renderer::draw_label(float x, float y, float w, const std::wstring& text, float font_size,
+    float cr, float cg, float cb) {
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return;
     ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
@@ -471,17 +472,16 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
         fs, L"en-US", &tf);
     tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
-    float max_h = fs * 3.0f;  // 2 lines max
+    float max_h = fs * 3.0f;
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
         tf.Get(), w, max_h, &layout);
-    // Truncate with ellipsis after 2 lines
     DWRITE_TRIMMING trim = {};
     trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
     ComPtr<IDWriteInlineObject> ellipsis;
     m_dwrite_factory->CreateEllipsisTrimmingSign(tf.Get(), &ellipsis);
     layout->SetTrimming(&trim, ellipsis.Get());
     ComPtr<ID2D1SolidColorBrush> br;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.82f, 0.82f, 0.85f, 1.0f), &br);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(cr, cg, cb, 1.0f), &br);
     D2D1_POINT_2F pt = {x, y};
     m_d2d_context->DrawTextLayout(pt, layout.Get(), br.Get());
 }

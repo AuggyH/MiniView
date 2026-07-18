@@ -1896,7 +1896,8 @@ void App::grid_render() {
                 if (m_thumbs[idx2].orig_w > 0) {
                     float label_gap = 3.0f * dpi_s;
                     m_renderer.draw_label(x, ly + name_h + label_gap, w,
-                        std::to_wstring(m_thumbs[idx2].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f);
+                        std::to_wstring(m_thumbs[idx2].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f,
+                        0.5f, 0.5f, 0.55f);
                 }
         }
     }
