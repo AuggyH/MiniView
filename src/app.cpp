@@ -1645,20 +1645,37 @@ void App::grid_navigate(int dir, bool shift) {
 void App::grid_ensure_visible() {
     if (m_grid_cols == 0) return;
     int row = m_grid_sel / m_grid_cols;
-    int sbz2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
-    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz2;
-    int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap_h) / m_grid_cols;
-    int cell_h = thumb_w + m_thumb_gap_h;
-    int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell_h;
+    int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
 
-    int top_y = row * cell_h;
-    int bot_y = top_y + cell_h;
-    int view_top = m_grid_scroll_y;
-    int view_bot = m_grid_scroll_y + visible_rows * cell_h;
+    // Use actual row heights if available (from last render); fall back to uniform estimate
+    if (!m_row_heights.empty() && row < static_cast<int>(m_row_heights.size())) {
+        int top_y = 0;
+        for (int r = 0; r < row; ++r) top_y += m_row_heights[r];
+        int row_h = m_row_heights[row];
+        int bot_y = top_y + row_h;
 
-    if (top_y < view_top) m_grid_scroll_y = top_y - m_thumb_pad;
-    else if (bot_y > view_bot) m_grid_scroll_y = bot_y - visible_rows * cell_h + m_thumb_pad;
+        if (top_y < m_grid_scroll_y)
+            m_grid_scroll_y = top_y - m_thumb_pad;
+        else if (bot_y > m_grid_scroll_y + visible_h)
+            m_grid_scroll_y = bot_y - visible_h + m_thumb_pad;
+    } else {
+        // Fallback: uniform cell estimate
+        int sbz2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+        int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz2;
+        int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap_h) / m_grid_cols;
+        int cell_h = thumb_w + m_thumb_gap_h;
+        int top_y = row * cell_h;
+        int bot_y = top_y + cell_h;
+
+        if (top_y < m_grid_scroll_y) m_grid_scroll_y = top_y - m_thumb_pad;
+        else if (bot_y > m_grid_scroll_y + visible_h) m_grid_scroll_y = bot_y - visible_h + m_thumb_pad;
+    }
     if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
+    // Clamp to bottom
+    int total_h = 0;
+    for (auto h : m_row_heights) total_h += h;
+    int max_scroll = std::max(0, total_h - visible_h);
+    if (m_grid_scroll_y > max_scroll) m_grid_scroll_y = max_scroll;
 }
 
 void App::toggle_info() {
