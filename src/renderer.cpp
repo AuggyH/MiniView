@@ -345,7 +345,7 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         hint_size, L"en-US", &hint_fmt);
     hint_fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-    std::wstring hint = L"Esc / \u70B9\u51FB\u5173\u95ED";  // Esc / 点击关闭
+    std::wstring hint = L"\u6309 I \u5173\u95ED";  // 按 I 关闭
     D2D1_RECT_F hr = {card_x, card_y + card_h + 4.0f * dpi_s,
                       card_x + card_w, card_y + card_h + 20.0f * dpi_s};
     m_d2d_context->DrawText(hint.c_str(), static_cast<uint32_t>(hint.size()),
