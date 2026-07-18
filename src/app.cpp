@@ -1366,32 +1366,11 @@ void App::start_transition(HWND hwnd, bool forward) {
     m_anim_thumb.Reset();
 
     if (forward) {
-        // grid→image: save thumbnail bitmap, compute dest from image fit
         auto it = m_thumb_d2d.find(m_grid_sel);
         if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
-
-        // Compute destination rect (fitted image)
-        uint32_t iw, ih; m_renderer.image_size(iw, ih);
-        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
-        D2D1_SIZE_U ts = m_renderer.target_size();
-        float scale = std::min(static_cast<float>(ts.width) / iw,
-                               static_cast<float>(ts.height - m_toolbar_h) / ih);
-        float dw = iw * scale, dh = ih * scale;
-        float dx = (ts.width - dw) * 0.5f;
-        float dy = m_toolbar_h + (ts.height - m_toolbar_h - dh) * 0.5f;
-        m_anim_dst = {dx, dy, dx + dw, dy + dh};
     } else {
-        // image→grid: swap src/dst
-        m_anim_dst = m_anim_src;  // dest = thumbnail pos
-        // Source = current fitted image position
-        uint32_t iw, ih; m_renderer.image_size(iw, ih);
-        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
-        D2D1_SIZE_U ts = m_renderer.target_size();
-        float scale = m_renderer.scale();
-        float dw = iw * scale, dh = ih * scale;
-        float dx = (ts.width - dw) * 0.5f + m_renderer.offset_x();
-        float dy = (ts.height - dh) * 0.5f + m_renderer.offset_y() + m_renderer.scroll_y();
-        m_anim_src = {dx, dy, dx + dw, dy + dh};
+        // image→grid: dest = thumb pos
+        m_anim_dst = m_anim_src;
     }
 
     m_animating = true;
@@ -2319,6 +2298,18 @@ void App::grid_render() {
 
     m_renderer.pop_clip();
     if (m_animating) {
+        // Recompute dest/src in case window size changed
+        if (m_anim_forward) {
+            uint32_t iw, ih; m_renderer.image_size(iw, ih);
+            if (iw > 0 && ih > 0) {
+                float scale = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
+                                       static_cast<float>(m_renderer.target_size().height - m_toolbar_h) / ih);
+                float dw = iw * scale, dh = ih * scale;
+                float dx = (m_renderer.target_size().width - dw) * 0.5f;
+                float dy = m_toolbar_h + (m_renderer.target_size().height - m_toolbar_h - dh) * 0.5f;
+                m_anim_dst = {dx, dy, dx + dw, dy + dh};
+            }
+        }
         m_renderer.draw_fade_overlay(m_anim_t);
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
@@ -2339,6 +2330,17 @@ void App::render_frame() {
             m_renderer.draw_overlay();
         }
         if (m_animating) {
+            if (m_anim_forward) {
+                uint32_t iw, ih; m_renderer.image_size(iw, ih);
+                if (iw > 0 && ih > 0) {
+                    float scale = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
+                                           static_cast<float>(m_renderer.target_size().height - m_toolbar_h) / ih);
+                    float dw = iw * scale, dh = ih * scale;
+                    float dx = (m_renderer.target_size().width - dw) * 0.5f;
+                    float dy = m_toolbar_h + (m_renderer.target_size().height - m_toolbar_h - dh) * 0.5f;
+                    m_anim_dst = {dx, dy, dx + dw, dy + dh};
+                }
+            }
             m_renderer.draw_fade_overlay(m_anim_t);
             if (m_anim_thumb)
                 m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
@@ -2410,6 +2412,17 @@ void App::render_frame() {
     }
     m_renderer.pop_clip();
     if (m_animating) {
+        if (m_anim_forward) {
+            uint32_t iw, ih; m_renderer.image_size(iw, ih);
+            if (iw > 0 && ih > 0) {
+                float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
+                                   static_cast<float>(m_renderer.target_size().height - m_toolbar_h) / ih);
+                float dw = iw * s, dh = ih * s;
+                float dx = (m_renderer.target_size().width - dw) * 0.5f;
+                float dy = m_toolbar_h + (m_renderer.target_size().height - m_toolbar_h - dh) * 0.5f;
+                m_anim_dst = {dx, dy, dx + dw, dy + dh};
+            }
+        }
         m_renderer.draw_fade_overlay(m_anim_t);
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
