@@ -307,11 +307,11 @@ ImageMeta parse_comfyui(const std::string& json) {
                                     // Match common ComfyUI title patterns for positive/negative
                                     // \u6b63\u9762\u63d0\u793a\u8bcd = 正面提示词
                                     // \u6b63\u5411\u63d0\u793a\u8bcd = 正向提示词
-                                    if (title.find("\\u6b63\\u9762") != std::string::npos ||
-                                        title.find("\\u6b63\\u5411") != std::string::npos)
+                                    if (title.find("\u6b63\u9762") != std::string::npos ||
+                                        title.find("\u6b63\u5411") != std::string::npos)
                                         m.positive_prompt = utf8_to_wstring(text);
-                                    else if (title.find("\\u8d1f\\u9762") != std::string::npos ||
-                                             title.find("\\u53cd\\u5411") != std::string::npos)
+                                    else if (title.find("\u8d1f\u9762") != std::string::npos ||
+                                             title.find("\u53cd\u5411") != std::string::npos)
                                         m.negative_prompt = utf8_to_wstring(text);
                                 }
                             }
