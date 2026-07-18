@@ -345,7 +345,7 @@ void Renderer::draw_overlay() {
 }
 
 void Renderer::set_scale(float s) {
-    m_scale = std::max(0.01f, std::min(s, 100.0f));
+    m_scale = std::max(m_fit_scale, std::min(s, 100.0f));
 }
 
 void Renderer::set_offset(float x, float y) {
