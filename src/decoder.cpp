@@ -134,4 +134,84 @@ std::optional<ImageInfo> Decoder::probe(const std::wstring& path) {
     }
 }
 
+D2D1_COLOR_F Decoder::extract_dominant(IWICBitmapSource* src) {
+    D2D1_COLOR_F fallback = {0.10f, 0.10f, 0.12f, 1.0f};
+    if (!src || !m_factory) return fallback;
+
+    try {
+        // Downscale to 32x32 for fast histogram
+        ComPtr<IWICBitmapScaler> scaler;
+        HRESULT hr = m_factory->CreateBitmapScaler(&scaler);
+        if (FAILED(hr)) return fallback;
+
+        uint32_t sw, sh;
+        src->GetSize(&sw, &sh);
+        float scl = 32.0f / std::max(sw, sh);
+        uint32_t dw = std::max(1u, static_cast<uint32_t>(sw * scl));
+        uint32_t dh = std::max(1u, static_cast<uint32_t>(sh * scl));
+        hr = scaler->Initialize(src, dw, dh, WICBitmapInterpolationModeFant);
+        if (FAILED(hr)) return fallback;
+
+        // Convert to 32bpp RGBA
+        ComPtr<IWICFormatConverter> converter;
+        hr = m_factory->CreateFormatConverter(&converter);
+        if (FAILED(hr)) return fallback;
+        hr = converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppRGBA,
+            WICBitmapDitherTypeNone, nullptr, 0.0f, WICBitmapPaletteTypeCustom);
+        if (FAILED(hr)) return fallback;
+
+        // Copy to lockable bitmap
+        ComPtr<IWICBitmap> bmp;
+        hr = m_factory->CreateBitmapFromSource(converter.Get(), WICBitmapCacheOnDemand, &bmp);
+        if (FAILED(hr)) return fallback;
+
+        // Lock and read pixels
+        WICRect rc = {0, 0, static_cast<INT>(dw), static_cast<INT>(dh)};
+        ComPtr<IWICBitmapLock> lock;
+        hr = bmp->Lock(&rc, WICBitmapLockRead, &lock);
+        if (FAILED(hr)) return fallback;
+
+        UINT stride = 0, size = 0;
+        BYTE* data = nullptr;
+        lock->GetDataPointer(&size, &data);
+        lock->GetStride(&stride);
+        if (!data || size == 0) return fallback;
+
+        // Histogram: quantize each channel to 4 bits (16 levels) → 4096 buckets
+        int buckets[4096] = {};
+        for (UINT y = 0; y < dh; ++y) {
+            for (UINT x = 0; x < dw; ++x) {
+                BYTE* p = data + y * stride + x * 4;
+                int r = p[0] >> 4;  // 0–15
+                int g = p[1] >> 4;
+                int b = p[2] >> 4;
+                ++buckets[(r << 8) | (g << 4) | b];
+            }
+        }
+
+        // Find max bucket
+        int max_idx = 0, max_cnt = 0;
+        for (int i = 0; i < 4096; ++i) {
+            if (buckets[i] > max_cnt) {
+                max_cnt = buckets[i];
+                max_idx = i;
+            }
+        }
+
+        // Convert bucket index back to color (use bucket center)
+        int br = (max_idx >> 8) & 0xF;
+        int bg = (max_idx >> 4) & 0xF;
+        int bb = max_idx & 0xF;
+        D2D1_COLOR_F c;
+        c.r = (br * 16.0f + 8.0f) / 255.0f;
+        c.g = (bg * 16.0f + 8.0f) / 255.0f;
+        c.b = (bb * 16.0f + 8.0f) / 255.0f;
+        c.a = 1.0f;
+        return c;
+
+    } catch (...) {
+        return fallback;
+    }
+}
+
 } // namespace mv
