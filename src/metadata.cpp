@@ -104,39 +104,57 @@ static float json_float(const std::string& json, const std::string& key) {
 
 /// Find a node by class_type, return the "inputs" sub-object
 static std::string find_node(const std::string& json, const std::string& class_type) {
-    std::string key = "\"class_type\":\"" + class_type + "\"";
+    // Search for "class_type": "ClassName" with optional whitespace after colon
+    std::string key = "\"class_type\"";
     size_t pos = json.find(key);
     if (pos == std::string::npos) return "";
 
-    // Backtrack to find the node's opening brace
-    size_t node_start = pos;
-    int depth = 0;
-    while (node_start > 0) {
-        if (json[node_start] == '}') depth++;
-        else if (json[node_start] == '{') {
-            if (depth == 0) break;
-            depth--;
+    // Scan all class_type instances
+    while (pos != std::string::npos) {
+        // Find the value after ":"
+        size_t colon = json.find(':', pos + key.size());
+        if (colon == std::string::npos) break;
+        size_t val_start = colon + 1;
+        while (val_start < json.size() && (json[val_start] == ' ' || json[val_start] == '\t'))
+            val_start++;
+        if (val_start >= json.size() || json[val_start] != '"') { pos = json.find(key, val_start); continue; }
+        size_t val_end = json.find('"', val_start + 1);
+        if (val_end == std::string::npos) { pos = json.find(key, val_end); continue; }
+        std::string found_class = json.substr(val_start + 1, val_end - val_start - 1);
+        if (found_class != class_type) { pos = json.find(key, val_end); continue; }
+
+        // Found the right class_type node — backtrack to find the node's opening brace
+        size_t node_start = pos;
+        int depth = 0;
+        while (node_start > 0) {
+            if (json[node_start] == '}') depth++;
+            else if (json[node_start] == '{') {
+                if (depth == 0) break;
+                depth--;
+            }
+            node_start--;
         }
-        node_start--;
-    }
-    if (node_start == 0) return "";
+        if (node_start == 0) { pos = json.find(key, val_end); continue; }
 
-    // Find the "inputs" section within this node
-    std::string node = json.substr(node_start, pos - node_start + key.size() + 70); // rough cut
-    size_t inp = node.find("\"inputs\":");
-    if (inp == std::string::npos) return "";
+        // Find the "inputs" section within this node
+        size_t inp = json.find("\"inputs\"", node_start);
+        if (inp == std::string::npos || inp > val_end + 500) {
+            pos = json.find(key, val_end); continue;
+        }
 
-    // Extract inputs object (brace-balanced)
-    size_t start = node.find('{', inp);
-    if (start == std::string::npos) return "";
-    depth = 1;
-    size_t end = start + 1;
-    while (end < node.size() && depth > 0) {
-        if (node[end] == '{') depth++;
-        else if (node[end] == '}') depth--;
-        end++;
+        // Extract inputs object (brace-balanced)
+        size_t start = json.find('{', inp);
+        if (start == std::string::npos) { pos = json.find(key, val_end); continue; }
+        depth = 1;
+        size_t end = start + 1;
+        while (end < json.size() && depth > 0) {
+            if (json[end] == '{') depth++;
+            else if (json[end] == '}') depth--;
+            end++;
+        }
+        return json.substr(start, end - start);
     }
-    return node.substr(start, end - start);
+    return "";
 }
 
 ImageMeta parse_comfyui(const std::string& json) {
@@ -169,20 +187,34 @@ ImageMeta parse_comfyui(const std::string& json) {
 
     // Extract prompts from CLIPTextEncode nodes — first is positive, second is negative
     {
-        std::string search = "\"class_type\":\"CLIPTextEncode\"";
+        std::string search = "\"class_type\"";
         size_t pos = 0, found = 0;
         while (found < 2 && (pos = json.find(search, pos)) != std::string::npos) {
-            pos += search.size();
-            // Find the node object
-            auto node_inputs = json.substr(pos - search.size() - 4, 200); // rough
-            size_t inp = node_inputs.find("\"inputs\":");
-            if (inp == std::string::npos) continue;
-            size_t ts = node_inputs.find("\"text\":\"", inp);
-            if (ts == std::string::npos) continue;
-            ts += 8;
-            size_t te = node_inputs.find('\"', ts);
-            if (te == std::string::npos) continue;
-            std::string txt = node_inputs.substr(ts, te - ts);
+            // Find value after colon
+            size_t colon = json.find(':', pos + search.size());
+            if (colon == std::string::npos) break;
+            size_t vs = colon + 1;
+            while (vs < json.size() && (json[vs] == ' ' || json[vs] == '\t')) vs++;
+            if (vs >= json.size() || json[vs] != '"') { pos = vs; continue; }
+            size_t ve = json.find('"', vs + 1);
+            if (ve == std::string::npos) { pos = vs + 1; continue; }
+            std::string ct = json.substr(vs + 1, ve - vs - 1);
+            pos = ve + 1;
+            if (ct != "CLIPTextEncode") continue;
+
+            // Find text value within this node
+            size_t inp = json.find("\"inputs\"", pos);
+            if (inp == std::string::npos || inp > ve + 1000) continue;
+            size_t ts = json.find("\"text\"", inp);
+            if (ts == std::string::npos || ts > inp + 500) continue;
+            size_t tvs = json.find(':', ts + 6);
+            if (tvs == std::string::npos) continue;
+            tvs++;
+            while (tvs < json.size() && (json[tvs] == ' ' || json[tvs] == '\t')) tvs++;
+            if (tvs >= json.size() || json[tvs] != '"') continue;
+            size_t tve = json.find('"', tvs + 1);
+            if (tve == std::string::npos) continue;
+            std::string txt = json.substr(tvs + 1, tve - tvs - 1);
             if (found == 0)
                 m.positive_prompt = utf8_to_wstring(txt);
             else
