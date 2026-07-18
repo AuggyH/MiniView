@@ -656,8 +656,10 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
         m_d2d_context->FillRoundedRectangle(&trr, toast_bg.Get());
         ComPtr<ID2D1SolidColorBrush> toast_txt;
         m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.88f, 1.0f), &toast_txt);
-        draw_text_line(x + pad + 10.0f * dpi_s, toast_y + 7.0f * dpi_s,
-                       toast_tw, *toast, toast_txt.Get(), 11.0f);
+        float tw = measure_text(*toast, 11.0f);
+        float tx = x + (w - tw) * 0.5f;
+        draw_text_line(tx, toast_y + 7.0f * dpi_s,
+                       tw + 4.0f * dpi_s, *toast, toast_txt.Get(), 11.0f);
     }
 
     // Pop panel clip
