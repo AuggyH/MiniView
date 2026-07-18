@@ -457,7 +457,8 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc) {
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.29f, 0.56f, 1.0f, 1.0f), &br);
     float r = 4.0f * m_dpi_y / 96.0f;
     float sw = 2.0f * m_dpi_y / 96.0f;
-    D2D1_ROUNDED_RECT rr = {rc, r, r};
+    float outer_r = r + sw * 0.5f;
+    D2D1_ROUNDED_RECT rr = {rc, outer_r, outer_r};
     m_d2d_context->DrawRoundedRectangle(&rr, br.Get(), sw);
 }
 
