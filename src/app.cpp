@@ -2174,8 +2174,10 @@ void App::grid_render() {
         static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y), sb_active);
 
     // Title bar with menus
+    float title_h2 = m_title_h * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
         m_toolbar_items, m_toolbar_active);
+    m_renderer.push_clip_below(title_h2);
 
     // Side info panel
     {
@@ -2232,6 +2234,7 @@ void App::grid_render() {
         m_panel_scroll_y = std::min(m_panel_scroll_y, max_scroll);
     }
 
+    m_renderer.pop_clip();
     m_renderer.end_frame();
 }
 
@@ -2276,8 +2279,10 @@ void App::render_frame() {
     m_renderer.clear();
     // Draw custom title bar (includes menu items)
     float tw = static_cast<float>(m_renderer.target_size().width);
+    float title_h = m_title_h * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
         m_toolbar_items, m_toolbar_active);
+    m_renderer.push_clip_below(title_h);
     if (m_has_image) {
         m_renderer.draw_image();
         m_renderer.draw_overlay();
@@ -2310,6 +2315,7 @@ void App::render_frame() {
     } else {
         m_renderer.draw_hint(L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6");
     }
+    m_renderer.pop_clip();
     m_renderer.end_frame();
 }
 
