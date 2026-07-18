@@ -1069,7 +1069,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         }
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING | (m_recursive ? MF_CHECKED : 0), 16, L"递归浏览子文件夹\tCtrl+R");
-        AppendMenuW(popup, MF_STRING, 17, L"方形缩略图\tA");
+        AppendMenuW(popup, MF_STRING, IDM_THUMB_SQUARE, L"方形缩略图\tA");
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING, 30, L"查看生成信息\tI");
         break;
@@ -1147,10 +1147,11 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     // Handle commands
     switch (cmd) {
-    case 1: case 2: case 3: case 10: case 16: case 17:
+    case 1: case 2: case 3: case 10: case 16:
     case 20: case 21: case 30: case 31:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
     case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
+    case IDM_THUMB_SQUARE:
         SendMessageW(hwnd, WM_COMMAND, cmd, 0); break;
     }
 }
