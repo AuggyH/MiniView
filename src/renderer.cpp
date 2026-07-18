@@ -596,7 +596,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 ComPtr<ID2D1SolidColorBrush> sel_br;
                 m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
                 m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
-                draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
+                draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f, nullptr, 10);
             }
         }
         y = std::max(y1, y2) + gap - 4.0f * dpi_s;
@@ -637,7 +637,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                     ComPtr<ID2D1SolidColorBrush> sel_br;
                     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
                     m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
-                    draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
+                    draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f, nullptr, 10);
                 }
             }
             y = std::max(y1, y2) + gap - 4.0f * dpi_s;
