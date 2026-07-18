@@ -2129,6 +2129,7 @@ void App::grid_render() {
                 if (!meta.sampler.empty()) pgen.push_back({L"\u91C7\u6837\u5668", meta.sampler});
                 if (!meta.positive_prompt.empty()) pgen.push_back({L"\u6B63\u5411\u63D0\u793A\u8BCD", meta.positive_prompt});
                 if (!meta.negative_prompt.empty()) pgen.push_back({L"\u53CD\u5411\u63D0\u793A\u8BCD", meta.negative_prompt});
+                if (!meta.lora.empty()) pgen.push_back({L"LoRA", meta.lora});
             }
         } else {
             pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
@@ -2193,6 +2194,8 @@ void App::render_frame() {
                 items.push_back({L"\u63D0\u793A\u8BCD", m_info_meta.positive_prompt});
             if (!m_info_meta.negative_prompt.empty())
                 items.push_back({L"\u53CD\u5411\u8BCD", m_info_meta.negative_prompt});
+            if (!m_info_meta.lora.empty())
+                items.push_back({L"LoRA", m_info_meta.lora});
             if (!m_info_meta.model.empty())
                 items.push_back({L"\u6A21\u578B", m_info_meta.model});
             if (!m_info_meta.vae.empty())
