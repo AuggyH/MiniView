@@ -843,27 +843,18 @@ void App::open_image(const std::wstring& path) {
 
         m_window.invalidate();
     } catch (const std::exception&) {
-        SendMessageW(m_window.handle(), WM_SETTEXT, 0, reinterpret_cast<LPARAM>(L"MinView - Error"));
+        update_title();
     }
 }
 
 void App::update_title() {
-    std::wstring title;
-
-    if (m_grid_mode) {
-        title = L"MinView  |  " + std::to_wstring(m_index.size()) + L" files";
-    } else if (!m_has_image || m_current_path.empty()) {
-        title = L"MinView";
-    } else {
-        size_t pos = m_current_path.find_last_of(L"\\/");
-        std::wstring name = (pos != std::wstring::npos)
-            ? m_current_path.substr(pos + 1) : m_current_path;
-        uint32_t iw, ih; m_renderer.image_size(iw, ih);
-        title = name + L"  (" + std::to_wstring(iw) + L"x" + std::to_wstring(ih) + L")  -  MinView";
+    // Keep title static — system hook garbles custom window class titles
+    // Image info is shown via overlay / info card instead
+    static bool once = false;
+    if (!once) {
+        once = true;
+        SetWindowTextW(m_window.handle(), L"MinView");
     }
-
-    // Use SendMessageW directly — may bypass SetWindowTextW hooks
-    SendMessageW(m_window.handle(), WM_SETTEXT, 0, reinterpret_cast<LPARAM>(title.c_str()));
 }
 
 void App::navigate_to(int idx) {
