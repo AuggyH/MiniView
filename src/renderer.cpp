@@ -908,7 +908,7 @@ void Renderer::draw_fade_overlay(float t) {
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.0f, 0.0f, 0.0f, std::clamp(alpha, 0.0f, 1.0f)), &br);
+        D2D1::ColorF(1.0f, 1.0f, 1.0f, std::clamp(alpha, 0.0f, 1.0f)), &br);
     D2D1_RECT_F rc = {0, 0, static_cast<float>(m_target_size.width),
                       static_cast<float>(m_target_size.height)};
     m_d2d_context->FillRectangle(&rc, br.Get());
