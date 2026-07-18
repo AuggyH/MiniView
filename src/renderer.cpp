@@ -418,9 +418,6 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     D2D1_SIZE_F bmp_size = thumb->GetSize();
     if (bmp_size.width == 0 || bmp_size.height == 0) return;
 
-    // Nearest-neighbor: no GPU up/down-sampling blur. Decode res ≈ display res.
-    auto interp = D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
-
     if (square) {
         float scale = std::max(w / bmp_size.width, h / bmp_size.height);
         float dw = bmp_size.width * scale;
@@ -430,7 +427,8 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
         D2D1_RECT_F clip = {x, y, x + w, y + h};
         m_d2d_context->PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
         D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
-        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f, interp, nullptr);
+        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
         m_d2d_context->PopAxisAlignedClip();
     } else {
         float scale = std::min(w / bmp_size.width, h / bmp_size.height);
@@ -439,7 +437,8 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
         float ox = x + (w - dw) / 2.0f;
         float oy = y + (h - dh) / 2.0f;
         D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
-        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f, interp, nullptr);
+        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
     }
 }
 
