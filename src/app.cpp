@@ -1242,18 +1242,14 @@ void App::request_thumb(int idx) {
 }
 
 void App::toggle_grid() {
-    int saved_scroll = m_grid_scroll_y;
     m_grid_mode = !m_grid_mode;
 
     if (m_grid_mode) {
         int n = static_cast<int>(m_index.size());
-        bool re_entry = (m_thumbs.size() == static_cast<size_t>(n));
-        if (!re_entry) {
-            m_thumbs.clear();
-            m_thumbs.resize(n);
-            m_thumb_d2d.clear();
-        }
-        m_grid_scroll_y = re_entry ? saved_scroll : 0;
+        m_thumbs.clear();
+        m_thumbs.resize(n);
+        m_thumb_d2d.clear();
+        m_grid_scroll_y = m_grid_scroll_saved;
         m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
         m_selected.clear();
         m_selected.resize(n, false);
@@ -1286,7 +1282,8 @@ void App::toggle_grid() {
         // 100ms timer for lazy thumbnail loading (fires even when unfocused)
         m_grid_timer = SetTimer(m_window.handle(), 1, 100, nullptr);
     } else {
-        // Exit grid
+        // Exit grid — save scroll position
+        m_grid_scroll_saved = m_grid_scroll_y;
         if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
         stop_thumb_loader();
         m_thumbs.clear();

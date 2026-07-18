@@ -113,6 +113,7 @@ private:
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     bool  m_scroll_active = false;
+    int   m_grid_scroll_saved = 0;
     ImageMeta m_info_meta;
 
     // Multi-select (grid only)
