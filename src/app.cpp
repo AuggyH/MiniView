@@ -472,11 +472,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         // Scrollbar click in grid mode?
         if (m_grid_mode) {
-            int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
-            int sb_x = gw - 18;
-            int sb_w = 12;
+            int sb_zone2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
+            int sb_x = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone2;
             int sx = GET_X_LPARAM(lp);
-            if (sx >= sb_x && sx < sb_x + sb_w && ty >= m_toolbar_h &&
+            if (sx >= sb_x && sx < sb_x + sb_zone2 && ty >= m_toolbar_h &&
                 ty < static_cast<int>(m_renderer.target_size().height)) {
                 handle_scrollbar_click(hwnd, sx, ty);
                 return 0;
@@ -511,6 +510,19 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_window.invalidate();
             }
             return 0;
+        }
+        // Scrollbar hover tracking (for cursor + highlight)
+        if (m_grid_mode) {
+            int ty2 = GET_Y_LPARAM(lp);
+            int sb_zone2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
+            int sb_x2 = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone2;
+            int tx2 = GET_X_LPARAM(lp);
+            bool in_sb = (tx2 >= sb_x2 && tx2 < sb_x2 + sb_zone2 && ty2 >= m_toolbar_h &&
+                          ty2 < static_cast<int>(m_renderer.target_size().height));
+            if (in_sb != m_scrollbar_hover) {
+                m_scrollbar_hover = in_sb;
+                m_window.invalidate();
+            }
         }
         // Toolbar hover tracking
         {
@@ -694,6 +706,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+
+    case WM_SETCURSOR:
+        if (LOWORD(lp) == HTCLIENT && m_grid_mode && m_scrollbar_hover) {
+            SetCursor(LoadCursor(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        break;  // fall through to DefWindowProc for other areas
     }
     return -1;
 }
@@ -1421,7 +1440,8 @@ void App::toggle_grid() {
         if (!re_entry) start_thumb_loader();
 
         // Request first visible page of thumbnails
-        int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+        int sb_zone3 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+        int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone3;
         int cols = std::max(1, (gw + m_thumb_gap) / (m_thumb_cell + m_thumb_gap));
         m_grid_cols = cols;
         int thumb_w = (gw - (cols - 1) * m_thumb_gap) / cols;
@@ -1452,7 +1472,8 @@ void App::toggle_grid() {
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
     int cols = m_grid_cols, gap = m_thumb_gap;
-    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int sbz = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz;
     int usable_w = gw - (cols - 1) * gap;
     int total = static_cast<int>(m_index.size());
 
@@ -1566,7 +1587,8 @@ void App::grid_navigate(int dir, bool shift) {
 void App::grid_ensure_visible() {
     if (m_grid_cols == 0) return;
     int row = m_grid_sel / m_grid_cols;
-    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int sbz2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+    int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz2;
     int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap) / m_grid_cols;
     int cell_h = thumb_w + m_thumb_gap;
     int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell_h;
@@ -1689,7 +1711,8 @@ void App::grid_render() {
     m_renderer.clear();
 
     int total = static_cast<int>(m_index.size());
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int sb_zone = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone;
     int cols = std::max(1, (grid_area_w + m_thumb_gap) / (m_thumb_cell + m_thumb_gap));
     m_grid_cols = cols;
     int gap = m_thumb_gap;
@@ -1838,12 +1861,16 @@ void App::grid_render() {
     float tw = static_cast<float>(m_renderer.target_size().width);
     float view_h = static_cast<float>(m_renderer.target_size().height);
 
-    // Scrollbar
+    // Scrollbar — centered in sb_zone between grid area and panel
     int total_h = 0;
     for (auto& ri : rows) total_h += ri.row_h + gap + ri.label_extra;
     m_grid_total_h = total_h;  // cache for scrollbar interaction
-    m_renderer.draw_scrollbar(px - 18.0f, static_cast<float>(m_toolbar_h), 12.0f, view_h - m_toolbar_h,
-        static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y));
+    float sb_x = static_cast<float>(m_renderer.target_size().width) - m_panel_width - static_cast<float>(sb_zone);
+    float sb_w = static_cast<float>(sb_zone) * 0.6f;  // 60% of zone = actual bar
+    float sb_x0 = sb_x + (sb_zone - sb_w) / 2.0f;     // centered
+    bool sb_active = m_scrollbar_dragging || m_scrollbar_hover;
+    m_renderer.draw_scrollbar(sb_x0, static_cast<float>(m_toolbar_h), sb_w, view_h - m_toolbar_h,
+        static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y), sb_active);
 
     // Toolbar always on top
     m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);

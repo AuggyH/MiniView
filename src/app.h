@@ -124,6 +124,7 @@ private:
     HWND  m_tooltip = nullptr;
     bool  m_scroll_active = false;
     bool  m_scrollbar_dragging = false;  // scrollbar thumb drag active
+    bool  m_scrollbar_hover    = false;  // mouse hovering over scrollbar
     int   m_scrollbar_drag_y = 0;        // mouse y when drag started
     int   m_scrollbar_drag_pos = 0;      // scroll position when drag started
     int   m_grid_total_h = 0;            // cached total grid content height

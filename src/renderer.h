@@ -35,7 +35,7 @@ public:
         const std::vector<std::pair<std::wstring, std::wstring>>& info,
         const std::vector<std::pair<std::wstring, std::wstring>>& gen_info);
     void draw_scrollbar(float x, float y, float w, float h,
-        float total, float view, float pos);
+        float total, float view, float pos, bool active = false);
     float draw_text_line(float x, float y, float w,
         const std::wstring& text, ID2D1SolidColorBrush* brush,
         float font_size = 0.0f);  // 0 = use m_text_format size
