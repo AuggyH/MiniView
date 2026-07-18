@@ -387,6 +387,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEWHEEL: {
         if (m_grid_mode) {
             float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
+            bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+
+            if (ctrl) {
+                // Ctrl+Wheel = zoom thumbnail size
+                m_thumb_zoom = std::clamp(m_thumb_zoom + delta * 0.1f, 0.4f, 3.0f);
+                m_thumb_d2d.clear();  // force D2D bitmap recreate at new size
+                m_window.invalidate();
+                return 0;
+            }
+
             m_grid_scroll_y -= static_cast<int>(delta * 60);
             if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
             m_scroll_active = true;
@@ -1747,7 +1757,8 @@ void App::grid_render() {
     int total = static_cast<int>(m_index.size());
     int sb_zone = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
     int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone;
-    int cols = std::max(1, (grid_area_w + m_thumb_gap) / (m_thumb_cell + m_thumb_gap));
+    int eff_cell = static_cast<int>(m_thumb_cell * m_thumb_zoom);
+    int cols = std::max(1, (grid_area_w + m_thumb_gap) / (eff_cell + m_thumb_gap));
     m_grid_cols = cols;
     int gap = m_thumb_gap;
     int usable_w = grid_area_w - (cols - 1) * gap;
