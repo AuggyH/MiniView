@@ -304,10 +304,19 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             float tw = static_cast<float>(m_renderer.target_size().width);
             float btn_w = 46.0f * dpi_s;
             float cx = tw - btn_w;
-            if (pt.x >= cx)                return HTCLIENT;  // close btn
-            if (pt.x >= cx - btn_w)        return HTCLIENT;  // max btn
-            if (pt.x >= cx - btn_w * 2)    return HTCLIENT;  // min btn
-            return HTCAPTION;  // drag title bar
+            // Window buttons → HTCLIENT (handled by WM_LBUTTONDOWN)
+            if (pt.x >= cx)                return HTCLIENT;
+            if (pt.x >= cx - btn_w)        return HTCLIENT;
+            if (pt.x >= cx - btn_w * 2)    return HTCLIENT;
+            // Menu items → HTCLIENT (handled by WM_LBUTTONDOWN)
+            float mx = 12.0f * dpi_s + 80.0f * dpi_s + 8.0f * dpi_s;
+            float fsize = 12.0f * dpi_s;
+            for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
+                float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + 16.0f * dpi_s;
+                if (pt.x >= mx && pt.x < mx + iw) return HTCLIENT;
+                mx += iw;
+            }
+            return HTCAPTION;  // rest → drag
         }
         break;
     }
