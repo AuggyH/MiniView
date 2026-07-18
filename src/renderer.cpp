@@ -458,13 +458,15 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
         fs, L"en-US", &tf);
     tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
-    float max_h = fs * 2.7f;  // 2 lines max
+    float max_h = fs * 3.0f;  // 2 lines max
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
         tf.Get(), w, max_h, &layout);
     // Truncate with ellipsis after 2 lines
     DWRITE_TRIMMING trim = {};
     trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
-    layout->SetTrimming(&trim, nullptr);
+    ComPtr<IDWriteInlineObject> ellipsis;
+    m_dwrite_factory->CreateEllipsisTrimmingSign(tf.Get(), &ellipsis);
+    layout->SetTrimming(&trim, ellipsis.Get());
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.6f, 0.6f, 0.64f, 1.0f), &br);
     D2D1_POINT_2F pt = {x, y};
@@ -479,12 +481,14 @@ float Renderer::label_height(const std::wstring& text, float w, float font_size)
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     ComPtr<IDWriteTextLayout> layout;
-    float max_h = fs * 2.7f;  // 2 lines max
+    float max_h = fs * 3.0f;  // 2 lines max
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
         tf.Get(), w, max_h, &layout);
     DWRITE_TRIMMING trim = {};
     trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
-    layout->SetTrimming(&trim, nullptr);
+    ComPtr<IDWriteInlineObject> ellipsis;
+    m_dwrite_factory->CreateEllipsisTrimmingSign(tf.Get(), &ellipsis);
+    layout->SetTrimming(&trim, ellipsis.Get());
     DWRITE_TEXT_METRICS m;
     layout->GetMetrics(&m);
     return m.height;
