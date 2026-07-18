@@ -40,6 +40,7 @@ public:
         const std::wstring& text, ID2D1SolidColorBrush* brush);
     void draw_toolbar(float w, const std::vector<std::wstring>& items,
         int active_idx);
+    float measure_text(const std::wstring& text, float font_size);
 
     // Create a D2D bitmap from a WIC source (for grid thumbnails)
     HRESULT create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** out);

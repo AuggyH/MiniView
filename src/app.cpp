@@ -450,9 +450,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (ty < m_toolbar_h) {
             int tx = GET_X_LPARAM(lp);
             float x = 12.0f;
+            float f_dpi = static_cast<float>(GetDpiForWindow(hwnd));
+            float fsize = 13.0f * f_dpi / 96.0f;
             m_toolbar_active = -1;
             for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                float iw = static_cast<float>(m_toolbar_items[i].size()) * 10.0f + 24.0f;
+                float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + 24.0f;
                 if (tx >= static_cast<int>(x) && tx < static_cast<int>(x + iw)) {
                     m_toolbar_active = i;
                     POINT pt = {static_cast<int>(x), m_toolbar_h};
@@ -962,13 +964,14 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(popup, MF_STRING, 16, L"递归浏览\tCtrl+R");
         AppendMenuW(popup, MF_STRING, 17, L"方形缩略图\tA");
+        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(popup, MF_STRING, 30, L"查看生成信息\tI");
         break;
     case 2: // 编辑
         AppendMenuW(popup, MF_STRING, 20, L"复制\tCtrl+C");
         AppendMenuW(popup, MF_STRING, 21, L"复制图片");
         break;
     case 3: // 帮助
-        AppendMenuW(popup, MF_STRING, 30, L"查看生成信息\tI");
         AppendMenuW(popup, MF_STRING, 31, L"关于 MinView");
         break;
     }
@@ -1506,7 +1509,7 @@ void App::grid_render() {
     m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
 
     int total = static_cast<int>(m_index.size());
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width);  // full window
     int cols = std::max(1, (grid_area_w - m_thumb_pad * 2 + m_thumb_gap) / m_cell_size);
     m_grid_cols = cols;
     int cell = m_thumb_size + m_thumb_gap;

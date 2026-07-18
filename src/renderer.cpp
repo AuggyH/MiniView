@@ -549,6 +549,20 @@ float Renderer::draw_text_line(float x, float y, float w,
     return y + h + 4;  // 4px gap
 }
 
+float Renderer::measure_text(const std::wstring& text, float font_size) {
+    if (!m_dwrite_factory) return 0;
+    ComPtr<IDWriteTextFormat> tf;
+    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        font_size, L"en-US", &tf);
+    ComPtr<IDWriteTextLayout> layout;
+    m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
+        tf.Get(), 2000.0f, 30.0f, &layout);
+    DWRITE_TEXT_METRICS m;
+    layout->GetMetrics(&m);
+    return m.width;
+}
+
 void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int active_idx) {
     if (!m_d2d_context || !m_dwrite_factory) return;
 
