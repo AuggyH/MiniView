@@ -33,7 +33,8 @@ public:
     void draw_side_panel(float x, float y_off, float w, float h,
         ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
         const std::vector<std::pair<std::wstring, std::wstring>>& info,
-        const std::vector<std::pair<std::wstring, std::wstring>>& gen_info);
+        const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
+        std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable = nullptr);
     void draw_scrollbar(float x, float y, float w, float h,
         float total, float view, float pos, bool active = false);
     float draw_text_line(float x, float y, float w,
