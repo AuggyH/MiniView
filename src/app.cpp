@@ -421,6 +421,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (pt.x >= px && m_panel_width > 0) {
                 m_panel_scroll_y -= delta * 40.0f;
                 if (m_panel_scroll_y < 0) m_panel_scroll_y = 0;
+                float max_scroll = std::max(0.0f, m_panel_total_h - (m_renderer.target_size().height - (float)m_toolbar_h));
+                if (m_panel_scroll_y > max_scroll) m_panel_scroll_y = max_scroll;
                 m_window.invalidate();
                 return 0;
             }
@@ -2151,8 +2153,9 @@ void App::grid_render() {
             preview_bmp, pvw, pvh, pinfo, pgen, &m_panel_clickable,
             m_panel_sel, m_panel_copied.empty() ? nullptr : &m_panel_copied,
             m_panel_scroll_y);
+        m_panel_total_h = panel_h;
         float max_scroll = std::max(0.0f, panel_h - (ph - m_toolbar_h));
-        if (m_panel_scroll_y > max_scroll) m_panel_scroll_y = max_scroll;
+        m_panel_scroll_y = std::min(m_panel_scroll_y, max_scroll);
     }
 
     m_renderer.end_frame();
