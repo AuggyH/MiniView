@@ -1642,12 +1642,16 @@ void App::grid_render() {
         std::wstring name = (pos != std::wstring::npos) ? selpath.substr(pos + 1) : selpath;
         pinfo.push_back({L"\u6587\u4EF6\u540D", name});
 
-        if (m_grid_sel < static_cast<int>(m_thumbs.size()) && m_thumbs[m_grid_sel].wic) {
-            m_thumbs[m_grid_sel].wic->GetSize(&pvw, &pvh);
+        // Get actual file resolution (not thumbnail size)
+        auto probe = m_decoder.probe(selpath);
+        if (probe) {
+            pvw = probe->width; pvh = probe->height;
             pinfo.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(pvw) + L"\u00D7" + std::to_wstring(pvh)});
-            auto dit2 = m_thumb_d2d.find(m_grid_sel);
-            if (dit2 != m_thumb_d2d.end()) preview_bmp = dit2->second.Get();
         }
+
+        // Panel preview thumbnail
+        auto dit2 = m_thumb_d2d.find(m_grid_sel);
+        if (dit2 != m_thumb_d2d.end()) preview_bmp = dit2->second.Get();
 
         WIN32_FILE_ATTRIBUTE_DATA attr;
         if (GetFileAttributesExW(selpath.c_str(), GetFileExInfoStandard, &attr)) {
