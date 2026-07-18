@@ -409,7 +409,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_window.invalidate();
         }
         if (wp == 4) {
-            m_anim_t += 0.04f;  // ~30ms/750ms — very slow, very visible
+            m_anim_t += 0.06f;  // ~16ms/260ms
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
@@ -1364,9 +1364,8 @@ void App::start_transition(HWND hwnd) {
     // Snapshot already captured from previous frame's render
     m_animating = true;
     m_anim_t = 0.0f;
-    m_snapshot.Reset();  // force fallback (visible test)
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
-    m_anim_timer = SetTimer(hwnd, 4, 30, nullptr);  // slower ticks
+    m_anim_timer = SetTimer(hwnd, 4, 16, nullptr);
 }
 
 void App::toggle_fullscreen(HWND hwnd) {
