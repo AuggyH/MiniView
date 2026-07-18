@@ -1248,12 +1248,21 @@ void App::grid_render() {
             float y = static_cast<float>(THUMB_PAD + r * cell - m_grid_scroll_y);
 
             // Check if we have a D2D bitmap cached; if not, create one from WIC
+            // (must hold m_thumb_mutex when reading thumb state — worker threads write here)
             auto dit = m_thumb_d2d.find(idx);
-            if (dit == m_thumb_d2d.end() && idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].loaded) {
-                auto& te = m_thumbs[idx];
-                if (te.wic) {
+            if (dit == m_thumb_d2d.end()) {
+                bool loaded = false;
+                ComPtr<IWICBitmapSource> wic_copy;
+                {
+                    std::lock_guard lock(m_thumb_mutex);
+                    if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].loaded) {
+                        wic_copy = m_thumbs[idx].wic;
+                        loaded = true;
+                    }
+                }
+                if (loaded && wic_copy) {
                     ComPtr<ID2D1Bitmap1> d2d_bmp;
-                    HRESULT hr = m_renderer.create_bitmap_from_wic(te.wic.Get(), &d2d_bmp);
+                    HRESULT hr = m_renderer.create_bitmap_from_wic(wic_copy.Get(), &d2d_bmp);
                     if (SUCCEEDED(hr) && d2d_bmp) {
                         m_thumb_d2d[idx] = d2d_bmp;
                         dit = m_thumb_d2d.find(idx);
