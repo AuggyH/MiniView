@@ -1809,12 +1809,12 @@ void App::grid_render() {
                 auto& spath = m_index.path_at(i);
                 size_t pos = spath.find_last_of(L"\\/");
                 std::wstring fname = (pos != std::wstring::npos) ? spath.substr(pos + 1) : spath;
-                float fn_h = m_renderer.label_height(fname, img_w, 12.0f);
+                float fn_h = m_renderer.label_height(fname, img_w, 14.0f);
                 float res_h = 0;
                 if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].orig_w > 0) {
                     res_h = m_renderer.label_height(
                         std::to_wstring(m_thumbs[i].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[i].orig_h),
-                        img_w, 10.0f);
+                        img_w, 12.0f);
                 }
                 float total_label = 4.0f * dpi_label + fn_h + 3.0f * dpi_label + res_h + 2.0f * dpi_label;
                 ri.label_extra = std::max(ri.label_extra, static_cast<int>(total_label));
@@ -1890,13 +1890,13 @@ void App::grid_render() {
                 std::wstring fname = (pos2 != std::wstring::npos) ? spath.substr(pos2 + 1) : spath;
                 float dpi_s = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
                 float ly = row_y + ri.row_h + 4.0f * dpi_s;
-                m_renderer.draw_label(x, ly, w, fname, 12.0f);
-                float name_h = m_renderer.label_height(fname, w, 12.0f);
+                m_renderer.draw_label(x, ly, w, fname, 14.0f);
+                float name_h = m_renderer.label_height(fname, w, 14.0f);
 
                 if (m_thumbs[idx2].orig_w > 0) {
                     float label_gap = 3.0f * dpi_s;
                     m_renderer.draw_label(x, ly + name_h + label_gap, w,
-                        std::to_wstring(m_thumbs[idx2].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[idx2].orig_h), 10.0f,
+                        std::to_wstring(m_thumbs[idx2].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[idx2].orig_h), 12.0f,
                         0.5f, 0.5f, 0.55f);
                 }
         }
