@@ -581,12 +581,13 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
             D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
             out_clickable->push_back({cr, value});
             if (sel_idx == cur_idx) {
-                float tw = measure_text(value, 10.0f * dpi_s) + 8.0f * dpi_s;
-                if (tw > val_w) tw = val_w;
-                D2D1_RECT_F hr = {x + pad + lw + cgap, y, x + pad + lw + cgap + tw, y2};
+                float tw = measure_text(value, 10.0f * dpi_s);
+                float hw = (tw + 10.0f * dpi_s > val_w) ? val_w : tw + 10.0f * dpi_s;
+                D2D1_RECT_F hr = {x + pad + lw + cgap, y, x + pad + lw + cgap + hw, y2};
+                D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                 ComPtr<ID2D1SolidColorBrush> sel_br;
                 m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
-                m_d2d_context->FillRectangle(&hr, sel_br.Get());
+                m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
                 draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
             }
         }
@@ -620,12 +621,13 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
                 out_clickable->push_back({cr, value});
                 if (sel_idx == cur_idx) {
-                    float tw = measure_text(value, 10.0f * dpi_s) + 8.0f * dpi_s;
-                    if (tw > val_w) tw = val_w;
-                    D2D1_RECT_F hr = {x + pad + lw + cgap, y, x + pad + lw + cgap + tw, y2};
+                    float tw = measure_text(value, 10.0f * dpi_s);
+                    float hw = (tw + 10.0f * dpi_s > val_w) ? val_w : tw + 10.0f * dpi_s;
+                    D2D1_RECT_F hr = {x + pad + lw + cgap, y, x + pad + lw + cgap + hw, y2};
+                    D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                     ComPtr<ID2D1SolidColorBrush> sel_br;
                     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
-                    m_d2d_context->FillRectangle(&hr, sel_br.Get());
+                    m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
                     draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f);
                 }
             }
@@ -635,16 +637,17 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     // Toast notification
     if (toast && !toast->empty()) {
-        float toast_y = y_off + h - pad - 28.0f * dpi_s;
-        D2D1_RECT_F tr = {x + pad, toast_y, x + w - pad, toast_y + 24.0f * dpi_s};
+        float toast_h = 28.0f * dpi_s;
+        float toast_y = y_off + h - pad - toast_h;
+        D2D1_RECT_F tr = {x + pad, toast_y, x + w - pad, toast_y + toast_h};
         ComPtr<ID2D1SolidColorBrush> toast_bg;
         m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.15f, 0.15f, 0.18f, 0.92f), &toast_bg);
         D2D1_ROUNDED_RECT trr = {tr, 4.0f * dpi_s, 4.0f * dpi_s};
         m_d2d_context->FillRoundedRectangle(&trr, toast_bg.Get());
         ComPtr<ID2D1SolidColorBrush> toast_txt;
         m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.88f, 1.0f), &toast_txt);
-        draw_text_line(x + pad + 8.0f * dpi_s, toast_y + 3.0f * dpi_s,
-                       w - pad * 2 - 16.0f * dpi_s, *toast, toast_txt.Get(), 11.0f);
+        draw_text_line(x + pad + 10.0f * dpi_s, toast_y + (toast_h - 13.0f * dpi_s) / 2.0f,
+                       w - pad * 2 - 20.0f * dpi_s, *toast, toast_txt.Get(), 11.0f);
     }
 }
 
