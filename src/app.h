@@ -52,6 +52,7 @@ private:
     // Grid mode
     void    toggle_grid();
     void    set_sort_mode(SortMode mode);
+    void    toggle_thumb_square();
     void    grid_click(int x, int y);
     void    grid_navigate(int dir);
     void    grid_ensure_visible();
@@ -100,6 +101,7 @@ private:
     int   m_grid_sel = -1;       // selected thumbnail index
     int   m_grid_cols = 0;
     int   m_grid_total_rows = 0;
+    bool  m_thumb_square = false;
 
     // Thumb cache (WIC bitmaps — thread-safe, loaded by background thread)
     std::vector<ThumbEntry> m_thumbs;

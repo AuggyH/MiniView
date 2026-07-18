@@ -321,22 +321,38 @@ void Renderer::draw_grid_placeholder(float x, float y, float size,
     }
 }
 
-void Renderer::draw_grid_thumbnail(float x, float y, float size, ID2D1Bitmap1* thumb) {
+void Renderer::draw_grid_thumbnail(float x, float y, float size, ID2D1Bitmap1* thumb, bool square) {
     if (!m_d2d_context || !thumb) return;
 
     D2D1_SIZE_F bmp_size = thumb->GetSize();
     if (bmp_size.width == 0 || bmp_size.height == 0) return;
 
-    // Scale to fit inside the cell, centered
-    float scale = std::min(size / bmp_size.width, size / bmp_size.height);
-    float dw = bmp_size.width * scale;
-    float dh = bmp_size.height * scale;
-    float ox = x + (size - dw) / 2.0f;
-    float oy = y + (size - dh) / 2.0f;
+    if (square) {
+        // Center-crop fill: scale to cover, clip to cell bounds
+        float scale = std::max(size / bmp_size.width, size / bmp_size.height);
+        float dw = bmp_size.width * scale;
+        float dh = bmp_size.height * scale;
+        float ox = x + (size - dw) / 2.0f;
+        float oy = y + (size - dh) / 2.0f;
 
-    D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
-    m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
-        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+        D2D1_RECT_F clip = {x, y, x + size, y + size};
+        m_d2d_context->PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+        D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
+        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+        m_d2d_context->PopAxisAlignedClip();
+    } else {
+        // Scale to fit inside the cell, centered
+        float scale = std::min(size / bmp_size.width, size / bmp_size.height);
+        float dw = bmp_size.width * scale;
+        float dh = bmp_size.height * scale;
+        float ox = x + (size - dw) / 2.0f;
+        float oy = y + (size - dh) / 2.0f;
+
+        D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
+        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+    }
 }
 
 } // namespace mv
