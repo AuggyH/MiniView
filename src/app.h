@@ -71,7 +71,8 @@ private:
     void    stop_thumb_loader();
     void    request_thumb(int idx);
 
-    int m_thumb_size = 160;
+    int m_thumb_size = 160;   // decode resolution (WIC)
+    int m_thumb_cell  = 160;  // display cell size for column calc
     int m_thumb_gap  = 6;
     int m_thumb_pad  = 12;
     int m_cell_size  = 166;  // size + gap
