@@ -1414,7 +1414,7 @@ void App::begin_animation(HWND hwnd) {
     m_animating = true;
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
-    m_anim_timer = SetTimer(hwnd, 4, 10, nullptr);
+    m_anim_timer = SetTimer(hwnd, 4, 1, nullptr);  // 1ms max freq
 }
 
 void App::toggle_fullscreen(HWND hwnd) {
