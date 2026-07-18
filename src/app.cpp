@@ -1759,19 +1759,51 @@ void App::grid_render() {
     m_renderer.clear();
 
     int total = static_cast<int>(m_index.size());
-    int sb_zone = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+    float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    int sb_zone = static_cast<int>(20 * dpi_scale);
     int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone - m_thumb_pad;
     int eff_cell = static_cast<int>(m_thumb_cell * m_thumb_zoom);
-    int cols = std::max(1, (grid_area_w + m_thumb_gap_h) / (eff_cell + m_thumb_gap_h));
-    m_grid_cols = cols;
     int gap_h = m_thumb_gap_h;
     int gap_v = m_thumb_gap_v;
-    int usable_w = grid_area_w - (cols - 1) * gap_h;
 
-    // --- First pass: justified row heights ---
     struct RowInfo { int start_idx, end_idx, row_h, row_y, label_extra; std::vector<float> img_x, img_w; };
     std::vector<RowInfo> rows;
-    int cur_y = m_thumb_pad, idx = 0;
+    int label_def = m_show_labels ? static_cast<int>(42 * dpi_scale) : 0;
+
+    if (m_thumb_square) {
+        // ── Square grid: fixed cells, center-crop ──
+        int cell_w = eff_cell;
+        int cols = std::max(1, (grid_area_w + gap_h) / (cell_w + gap_h));
+        m_grid_cols = cols;
+        int x0 = (grid_area_w - cols * cell_w - (cols - 1) * gap_h) / 2;  // center
+        if (x0 < 0) x0 = 0;
+
+        int cur_y = m_thumb_pad;
+        for (int idx = 0; idx < total; ) {
+            RowInfo ri;
+            ri.start_idx = idx;
+            ri.end_idx = std::min(idx + cols, total);
+            ri.row_y = cur_y;
+            ri.row_h = cell_w;
+            ri.label_extra = label_def;
+            float x = static_cast<float>(x0);
+            for (int i = ri.start_idx; i < ri.end_idx; ++i) {
+                ri.img_x.push_back(x);
+                ri.img_w.push_back(static_cast<float>(cell_w));
+                x += cell_w + gap_h;
+            }
+            rows.push_back(ri);
+            cur_y += cell_w + gap_v + ri.label_extra;
+            idx = ri.end_idx;
+        }
+    } else {
+        // ── Justified layout (existing) ──
+        int cols = std::max(1, (grid_area_w + gap_h) / (eff_cell + gap_h));
+        m_grid_cols = cols;
+        int usable_w = grid_area_w - (cols - 1) * gap_h;
+
+        // --- First pass: justified row heights ---
+        int cur_y = m_thumb_pad, idx = 0;
     float dpi_label = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
 
     while (idx < total) {
@@ -1829,6 +1861,7 @@ void App::grid_render() {
         cur_y += ri.row_h + gap_v + ri.label_extra;
         idx = ri.end_idx;
     }
+    }  // end justified layout
     m_grid_total_rows = static_cast<int>(rows.size());
     m_row_heights.clear();
     for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap_v + ri.label_extra);
