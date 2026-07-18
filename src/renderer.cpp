@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include <fstream>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <stdexcept>
@@ -567,13 +568,14 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
             m_d2d_context->PopLayer();
         }
-        y = y_off + pad + dh + sec_gap;
+        y += sec_gap;  // track from scrolled position
     }
 
     // ── Info rows (label emphasized, value slightly dimmed) ──
     float lw = 70.0f * dpi_s;
     float cgap = 8.0f * dpi_s;
     float val_w = content_w - lw - cgap;
+
 
     for (auto& [label, value] : info) {
         if (y + gap > y_off + h) break;
