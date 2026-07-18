@@ -1293,9 +1293,13 @@ void App::grid_ensure_visible() {
 }
 
 void App::toggle_info() {
-    if (!m_has_image || m_grid_mode) return;
+    if (!m_has_image) return;
+
+    std::wstring target = m_grid_mode && m_grid_sel >= 0
+        ? m_index.path_at(m_grid_sel) : m_current_path;
+
     if (!m_show_info) {
-        m_info_meta = extract_metadata(m_current_path);
+        m_info_meta = extract_metadata(target);
         if (!m_info_meta.valid) return;
     }
     m_show_info = !m_show_info;
@@ -1461,6 +1465,72 @@ void App::grid_render() {
                 m_renderer.draw_grid_placeholder(x, y, static_cast<float>(m_thumb_size), name, sel);
             }
         }
+    }
+
+    // ── Side info panel ──
+    float px = static_cast<float>(grid_area_w);
+    float pw = static_cast<float>(m_panel_width);
+    float ph = static_cast<float>(m_renderer.target_size().height);
+
+    std::vector<std::pair<std::wstring, std::wstring>> pinfo;
+    std::vector<std::pair<std::wstring, std::wstring>> pgen;
+    ID2D1Bitmap1* preview_bmp = nullptr;
+    uint32_t pvw = 0, pvh = 0;
+
+    if (m_grid_sel >= 0 && m_grid_sel < total) {
+        auto& selpath = m_index.path_at(m_grid_sel);
+        size_t pos = selpath.find_last_of(L"\\/");
+        std::wstring name = (pos != std::wstring::npos) ? selpath.substr(pos + 1) : selpath;
+        pinfo.push_back({L"\u6587\u4EF6\u540D", name});
+
+        if (m_grid_sel < static_cast<int>(m_thumbs.size()) && m_thumbs[m_grid_sel].wic) {
+            m_thumbs[m_grid_sel].wic->GetSize(&pvw, &pvh);
+            pinfo.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(pvw) + L"\u00D7" + std::to_wstring(pvh)});
+            auto dit2 = m_thumb_d2d.find(m_grid_sel);
+            if (dit2 != m_thumb_d2d.end()) preview_bmp = dit2->second.Get();
+        }
+
+        WIN32_FILE_ATTRIBUTE_DATA attr;
+        if (GetFileAttributesExW(selpath.c_str(), GetFileExInfoStandard, &attr)) {
+            ULONGLONG fsize = (static_cast<ULONGLONG>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
+            if (fsize < 1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize) + L" B"});
+            else if (fsize < 1024*1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize/1024) + L" KB"});
+            else { wchar_t buf[32]; swprintf_s(buf, L"%.1f MB", fsize/(1024.0*1024.0)); pinfo.push_back({L"\u5927\u5C0F", buf}); }
+        }
+
+        ImageMeta meta = extract_metadata(selpath);
+        if (meta.valid) {
+            if (!meta.model.empty()) pgen.push_back({L"\u6A21\u578B", meta.model});
+            if (meta.seed >= 0) pgen.push_back({L"Seed", std::to_wstring(meta.seed)});
+            if (meta.steps > 0) pgen.push_back({L"\u6B65\u6570", std::to_wstring(meta.steps)});
+            if (meta.cfg > 0) { wchar_t buf[16]; swprintf_s(buf, L"%.1f", meta.cfg); pgen.push_back({L"CFG", buf}); }
+            if (!meta.sampler.empty()) pgen.push_back({L"\u91C7\u6837\u5668", meta.sampler});
+            if (meta.width > 0) pgen.push_back({L"\u751F\u6210\u5C3A\u5BF8", std::to_wstring(meta.width) + L"\u00D7" + std::to_wstring(meta.height)});
+        }
+    } else {
+        pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
+    }
+
+    m_renderer.draw_side_panel(px, pw, ph, preview_bmp, pvw, pvh, pinfo, pgen);
+
+    // Info card overlay (toggled by I key)
+    if (m_show_info && m_info_meta.valid) {
+        std::vector<std::pair<std::wstring, std::wstring>> items;
+        if (!m_info_meta.positive_prompt.empty())
+            items.push_back({L"\u63D0\u793A\u8BCD", m_info_meta.positive_prompt});
+        if (!m_info_meta.negative_prompt.empty())
+            items.push_back({L"\u53CD\u5411\u8BCD", m_info_meta.negative_prompt});
+        if (!m_info_meta.model.empty())
+            items.push_back({L"\u6A21\u578B", m_info_meta.model});
+        if (m_info_meta.seed >= 0)
+            items.push_back({L"Seed", std::to_wstring(m_info_meta.seed)});
+        if (m_info_meta.steps > 0)
+            items.push_back({L"\u6B65\u6570", std::to_wstring(m_info_meta.steps)});
+        if (m_info_meta.cfg > 0) {
+            wchar_t buf[16]; swprintf_s(buf, L"%.1f", m_info_meta.cfg);
+            items.push_back({L"CFG", buf});
+        }
+        m_renderer.draw_info_card(items);
     }
 
     m_renderer.end_frame();
