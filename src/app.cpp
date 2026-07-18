@@ -1351,8 +1351,13 @@ void App::toggle_grid() {
 }
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int col = (x - m_thumb_pad) / (m_thumb_size + m_thumb_gap);
-    int row = (y - m_thumb_pad + m_grid_scroll_y) / (m_thumb_size + m_thumb_gap);
+    int cell_y = m_thumb_size + m_thumb_gap;
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+    int total_gap_w = grid_area_w - m_grid_cols * m_thumb_size;
+    int gap_w = (m_grid_cols > 1) ? total_gap_w / (m_grid_cols - 1) : 0;
+    int cell_x = m_thumb_size + std::max(gap_w, m_thumb_gap);
+    int col = (x - m_thumb_pad) / cell_x;
+    int row = (y - m_thumb_pad + m_grid_scroll_y) / cell_y;
     if (col < 0 || col >= m_grid_cols) return;
     int idx = row * m_grid_cols + col;
     if (idx < 0 || idx >= static_cast<int>(m_index.size())) return;
