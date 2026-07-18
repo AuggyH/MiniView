@@ -134,7 +134,7 @@ private:
     int   m_grid_scroll_saved = 0;
     int   m_grid_saved_idx = 0;
     ImageMeta m_info_meta;
-    std::vector<std::pair<D2D1_RECT_F, std::wstring>> m_panel_clickable;
+    std::vector<mv::PanelRegion> m_panel_clickable;
     int m_panel_sel = -1;           // selected clickable index (brief highlight)
     float m_panel_scroll_y = 0;     // side panel scroll offset
     float m_panel_total_h = 0;      // total content height for clamping

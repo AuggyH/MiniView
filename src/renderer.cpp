@@ -512,7 +512,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
     ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,
     const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
-    std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable,
+    std::vector<PanelRegion>* out_clickable,
     int sel_idx, const std::wstring* toast, float scroll_y)
 {
     if (!m_d2d_context || !m_text_format) return 0.0f;
@@ -586,7 +586,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                                   value, value_br.Get(), 10.0f, &vw);
         if (out_clickable && !value.empty()) {
             D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
-            out_clickable->push_back({cr, value});
+            out_clickable->push_back({cr, value, label});
             if (sel_idx == cur_idx) {
                 float hw = std::min(vw + 8.0f * dpi_s, val_w);
                 float hx = x + pad + lw + cgap - 4.0f * dpi_s;
@@ -627,7 +627,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                                       value, value_br.Get(), 10.0f, &vw);
             if (out_clickable && !value.empty()) {
                 D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
-                out_clickable->push_back({cr, value});
+                out_clickable->push_back({cr, value, label});
                 if (sel_idx == cur_idx) {
                     float hw = std::min(vw + 8.0f * dpi_s, val_w);
                     float hx = x + pad + lw + cgap - 4.0f * dpi_s;
