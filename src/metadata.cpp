@@ -351,7 +351,6 @@ std::string read_jpeg_comment(const std::wstring& path) {
 
             for (uint16_t i = 0; i < count; ++i) {
                 uint16_t tag = big_endian ? ((data[off]<<8)|data[off+1]) : (data[off]|(data[off+1]<<8));
-                uint16_t type = big_endian ? ((data[off+2]<<8)|data[off+3]) : (data[off+2]|(data[off+3]<<8));
                 uint32_t val_or_off = big_endian
                     ? ((uint32_t)data[off+8]<<24)|(data[off+9]<<16)|(data[off+10]<<8)|data[off+11]
                     : (data[off+8]|(data[off+9]<<8)|(data[off+10]<<16)|(data[off+11]<<24));
