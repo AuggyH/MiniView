@@ -107,6 +107,7 @@ private:
     int   m_grid_total_rows = 0;
     bool  m_thumb_square = false;
     bool  m_show_info = false;
+    bool  m_using_thumb_preview = false;
     ImageMeta m_info_meta;
 
     // Multi-select (grid only)
