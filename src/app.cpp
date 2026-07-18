@@ -1659,6 +1659,51 @@ void App::grid_render() {
     // Toolbar always on top
     m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
 
+    // Side info panel
+    {
+        float pw = static_cast<float>(m_panel_width);
+        float ph = view_h;
+        std::vector<std::pair<std::wstring, std::wstring>> pinfo, pgen;
+        ID2D1Bitmap1* preview_bmp = nullptr;
+        uint32_t pvw = 0, pvh = 0;
+
+        if (m_grid_sel >= 0 && m_grid_sel < total) {
+            auto& selpath = m_index.path_at(m_grid_sel);
+            size_t pos = selpath.find_last_of(L"\\/");
+            std::wstring name = (pos != std::wstring::npos) ? selpath.substr(pos + 1) : selpath;
+            pinfo.push_back({L"\u6587\u4EF6\u540D", name});
+
+            auto probe = m_decoder.probe(selpath);
+            if (probe) {
+                pvw = probe->width; pvh = probe->height;
+                pinfo.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(pvw) + L"\u00D7" + std::to_wstring(pvh)});
+            }
+
+            auto dit2 = m_thumb_d2d.find(m_grid_sel);
+            if (dit2 != m_thumb_d2d.end()) preview_bmp = dit2->second.Get();
+
+            WIN32_FILE_ATTRIBUTE_DATA attr;
+            if (GetFileAttributesExW(selpath.c_str(), GetFileExInfoStandard, &attr)) {
+                ULONGLONG fsize = (static_cast<ULONGLONG>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
+                if (fsize < 1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize) + L" B"});
+                else if (fsize < 1024*1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize/1024) + L" KB"});
+                else { wchar_t buf[32]; swprintf_s(buf, L"%.1f MB", fsize/(1024.0*1024.0)); pinfo.push_back({L"\u5927\u5C0F", buf}); }
+            }
+
+            ImageMeta meta = extract_metadata(selpath);
+            if (meta.valid) {
+                if (!meta.model.empty()) pgen.push_back({L"\u6A21\u578B", meta.model});
+                if (meta.seed >= 0) pgen.push_back({L"Seed", std::to_wstring(meta.seed)});
+                if (meta.steps > 0) pgen.push_back({L"\u6B65\u6570", std::to_wstring(meta.steps)});
+                if (meta.cfg > 0) { wchar_t buf[16]; swprintf_s(buf, L"%.1f", meta.cfg); pgen.push_back({L"CFG", buf}); }
+                if (!meta.sampler.empty()) pgen.push_back({L"\u91C7\u6837\u5668", meta.sampler});
+            }
+        } else {
+            pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
+        }
+        m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h, preview_bmp, pvw, pvh, pinfo, pgen);
+    }
+
     m_renderer.end_frame();
 }
 
