@@ -583,11 +583,11 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
             if (sel_idx == cur_idx) {
                 // Tight highlight: trim draw_text_line's built-in 4px padding
                 float py = y + 2.0f * dpi_s;
-                float ph = (y2 - 4.0f * dpi_s) - py;
-                if (ph < 10.0f * dpi_s) ph = 10.0f * dpi_s;
+                float hl_h = (y2 - 4.0f * dpi_s) - py;
+                if (hl_h < 10.0f * dpi_s) hl_h = 10.0f * dpi_s;
                 float tw = measure_text(value, 10.0f * dpi_s);
                 float hw = (tw + 10.0f * dpi_s > val_w) ? val_w : tw + 10.0f * dpi_s;
-                D2D1_RECT_F hr = {x + pad + lw + cgap, py, x + pad + lw + cgap + hw, py + ph};
+                D2D1_RECT_F hr = {x + pad + lw + cgap, py, x + pad + lw + cgap + hw, py + hl_h};
                 D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                 ComPtr<ID2D1SolidColorBrush> sel_br;
                 m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
@@ -626,11 +626,11 @@ void Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 out_clickable->push_back({cr, value});
                 if (sel_idx == cur_idx) {
                     float py = y + 2.0f * dpi_s;
-                    float ph = (y2 - 4.0f * dpi_s) - py;
-                    if (ph < 10.0f * dpi_s) ph = 10.0f * dpi_s;
+                    float hl_h = (y2 - 4.0f * dpi_s) - py;
+                    if (hl_h < 10.0f * dpi_s) hl_h = 10.0f * dpi_s;
                     float tw = measure_text(value, 10.0f * dpi_s);
                     float hw = (tw + 10.0f * dpi_s > val_w) ? val_w : tw + 10.0f * dpi_s;
-                    D2D1_RECT_F hr = {x + pad + lw + cgap, py, x + pad + lw + cgap + hw, py + ph};
+                    D2D1_RECT_F hr = {x + pad + lw + cgap, py, x + pad + lw + cgap + hw, py + hl_h};
                     D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                     ComPtr<ID2D1SolidColorBrush> sel_br;
                     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
