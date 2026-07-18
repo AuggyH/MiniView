@@ -446,7 +446,7 @@ void Renderer::draw_grid_thumbnail(float x, float y, float size, ID2D1Bitmap1* t
     }
 }
 
-void Renderer::draw_side_panel(float x, float w, float h,
+void Renderer::draw_side_panel(float x, float y_off, float w, float h,
     ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
     const std::vector<std::pair<std::wstring, std::wstring>>& info,
     const std::vector<std::pair<std::wstring, std::wstring>>& gen_info)
@@ -454,18 +454,19 @@ void Renderer::draw_side_panel(float x, float w, float h,
     if (!m_d2d_context || !m_text_format) return;
 
     float pad = 12.0f;
-    float y = pad;
+    float y0 = y_off;
+    float y = y0 + pad;
 
     // Panel background
     ComPtr<ID2D1SolidColorBrush> bg;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.10f, 0.10f, 0.12f, 0.95f), &bg);
-    D2D1_RECT_F rc = {x, 0, x + w, h};
+    D2D1_RECT_F rc = {x, y_off, x + w, y_off + h};
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
     // Divider line
     ComPtr<ID2D1SolidColorBrush> line;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.24f, 1.0f), &line);
-    m_d2d_context->DrawLine({x, 0}, {x, h}, line.Get(), 1.0f);
+    m_d2d_context->DrawLine({x, y_off}, {x, y_off + h}, line.Get(), 1.0f);
 
     ComPtr<ID2D1SolidColorBrush> white, grey;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.9f, 0.9f, 0.9f, 1.0f), &white);
@@ -546,6 +547,43 @@ float Renderer::draw_text_line(float x, float y, float w,
     D2D1_POINT_2F origin = {x, y};
     m_d2d_context->DrawTextLayout(origin, layout.Get(), brush);
     return y + h + 4;  // 4px gap
+}
+
+void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int active_idx) {
+    if (!m_d2d_context || !m_dwrite_factory) return;
+
+    float h = 28.0f * m_dpi_y / 96.0f;
+    ComPtr<ID2D1SolidColorBrush> bg, text_brush, hover_bg;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.11f, 0.11f, 0.13f, 1.0f), &bg);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.8f, 0.8f, 0.82f, 1.0f), &text_brush);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.18f, 0.18f, 0.22f, 1.0f), &hover_bg);
+
+    D2D1_RECT_F rc = {0, 0, w, h};
+    m_d2d_context->FillRectangle(&rc, bg.Get());
+
+    ComPtr<IDWriteTextFormat> tf;
+    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        13.0f * m_dpi_y / 96.0f, L"en-US", &tf);
+
+    float x = 12.0f;
+    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+        ComPtr<IDWriteTextLayout> layout;
+        m_dwrite_factory->CreateTextLayout(items[i].c_str(),
+            static_cast<uint32_t>(items[i].size()), tf.Get(), 200.0f, 30.0f, &layout);
+        DWRITE_TEXT_METRICS m;
+        layout->GetMetrics(&m);
+        float iw = m.width + 24.0f;
+
+        if (i == active_idx) {
+            D2D1_RECT_F hr = {x, 2, x + iw, h - 2};
+            m_d2d_context->FillRectangle(&hr, hover_bg.Get());
+        }
+
+        D2D1_POINT_2F pt = {x + 12.0f, (h - m.height) / 2.0f};
+        m_d2d_context->DrawTextLayout(pt, layout.Get(), text_brush.Get());
+        x += iw;
+    }
 }
 
 } // namespace mv

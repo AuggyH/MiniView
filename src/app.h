@@ -41,6 +41,7 @@ private:
     void    delete_current_file(bool permanent);
     void    delete_selected(bool permanent);
     void    open_in_explorer();
+    void    show_toolbar_menu(HWND hwnd, int idx, int x, int y);
     void    copy_to_clipboard();
     void    copy_selected();
     void    show_context_menu(HWND hwnd, int x, int y);
@@ -112,6 +113,9 @@ private:
     bool  m_temp_preview = false;
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
+    int   m_toolbar_h = 28;
+    std::vector<std::wstring> m_toolbar_items = {L"文件", L"查看", L"编辑", L"帮助"};
+    int   m_toolbar_active = -1;
     bool  m_scroll_active = false;
     int   m_grid_scroll_saved = 0;
     int   m_grid_saved_idx = 0;
