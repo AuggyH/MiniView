@@ -384,16 +384,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CONTEXTMENU: {
         int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);
         if (m_grid_mode) {
-            // Hit-test to find thumbnail under cursor
-            int old_sel = m_grid_sel;
-            grid_click(cx, cy, false, false);  // selects the item under cursor
-            if (m_grid_sel < 0 || m_grid_sel >= static_cast<int>(m_index.size())) {
-                m_grid_sel = old_sel;  // restore if nothing hit
+            // Right-click: select item under cursor and show menu
+            grid_click(cx, cy, false, false);
+            if (m_grid_sel < 0 || m_grid_sel >= static_cast<int>(m_index.size()))
                 return 0;  // no menu on empty space
-            }
             show_context_menu(hwnd, cx, cy);
-            m_grid_sel = old_sel;  // restore original selection
-            m_window.invalidate();
         } else {
             show_context_menu(hwnd, cx, cy);
         }
