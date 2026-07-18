@@ -117,7 +117,7 @@ bool Renderer::create_text_resources() {
         DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
-        OVERLAY_FONT_SIZE, L"en-US",
+        OVERLAY_FONT_SIZE * m_dpi_y / 96.0f, L"en-US",
         &m_text_format);
     if (FAILED(hr)) return false;
 
