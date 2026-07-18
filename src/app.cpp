@@ -741,6 +741,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode) {
             // Only open if clicking on a thumbnail
             if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
+                m_temp_preview = true;  // Esc will return to grid
                 toggle_grid();
                 navigate_to(m_grid_sel);
             }
