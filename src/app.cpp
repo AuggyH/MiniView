@@ -365,6 +365,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_scroll_active = false;
             m_window.invalidate();
         }
+        if (wp == 2) {
+            m_panel_copied.clear();
+            KillTimer(hwnd, 2);
+            m_toast_timer = 0;
+            m_window.invalidate();
+        }
         return 0;
 
     case WM_DPICHANGED: {
@@ -494,27 +500,20 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        // Panel value click → copy to clipboard
+        // Panel value click → select it
         if (m_grid_mode && !m_panel_clickable.empty()) {
             int tx = GET_X_LPARAM(lp);
-            for (auto& [rc, text] : m_panel_clickable) {
+            m_panel_sel = -1;
+            for (int i = 0; i < static_cast<int>(m_panel_clickable.size()); ++i) {
+                auto& [rc, text] = m_panel_clickable[i];
                 if (tx >= static_cast<int>(rc.left) && tx < static_cast<int>(rc.right) &&
                     ty >= static_cast<int>(rc.top) && ty < static_cast<int>(rc.bottom)) {
-                    if (OpenClipboard(hwnd)) {
-                        EmptyClipboard();
-                        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-                        if (hMem) {
-                            auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
-                            wcscpy_s(dst, text.size() + 1, text.c_str());
-                            GlobalUnlock(hMem);
-                            SetClipboardData(CF_UNICODETEXT, hMem);
-                        }
-                        CloseClipboard();
-                    }
+                    m_panel_sel = i;
+                    m_window.invalidate();
                     return 0;
                 }
             }
+            m_window.invalidate();
         }
         // Scrollbar click in grid mode?
         if (m_grid_mode) {
@@ -654,7 +653,27 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             case 'C':
-                if (m_grid_mode && has_selection()) copy_selected();
+                if (m_grid_mode && m_panel_sel >= 0 && m_panel_sel < static_cast<int>(m_panel_clickable.size())) {
+                    // Copy selected panel value
+                    auto& text = m_panel_clickable[m_panel_sel].second;
+                    if (OpenClipboard(hwnd)) {
+                        EmptyClipboard();
+                        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                        if (hMem) {
+                            auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
+                            wcscpy_s(dst, text.size() + 1, text.c_str());
+                            GlobalUnlock(hMem);
+                            SetClipboardData(CF_UNICODETEXT, hMem);
+                        }
+                        CloseClipboard();
+                    }
+                    // Show toast
+                    m_panel_copied = L"已复制: " + text;
+                    if (m_toast_timer) KillTimer(hwnd, m_toast_timer);
+                    m_toast_timer = SetTimer(hwnd, 2, 2000, nullptr);
+                    m_window.invalidate();
+                } else if (m_grid_mode && has_selection()) copy_selected();
                 else copy_to_clipboard();
                 return 0;
             case 'R': toggle_recursive(); return 0;
@@ -2108,7 +2127,9 @@ void App::grid_render() {
             pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
         }
         m_panel_clickable.clear();
-        m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h, preview_bmp, pvw, pvh, pinfo, pgen, &m_panel_clickable);
+        m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h,
+            preview_bmp, pvw, pvh, pinfo, pgen, &m_panel_clickable,
+            m_panel_sel, m_panel_copied.empty() ? nullptr : &m_panel_copied);
     }
 
     m_renderer.end_frame();
