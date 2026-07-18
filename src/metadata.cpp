@@ -361,7 +361,7 @@ ImageMeta extract_metadata(const std::wstring& path) {
         // Debug: dump all PNG text keys and content summaries
         {
             std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
-            dbg << "=== " << std::string(path.begin(), path.end()) << " ===" << std::endl;
+            dbg << "=== [PNG] ===" << std::endl;
             for (auto& [k, v] : texts) {
                 bool is_json = (!v.empty() && (v.front() == '{' || v.front() == '['));
                 dbg << "  tEXt[" << k << "]: " << (is_json ? "JSON" : "TEXT") 
