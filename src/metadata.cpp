@@ -401,7 +401,46 @@ ImageMeta parse_comfyui(const std::string& prompt_json, const std::string* workf
             if (!all_pos.empty()) m.positive_prompt = utf8_to_wstring(all_pos);
         }
 
-        // ── LoRA extraction ──
+        // Negative prompt: also collect from "easy negative" nodes if CLIPTextEncode didn't give one
+        if (m.negative_prompt.empty()) {
+            std::string all_neg;
+            size_t en = 0;
+            while ((en = wf.find("\"type\": \"easy negative\"", en)) != std::string::npos) {
+                size_t wv = wf.find("\"widgets_values\"", en);
+                if (wv != std::string::npos && wv < en + 5000) {
+                    size_t ws = wf.find('[', wv);
+                    if (ws != std::string::npos && ws < wv + 30) {
+                        ws++;
+                        while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t' || wf[ws] == '\n')) ws++;
+                        if (ws < wf.size() && wf[ws] == '"') {
+                            std::string val;
+                            size_t i = ws + 1;
+                            while (i < wf.size()) {
+                                if (wf[i] == '\\' && i + 1 < wf.size()) {
+                                    switch (wf[i+1]) {
+                                        case 'n': val += '\n'; break;
+                                        case 't': val += '\t'; break;
+                                        case 'r': val += '\r'; break;
+                                        case '\\': val += '\\'; break;
+                                        case '"': val += '"'; break;
+                                        default: val += wf[i+1]; break;
+                                    }
+                                    i += 2;
+                                }
+                                else if (wf[i] == '"') break;
+                                else { val += wf[i]; i++; }
+                            }
+                            if (!val.empty()) {
+                                if (!all_neg.empty()) all_neg += ", ";
+                                all_neg += val;
+                            }
+                        }
+                    }
+                }
+                en += 20;
+            }
+            if (!all_neg.empty()) m.negative_prompt = utf8_to_wstring(all_neg);
+        }
         std::wstring lora_list;
         size_t lp = 0;
         std::string ls = "\"type\": \"";
