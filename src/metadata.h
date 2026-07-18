@@ -15,6 +15,8 @@ struct ImageMeta {
     float  cfg = 0.0f;
     int    width = 0;
     int    height = 0;
+    // LoRA info: comma-separated list of "name:strength"
+    std::wstring lora;
     bool   valid = false;
 };
 

@@ -21,6 +21,26 @@ std::wstring utf8_to_wstring(const std::string& s) {
     return result;
 }
 
+// Decode JSON \\uXXXX escapes in a UTF-8 string, returning UTF-8
+static std::string json_unescape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 5 < s.size() && s[i+1] == 'u') {
+            // Parse \\uXXXX
+            char hex[5] = {s[i+2], s[i+3], s[i+4], s[i+5], 0};
+            wchar_t wc = (wchar_t)strtol(hex, nullptr, 16);
+            char mb[8];
+            int n = WideCharToMultiByte(CP_UTF8, 0, &wc, 1, mb, 8, nullptr, nullptr);
+            out.append(mb, n);
+            i += 5;
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
+}
+
 // ── PNG chunk reader ─────────────────────────────────────────
 
 struct PngChunk {
@@ -164,10 +184,10 @@ static std::string find_node(const std::string& json, const std::string& class_t
     return "";
 }
 
-ImageMeta parse_comfyui(const std::string& json) {
+ImageMeta parse_comfyui(const std::string& prompt_json, const std::string* workflow_json = nullptr) {
     ImageMeta m;
 
-    auto ksampler = find_node(json, "KSampler");
+    auto ksampler = find_node(prompt_json, "KSampler");
     if (!ksampler.empty()) {
         m.seed = json_llong(ksampler, "seed");
         m.steps = json_int(ksampler, "steps");
@@ -176,17 +196,17 @@ ImageMeta parse_comfyui(const std::string& json) {
         m.scheduler = utf8_to_wstring(json_str_val(ksampler, "scheduler"));
     }
 
-    auto loader = find_node(json, "CheckpointLoaderSimple");
+    auto loader = find_node(prompt_json, "CheckpointLoaderSimple");
     if (!loader.empty()) {
         m.model = utf8_to_wstring(json_str_val(loader, "ckpt_name"));
     }
 
-    auto vae = find_node(json, "VAELoader");
+    auto vae = find_node(prompt_json, "VAELoader");
     if (!vae.empty()) {
         m.vae = utf8_to_wstring(json_str_val(vae, "vae_name"));
     }
 
-    auto latent = find_node(json, "EmptyLatentImage");
+    auto latent = find_node(prompt_json, "EmptyLatentImage");
     if (!latent.empty()) {
         m.width = json_int(latent, "width");
         m.height = json_int(latent, "height");
@@ -196,95 +216,95 @@ ImageMeta parse_comfyui(const std::string& json) {
     {
         std::string search = "\"CLIPTextEncode\"";
         size_t pos = 0;
-        while ((pos = json.find(search, pos)) != std::string::npos) {
+        while ((pos = prompt_json.find(search, pos)) != std::string::npos) {
             pos += search.size();
             // Backtrack to find node start
             size_t ns = pos;
             int d = 0;
             while (ns > 0) {
-                if (json[ns] == '}') d++; else if (json[ns] == '{') {
+                if (prompt_json[ns] == '}') d++; else if (prompt_json[ns] == '{') {
                     if (d == 0) break; d--;
                 } ns--;
             }
             // Get _meta.title
-            size_t mt = json.find("\"_meta\"", ns);
+            size_t mt = prompt_json.find("\"_meta\"", ns);
             if (mt == std::string::npos || mt > pos + 300) continue;
-            size_t tt = json.find("\"title\"", mt);
+            size_t tt = prompt_json.find("\"title\"", mt);
             if (tt == std::string::npos || tt > mt + 100) continue;
-            size_t tc = json.find(':', tt + 7);
+            size_t tc = prompt_json.find(':', tt + 7);
             if (tc == std::string::npos || tc > tt + 10) continue;
             tc++;
-            while (tc < json.size() && (json[tc] == ' ' || json[tc] == '\t')) tc++;
-            if (tc >= json.size() || json[tc] != '"') continue;
-            size_t te = json.find('"', tc + 1);
+            while (tc < prompt_json.size() && (prompt_json[tc] == ' ' || prompt_json[tc] == '\t')) tc++;
+            if (tc >= prompt_json.size() || prompt_json[tc] != '"') continue;
+            size_t te = prompt_json.find('"', tc + 1);
             if (te == std::string::npos) continue;
-            std::string title = json.substr(tc + 1, te - tc - 1);
+            std::string title = prompt_json.substr(tc + 1, te - tc - 1);
 
             // Get text from inputs
             auto resolve = [&]() -> std::string {
-                size_t inp = json.find("\"inputs\"", ns);
+                size_t inp = prompt_json.find("\"inputs\"", ns);
                 if (inp == std::string::npos || inp > pos + 500) return "";
-                size_t ts = json.find("\"text\"", inp);
+                size_t ts = prompt_json.find("\"text\"", inp);
                 if (ts == std::string::npos || ts > inp + 500) return "";
-                size_t tvs = json.find(':', ts + 6);
+                size_t tvs = prompt_json.find(':', ts + 6);
                 if (tvs == std::string::npos || tvs > ts + 10) return "";
                 tvs++;
-                while (tvs < json.size() && (json[tvs]==' ' || json[tvs]=='\t')) tvs++;
-                if (tvs >= json.size()) return "";
+                while (tvs < prompt_json.size() && (prompt_json[tvs]==' ' || prompt_json[tvs]=='\t')) tvs++;
+                if (tvs >= prompt_json.size()) return "";
                 // Direct string
-                if (json[tvs] == '"') {
-                    size_t ve = json.find('"', tvs + 1);
-                    if (ve != std::string::npos) return json.substr(tvs + 1, ve - tvs - 1);
+                if (prompt_json[tvs] == '"') {
+                    size_t ve = prompt_json.find('"', tvs + 1);
+                    if (ve != std::string::npos) return prompt_json.substr(tvs + 1, ve - tvs - 1);
                 }
                 // Link [id, slot]
-                if (json[tvs] == '[') {
+                if (prompt_json[tvs] == '[') {
                     size_t ls = tvs + 1;
-                    while (ls < json.size() && (json[ls]==' ' || json[ls]=='\t')) ls++;
-                    bool q = (ls < json.size() && json[ls]=='"'); if (q) ls++;
-                    size_t le = json.find_first_of(q ? "\"":",]", ls);
-                    std::string wid = json.substr(ls, le - ls);
+                    while (ls < prompt_json.size() && (prompt_json[ls]==' ' || prompt_json[ls]=='\t')) ls++;
+                    bool q = (ls < prompt_json.size() && prompt_json[ls]=='"'); if (q) ls++;
+                    size_t le = prompt_json.find_first_of(q ? "\"":",]", ls);
+                    std::string wid = prompt_json.substr(ls, le - ls);
                     std::string wk = "\"" + wid + "\"";
                     // Find the actual node key "\"id\": {", not a reference inside a link
                     size_t wp = 0;
                     while (true) {
-                        wp = json.find(wk, wp);
+                        wp = prompt_json.find(wk, wp);
                         if (wp == std::string::npos) return "";
                         // Check if followed by ": {"
                         size_t after = wp + wk.size();
-                        while (after < json.size() && (json[after] == ' ' || json[after] == '\t')) after++;
-                        if (after < json.size() && json[after] == ':') {
+                        while (after < prompt_json.size() && (prompt_json[after] == ' ' || prompt_json[after] == '\t')) after++;
+                        if (after < prompt_json.size() && prompt_json[after] == ':') {
                             after++;
-                            while (after < json.size() && (json[after] == ' ' || json[after] == '\t')) after++;
-                            if (after < json.size() && json[after] == '{') break; // Found real node
+                            while (after < prompt_json.size() && (prompt_json[after] == ' ' || prompt_json[after] == '\t')) after++;
+                            if (after < prompt_json.size() && prompt_json[after] == '{') break; // Found real node
                         }
                         wp++; // Try next occurrence
                     }
-                    size_t wb = json.find('{', wp + wk.size());
+                    size_t wb = prompt_json.find('{', wp + wk.size());
                     if (wb == std::string::npos || wb > wp + wk.size() + 20) return "";
                     // Search widget inputs & widgets_values
                     for (auto* area : {"\"inputs\"", "\"widgets_values\""}) {
-                        size_t wi = json.find(area, wp);
+                        size_t wi = prompt_json.find(area, wp);
                         if (wi == std::string::npos || wi > wb + 2000) continue;
                         for (auto* fld : {"\"text\"", "\"string\"", "\"value\"", "\"widget_value\"", "\"multiline\""}) {
-                            size_t f = json.find(fld, wi);
+                            size_t f = prompt_json.find(fld, wi);
                             if (f == std::string::npos || f > wi + 2000) continue;
-                            size_t fc = json.find(':', f + strlen(fld));
+                            size_t fc = prompt_json.find(':', f + strlen(fld));
                             if (fc == std::string::npos || fc > f + 20) continue;
                             fc++;
-                            while (fc < json.size() && (json[fc]==' ' || json[fc]=='\t')) fc++;
-                            if (fc < json.size() && json[fc] == '"') {
-                                size_t fe = json.find('"', fc + 1);
-                                if (fe != std::string::npos) return json.substr(fc + 1, fe - fc - 1);
+                            while (fc < prompt_json.size() && (prompt_json[fc]==' ' || prompt_json[fc]=='\t')) fc++;
+                            if (fc < prompt_json.size() && prompt_json[fc] == '"') {
+                                size_t fe = prompt_json.find('"', fc + 1);
+                                if (fe != std::string::npos) return prompt_json.substr(fc + 1, fe - fc - 1);
                             }
                         }
                         // widgets_values array
-                        size_t ws = json.find('[', wi);
+                        size_t ws = prompt_json.find('[', wi);
                         if (ws != std::string::npos && ws < wi + 20) {
                             ws++;
-                            while (ws < json.size() && (json[ws]==' ' || json[ws]=='\t')) ws++;
-                            if (ws < json.size() && json[ws] == '"') {
-                                size_t we = json.find('"', ws + 1);
-                                if (we != std::string::npos) return json.substr(ws + 1, we - ws - 1);
+                            while (ws < prompt_json.size() && (prompt_json[ws]==' ' || prompt_json[ws]=='\t')) ws++;
+                            if (ws < prompt_json.size() && prompt_json[ws] == '"') {
+                                size_t we = prompt_json.find('"', ws + 1);
+                                if (we != std::string::npos) return prompt_json.substr(ws + 1, we - ws - 1);
                             }
                         }
                     }
@@ -305,6 +325,79 @@ ImageMeta parse_comfyui(const std::string& json) {
     }
 
     m.valid = (m.seed >= 0 || !m.model.empty() || !m.positive_prompt.empty());
+
+    // ── Extract from workflow JSON (widgets_values, LoRA) ──
+    if (workflow_json && !workflow_json->empty()) {
+        const auto& wf = *workflow_json;
+
+        // Extract widget value by index from a node's widgets_values
+        auto wf_widget = [&](const std::string& node_type, int idx = 0) -> std::string {
+            size_t pos = 0;
+            while (true) {
+                std::string search = "\"type\": \"" + node_type + "\"";
+                pos = wf.find(search, pos);
+                if (pos == std::string::npos) return "";
+                if (idx-- > 0) { pos++; continue; } // skip to nth match
+                size_t wv = wf.find("\"widgets_values\"", pos);
+                if (wv == std::string::npos || wv > pos + 5000) { pos++; continue; }
+                size_t ws = wf.find('[', wv);
+                if (ws == std::string::npos || ws > wv + 30) { pos++; continue; }
+                ws++;
+                while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t')) ws++;
+                if (ws >= wf.size() || wf[ws] != '"') { pos++; continue; }
+                size_t we = wf.find('"', ws + 1);
+                if (we == std::string::npos) { pos++; continue; }
+                return wf.substr(ws + 1, we - ws - 1);
+            }
+        };
+
+        // Positive prompt: try first CLIPTextEncode widget value
+        if (m.positive_prompt.empty()) {
+            std::string text = wf_widget("CLIPTextEncode", 0);
+            if (!text.empty()) m.positive_prompt = utf8_to_wstring(text);
+        }
+
+        // ── LoRA extraction ──
+        std::wstring lora_list;
+        size_t lp = 0;
+        std::string ls = "\"type\": \"";
+        while ((lp = wf.find(ls, lp)) != std::string::npos) {
+            size_t te = wf.find('"', lp + ls.size());
+            if (te == std::string::npos) break;
+            std::string stype = wf.substr(lp + ls.size(), te - lp - ls.size());
+            lp = te + 1;
+            if (stype.find("Lora") == std::string::npos && stype.find("LoRA") == std::string::npos)
+                continue;
+
+            // Get widgets_values: first is name, second is strength
+            size_t wv = wf.find("\"widgets_values\"", lp);
+            if (wv == std::string::npos || wv > lp + 5000) continue;
+            size_t ws = wf.find('[', wv);
+            if (ws == std::string::npos || ws > wv + 30) continue;
+            ws++;
+            while (ws < wf.size() && (wf[ws] == ' ' || wf[ws] == '\t')) ws++;
+            // Read first widget value (name)
+            if (ws >= wf.size() || wf[ws] != '"') continue;
+            size_t name_end = wf.find('"', ws + 1);
+            if (name_end == std::string::npos) continue;
+            std::string lname = wf.substr(ws + 1, name_end - ws - 1);
+            // Read second value (strength)
+            size_t ws2 = wf.find('"', name_end + 1);
+            if (ws2 != std::string::npos && ws2 < wv + 200) {
+                size_t str_end = wf.find('"', ws2 + 1);
+                if (str_end != std::string::npos) {
+                    std::string lstr = wf.substr(ws2 + 1, str_end - ws2 - 1);
+                    bool is_num = true;
+                    for (char c : lstr) if (c != '.' && c != '-' && !isdigit((unsigned char)c)) { is_num = false; break; }
+                    if (is_num) lname += ":" + lstr;
+                }
+            }
+            if (!lora_list.empty()) lora_list += L", ";
+            lora_list += utf8_to_wstring(json_unescape(lname));
+        }
+        m.lora = lora_list;
+    }
+
     return m;
 }
 
@@ -401,7 +494,11 @@ ImageMeta extract_metadata(const std::wstring& path) {
         // ComfyUI: "prompt" or "workflow" keywords
         auto it = texts.find("prompt");
         if (it == texts.end()) it = texts.find("workflow");
-        if (it != texts.end()) return parse_comfyui(it->second);
+        if (it != texts.end()) {
+            auto wf_it = texts.find("workflow");
+            const std::string* wf_ptr = (wf_it != texts.end()) ? &wf_it->second : nullptr;
+            return parse_comfyui(it->second, wf_ptr);
+        }
 
         // SD WebUI: "parameters"
         it = texts.find("parameters");
