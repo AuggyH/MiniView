@@ -2314,10 +2314,10 @@ void App::grid_render() {
             uint32_t iw, ih; m_renderer.image_size(iw, ih);
             if (iw > 0 && ih > 0) {
                 float scale = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                                       static_cast<float>(m_renderer.target_size().height - m_toolbar_h) / ih);
+                                       static_cast<float>(m_renderer.target_size().height) / ih);
                 float dw = iw * scale, dh = ih * scale;
                 float dx = (m_renderer.target_size().width - dw) * 0.5f;
-                float dy = m_toolbar_h + (m_renderer.target_size().height - m_toolbar_h - dh) * 0.5f;
+                float dy = (m_renderer.target_size().height - dh) * 0.5f;
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
             }
         }
@@ -2345,10 +2345,10 @@ void App::render_frame() {
                 uint32_t iw, ih; m_renderer.image_size(iw, ih);
                 if (iw > 0 && ih > 0) {
                     float scale = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                                           static_cast<float>(m_renderer.target_size().height - m_toolbar_h) / ih);
+                                           static_cast<float>(m_renderer.target_size().height) / ih);
                     float dw = iw * scale, dh = ih * scale;
                     float dx = (m_renderer.target_size().width - dw) * 0.5f;
-                    float dy = m_toolbar_h + (m_renderer.target_size().height - m_toolbar_h - dh) * 0.5f;
+                    float dy = (m_renderer.target_size().height - dh) * 0.5f;
                     m_anim_dst = {dx, dy, dx + dw, dy + dh};
                 }
             }
@@ -2427,10 +2427,10 @@ void App::render_frame() {
             uint32_t iw, ih; m_renderer.image_size(iw, ih);
             if (iw > 0 && ih > 0) {
                 float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                                   static_cast<float>(m_renderer.target_size().height - m_toolbar_h) / ih);
+                                   static_cast<float>(m_renderer.target_size().height) / ih);
                 float dw = iw * s, dh = ih * s;
                 float dx = (m_renderer.target_size().width - dw) * 0.5f;
-                float dy = m_toolbar_h + (m_renderer.target_size().height - m_toolbar_h - dh) * 0.5f;
+                float dy = (m_renderer.target_size().height - dh) * 0.5f;
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
             }
         }
