@@ -143,6 +143,11 @@ private:
     UINT_PTR m_toast_timer = 0;     // toast dismiss timer
     UINT_PTR m_sel_timer = 0;       // selection clear timer
 
+    // Title bar (custom, bypasses system hook on this PC)
+    int m_title_h = 32;
+    int m_title_btn_hover = -1;  // 0=min, 1=max, 2=close
+    int m_title_btn_press = -1;
+
     // Multi-select (grid only)
     std::vector<bool> m_selected;
     int  m_sel_anchor = -1;

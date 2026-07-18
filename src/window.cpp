@@ -4,7 +4,7 @@
 
 namespace mv {
 
-constexpr const wchar_t* CLASS_NAME = L"MinViewWindow";
+constexpr const wchar_t* CLASS_NAME = L"MVFrameW32";
 
 Window::~Window() {
     if (m_hwnd) {
@@ -13,7 +13,7 @@ Window::~Window() {
     }
 }
 
-bool Window::create(const std::wstring& title, int width, int height) {
+bool Window::create(const std::wstring& /*title*/, int width, int height) {
     HINSTANCE hinst = GetModuleHandle(nullptr);
 
     WNDCLASSEXW wc = {};
@@ -40,9 +40,9 @@ bool Window::create(const std::wstring& title, int width, int height) {
     int pos_y = (screen_h - win_h) / 2;
 
     m_hwnd = CreateWindowExW(
-        WS_EX_APPWINDOW | WS_EX_WINDOWEDGE,
-        CLASS_NAME, title.c_str(),
-        WS_OVERLAPPEDWINDOW,
+        WS_EX_APPWINDOW,
+        CLASS_NAME, L"",  // No title — we draw our own
+        WS_OVERLAPPEDWINDOW & ~WS_CAPTION,  // custom title bar, keeps resize borders
         pos_x, pos_y, win_w, win_h,
         nullptr, nullptr, hinst, this);
 

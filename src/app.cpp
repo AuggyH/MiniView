@@ -256,7 +256,7 @@ int App::run(const std::wstring& initial_path) {
     m_thumb_pad   = static_cast<int>(8 * scale);   // uniform padding
     m_cell_size   = m_thumb_cell + m_thumb_gap_h;
     m_panel_width = static_cast<int>(280 * scale);
-    m_toolbar_h  = static_cast<int>(28 * scale);
+    m_toolbar_h  = static_cast<int>((m_title_h + 28) * scale);
 
     // No native menu bar — custom toolbar drawn via D2D
     SetMenu(m_window.handle(), nullptr);
@@ -289,6 +289,28 @@ int App::run(const std::wstring& initial_path) {
 
 LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+
+    case WM_NCCALCSIZE:
+        if (wp == TRUE) return 0;  // no inset for caption — custom title bar
+        break;
+
+    case WM_NCHITTEST: {
+        POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        ScreenToClient(hwnd, &pt);
+        float dpi_s = m_renderer.is_valid()
+            ? static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f : 1.0f;
+        int th = static_cast<int>(m_title_h * dpi_s);
+        if (pt.y >= 0 && pt.y < th) {
+            float tw = static_cast<float>(m_renderer.target_size().width);
+            float btn_w = 46.0f * dpi_s;
+            float cx = tw - btn_w;
+            if (pt.x >= cx)                return HTCLIENT;  // close btn
+            if (pt.x >= cx - btn_w)        return HTCLIENT;  // max btn
+            if (pt.x >= cx - btn_w * 2)    return HTCLIENT;  // min btn
+            return HTCAPTION;  // drag title bar
+        }
+        break;
+    }
 
     case WM_COMMAND:
         switch (LOWORD(wp)) {
@@ -497,7 +519,22 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_LBUTTONDOWN: {
-        // Toolbar click? (nested scope to avoid cross-case init)
+        // Title bar: buttons act, rest returns (drag via NCHITTEST)
+        {
+            int ty2 = GET_Y_LPARAM(lp);
+            float ts = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+            int th = static_cast<int>(m_title_h * ts);
+            if (ty2 < th) {
+                int tx2 = GET_X_LPARAM(lp);
+                float tw2 = static_cast<float>(m_renderer.target_size().width);
+                float bw = 46.0f * ts;
+                if (tx2 >= tw2 - bw)      { m_title_btn_press = 2; m_window.invalidate(); return 0; }
+                if (tx2 >= tw2 - bw * 2)  { m_title_btn_press = 1; m_window.invalidate(); return 0; }
+                if (tx2 >= tw2 - bw * 3)  { m_title_btn_press = 0; m_window.invalidate(); return 0; }
+                return 0;  // title bar drag area — NCHITTEST handles it
+            }
+        }
+        // Toolbar click?
         int ty = GET_Y_LPARAM(lp);
         if (ty < m_toolbar_h) {
             int tx = GET_X_LPARAM(lp);
@@ -643,9 +680,39 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        // Title button hover
+        {
+            int ty3 = GET_Y_LPARAM(lp);
+            float ts2 = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+            int th2 = static_cast<int>(m_title_h * ts2);
+            int prev_btn = m_title_btn_hover;
+            m_title_btn_hover = -1;
+            if (ty3 >= 0 && ty3 < th2) {
+                int tx3 = GET_X_LPARAM(lp);
+                float tw3 = static_cast<float>(m_renderer.target_size().width);
+                float bw2 = 46.0f * ts2;
+                if (tx3 >= tw3 - bw2)          m_title_btn_hover = 2;
+                else if (tx3 >= tw3 - bw2 * 2)  m_title_btn_hover = 1;
+                else if (tx3 >= tw3 - bw2 * 3)  m_title_btn_hover = 0;
+            }
+            if (m_title_btn_hover != prev_btn) m_window.invalidate();
+        }
         return -1;
 
     case WM_LBUTTONUP:
+        if (m_title_btn_press >= 0) {
+            int id = m_title_btn_press;
+            m_title_btn_press = -1;
+            m_window.invalidate();
+            if (id == 2)      PostMessage(hwnd, WM_CLOSE, 0, 0);
+            else if (id == 1) {
+                WINDOWPLACEMENT wp2 = {sizeof(WINDOWPLACEMENT)};
+                GetWindowPlacement(hwnd, &wp2);
+                ShowWindow(hwnd, wp2.showCmd == SW_MAXIMIZE ? SW_RESTORE : SW_MAXIMIZE);
+            }
+            else if (id == 0) ShowWindow(hwnd, SW_MINIMIZE);
+            return 0;
+        }
         if (m_scrollbar_dragging) {
             m_scrollbar_dragging = false;
             ReleaseCapture();
@@ -848,13 +915,7 @@ void App::open_image(const std::wstring& path) {
 }
 
 void App::update_title() {
-    // Keep title static — system hook garbles custom window class titles
-    // Image info is shown via overlay / info card instead
-    static bool once = false;
-    if (!once) {
-        once = true;
-        SetWindowTextW(m_window.handle(), L"MinView");
-    }
+    SetWindowTextW(m_window.handle(), L"MinView");
 }
 
 void App::navigate_to(int idx) {
@@ -2099,8 +2160,10 @@ void App::grid_render() {
     m_renderer.draw_scrollbar(sb_x0, static_cast<float>(m_toolbar_h), sb_w, view_h - m_toolbar_h,
         static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y), sb_active);
 
-    // Toolbar always on top
-    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
+    // Title bar + toolbar on top
+    float tb_y = m_title_h * (static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press);
+    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active, tb_y);
 
     // Side info panel
     {
@@ -2199,9 +2262,12 @@ void App::render_frame() {
         return;
     }
     m_renderer.clear();
-    // Draw custom toolbar
+    // Draw custom title bar then toolbar
     float tw = static_cast<float>(m_renderer.target_size().width);
-    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active);
+    float dpi_s_title = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    float title_h = m_title_h * dpi_s_title;
+    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press);
+    m_renderer.draw_toolbar(tw, m_toolbar_items, m_toolbar_active, title_h);
     if (m_has_image) {
         m_renderer.draw_image();
         m_renderer.draw_overlay();
