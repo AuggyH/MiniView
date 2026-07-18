@@ -19,6 +19,7 @@ set(SOURCES
     src/viewer.cpp
     src/app.cpp
     src/indexer.cpp
+    src/metadata.cpp
 )
 
 set(HEADERS
@@ -28,6 +29,7 @@ set(HEADERS
     src/viewer.h
     src/app.h
     src/indexer.h
+    src/metadata.h
 )
 
 # Windows libraries (all part of Windows SDK, no external deps)

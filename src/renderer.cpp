@@ -256,6 +256,61 @@ void Renderer::draw_hint(const std::wstring& text) {
     m_text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 }
 
+void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wstring>>& items) {
+    if (!m_d2d_context || !m_text_format || items.empty()) return;
+
+    float card_w = std::min(560.0f, static_cast<float>(m_target_size.width) - 40.0f);
+    float line_h = 22.0f;
+    float pad = 16.0f;
+    float card_h = pad * 2 + line_h * items.size() + 8.0f;
+    float card_x = (m_target_size.width - card_w) / 2.0f;
+    float card_y = (m_target_size.height - card_h) / 2.0f;
+
+    // Card background
+    ComPtr<ID2D1SolidColorBrush> bg;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.08f, 0.08f, 0.10f, 0.92f), &bg);
+    D2D1_RECT_F rc = {card_x, card_y, card_x + card_w, card_y + card_h};
+    m_d2d_context->FillRoundedRectangle(
+        D2D1::RoundedRect(rc, 8.0f, 8.0f), bg.Get());
+
+    // Border
+    ComPtr<ID2D1SolidColorBrush> border;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.25f, 0.25f, 0.30f, 0.8f), &border);
+    m_d2d_context->DrawRoundedRectangle(
+        D2D1::RoundedRect(rc, 8.0f, 8.0f), border.Get(), 1.0f);
+
+    // Items
+    ComPtr<ID2D1SolidColorBrush> label_brush, value_brush;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.5f, 0.5f, 0.55f, 1.0f), &label_brush);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.9f, 0.9f, 0.9f, 1.0f), &value_brush);
+
+    float label_w = 80.0f;
+    float value_x = card_x + pad + label_w + 8.0f;
+    float value_w = card_w - pad * 2 - label_w - 8.0f;
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        float y = card_y + pad + i * line_h;
+
+        // Label
+        D2D1_RECT_F lr = {card_x + pad, y, card_x + pad + label_w, y + line_h};
+        m_d2d_context->DrawText(items[i].first.c_str(),
+            static_cast<uint32_t>(items[i].first.size()),
+            m_text_format.Get(), &lr, label_brush.Get());
+
+        // Value
+        if (!items[i].second.empty()) {
+            D2D1_RECT_F vr = {value_x, y, value_x + value_w, y + line_h};
+            m_d2d_context->DrawText(items[i].second.c_str(),
+                static_cast<uint32_t>(items[i].second.size()),
+                m_text_format.Get(), &vr, value_brush.Get());
+        }
+    }
+}
+
 void Renderer::draw_overlay() {
     if (!m_d2d_context || !m_text_format || !m_overlay_brush) return;
     if (m_img_width == 0 || m_img_height == 0) return;
