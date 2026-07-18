@@ -494,7 +494,7 @@ void Renderer::draw_side_panel(float x, float w, float h,
             m_text_format.Get(), &lr, grey.Get());
         m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
             m_text_format.Get(), &vr, white.Get());
-        y += 24;
+        y += 28;
     }
 
     // Generation info section
@@ -502,7 +502,7 @@ void Renderer::draw_side_panel(float x, float w, float h,
         y += 8;
         D2D1_RECT_F tr = {x + pad, y, x + w - pad, y + 20};
         m_d2d_context->DrawText(L"\u751F\u6210\u4FE1\u606F", 4, m_text_format.Get(), &tr, grey.Get());
-        y += 24;
+        y += 28;
         for (auto& [label, value] : gen_info) {
             if (y + 20 > h) break;
             D2D1_RECT_F lr = {x + pad, y, x + 60, y + 20};
@@ -511,7 +511,7 @@ void Renderer::draw_side_panel(float x, float w, float h,
                 m_text_format.Get(), &lr, grey.Get());
             m_d2d_context->DrawText(value.c_str(), static_cast<uint32_t>(value.size()),
                 m_text_format.Get(), &vr, white.Get());
-            y += 24;
+            y += 28;
         }
     }
 }

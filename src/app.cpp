@@ -369,7 +369,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
-            m_window.invalidate();  // triggers grid_render which requests visible thumbs
+            m_scroll_active = false;
+            m_window.invalidate();
         }
         return 0;
 
@@ -396,6 +397,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
             m_grid_scroll_y -= static_cast<int>(delta * 60);
             if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
+            m_scroll_active = true;
             m_window.invalidate();
             return 0;
         }
@@ -499,13 +501,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDBLCLK:
         if (m_grid_mode) {
             if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size())) {
-                toggle_grid();  // exit grid
+                toggle_grid();
                 navigate_to(m_grid_sel);
             }
             return 0;
         }
-        fit_to_window();
-        m_window.invalidate();
+        if (m_has_image) { toggle_grid(); return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -1429,7 +1430,7 @@ void App::grid_render() {
     m_renderer.clear();
 
     int total = static_cast<int>(m_index.size());
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width);
+    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
     int cols = std::max(1, (grid_area_w - m_thumb_pad * 2 + m_thumb_gap) / m_cell_size);
     m_grid_cols = cols;
     int cell = m_thumb_size + m_thumb_gap;
@@ -1439,9 +1440,11 @@ void App::grid_render() {
 
     // (thumb requests handled by WM_TIMER for smooth scroll)
 
-    // Request visible thumbs (cheap — skips already-loaded/queued)
-    for (int i = top_row * cols; i < std::min(total, (bot_row + 1) * cols); ++i)
-        request_thumb(i);
+    // Request visible thumbs (skip during active scroll)
+    if (!m_scroll_active) {
+        for (int i = top_row * cols; i < std::min(total, (bot_row + 1) * cols); ++i)
+            request_thumb(i);
+    }
 
     // Batch-grab ready WIC thumbnails under one mutex lock (avoids per-thumbnail contention)
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
