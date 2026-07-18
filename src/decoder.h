@@ -1,6 +1,7 @@
 #pragma once
 #include <wincodec.h>
 #include <wrl/client.h>
+#include <d2d1.h>
 #include <string>
 #include <optional>
 
@@ -34,6 +35,9 @@ public:
 
     /// Get image metadata (size, DPI) without full decode.
     std::optional<ImageInfo> probe(const std::wstring& path);
+
+    /// Extract dominant color from a WIC bitmap source (downscales to 32x32).
+    D2D1_COLOR_F extract_dominant(IWICBitmapSource* src);
 
 private:
     ComPtr<IWICImagingFactory> m_factory;

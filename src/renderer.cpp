@@ -372,46 +372,16 @@ HRESULT Renderer::create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** o
     return m_d2d_context->CreateBitmapFromWicBitmap(wic, nullptr, out);
 }
 
-void Renderer::draw_grid_placeholder(float x, float y, float size,
-                                      const std::wstring& name, bool selected) {
+void Renderer::draw_grid_placeholder(float x, float y, float w, float h, D2D1_COLOR_F color) {
     if (!m_d2d_context) return;
 
-    // Background
-    D2D1_RECT_F rc = {x, y, x + size, y + size};
-    float r = selected ? 0.20f : 0.15f;
-    float g = selected ? 0.22f : 0.15f;
-    float b = selected ? 0.25f : 0.15f;
-    float radius = 4.0f;
+    float radius = 4.0f * m_dpi_y / 96.0f;
+    D2D1_RECT_F rc = {x, y, x + w, y + h};
+    D2D1_ROUNDED_RECT rr = {rc, radius, radius};
 
     ComPtr<ID2D1SolidColorBrush> brush;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(r, g, b), &brush);
-    m_d2d_context->FillRoundedRectangle(
-        D2D1::RoundedRect(rc, radius, radius), brush.Get());
-
-    // Selection border
-    if (selected) {
-        ComPtr<ID2D1SolidColorBrush> sel;
-        m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.35f, 0.55f, 0.85f), &sel);
-        m_d2d_context->DrawRoundedRectangle(
-            D2D1::RoundedRect(rc, radius, radius), sel.Get(), 2.0f);
-    }
-
-    // Filename text (centered at bottom)
-    if (m_text_format && m_overlay_brush && !name.empty()) {
-        float text_y = y + size - 20.0f;
-        D2D1_RECT_F tr = {x + 3.0f, text_y, x + size - 3.0f, y + size - 2.0f};
-
-        // Shadow
-        ComPtr<ID2D1SolidColorBrush> shadow;
-        m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.55f), &shadow);
-        D2D1_RECT_F sr = {x + 4.0f, text_y + 1.0f, x + size - 2.0f, y + size - 1.0f};
-        m_d2d_context->DrawText(name.c_str(), static_cast<uint32_t>(name.size()),
-            m_text_format.Get(), &sr, shadow.Get());
-        m_d2d_context->DrawText(name.c_str(), static_cast<uint32_t>(name.size()),
-            m_text_format.Get(), &tr, m_overlay_brush.Get());
-    }
+    m_d2d_context->CreateSolidColorBrush(color, &brush);
+    m_d2d_context->FillRoundedRectangle(&rr, brush.Get());
 }
 
 void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitmap1* thumb, bool square) {

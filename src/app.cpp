@@ -1488,9 +1488,16 @@ static void thumb_loader_worker(
                     }
                 }
 
+                // Extract dominant color for skeleton screen
+                D2D1_COLOR_F dom = {0.10f, 0.10f, 0.12f, 1.0f};
+                if (wic) {
+                    dom = decoder.extract_dominant(wic.Get());
+                }
+
                 std::lock_guard lock(mtx);
                 thumbs[idx].wic = wic;
                 thumbs[idx].loaded = true;
+                thumbs[idx].dominant_color = dom;
                 // Store original dimensions via probe
                 auto info = decoder.probe(index.path_at(idx));
                 if (info) { thumbs[idx].orig_w = info->width; thumbs[idx].orig_h = info->height; }
@@ -2059,6 +2066,8 @@ void App::grid_render() {
             auto dit = m_thumb_d2d.find(idx2);
             if (dit != m_thumb_d2d.end() && dit->second) {
                 m_renderer.draw_grid_thumbnail(x, row_y, w, static_cast<float>(ri.row_h), dit->second.Get(), m_thumb_square);
+            } else if (idx2 < static_cast<int>(m_thumbs.size()) && m_thumbs[idx2].loaded) {
+                m_renderer.draw_grid_placeholder(x, row_y, w, static_cast<float>(ri.row_h), m_thumbs[idx2].dominant_color);
             }
             if (sel) {
                 D2D1_RECT_F sel_rc = {x - 2, row_y - 2, x + w + 2, row_y + ri.row_h + 2};

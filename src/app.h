@@ -26,6 +26,7 @@ public:
         Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
         bool loaded = false;
         uint32_t orig_w = 0, orig_h = 0;
+        D2D1_COLOR_F dominant_color = {0.10f, 0.10f, 0.12f, 1.0f};
     };
 
 private:
