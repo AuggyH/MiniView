@@ -382,13 +382,15 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_CONTEXTMENU: {
-        int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);
+        int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);  // screen coords
+        POINT pt = {cx, cy};
+        ScreenToClient(hwnd, &pt);  // convert to client coords for hit-test
         if (m_grid_mode) {
             // Right-click: select item under cursor and show menu
-            grid_click(cx, cy, false, false);
+            grid_click(pt.x, pt.y, false, false);
             if (m_grid_sel < 0 || m_grid_sel >= static_cast<int>(m_index.size()))
                 return 0;  // no menu on empty space
-            show_context_menu(hwnd, cx, cy);
+            show_context_menu(hwnd, cx, cy);  // screen coords for popup
         } else {
             show_context_menu(hwnd, cx, cy);
         }
