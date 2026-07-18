@@ -122,6 +122,7 @@ enum {
     IDM_FULLSCREEN   = 1011,
     IDM_RECURSIVE    = 1012,
     IDM_THUMB_SQUARE = 1013,
+    IDM_INFO         = 1014,
     IDM_SORT_NAME    = 1020,
     IDM_SORT_DATE    = 1021,
     IDM_SORT_SIZE    = 1022,
@@ -158,6 +159,8 @@ HMENU build_menu_bar() {
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(view_menu, MF_STRING, IDM_RECURSIVE,    L"\u9012\u5F52\u6D4F\u89C8\tCtrl+R");
     AppendMenuW(view_menu, MF_STRING, IDM_THUMB_SQUARE, L"\u65B9\u5F62\u7F29\u7565\u56FE\tA");
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(view_menu, MF_STRING, IDM_INFO,         L"\u751F\u6210\u4FE1\u606F\tI");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu), L"\u67E5\u770B(&V)");
 
     HMENU edit_menu = CreatePopupMenu();
@@ -275,6 +278,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); return 0;
         case IDM_RECURSIVE: toggle_recursive(); return 0;
         case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
+        case IDM_INFO:         toggle_info(); return 0;
         case IDM_SORT_NAME:   set_sort_mode(SortMode::Name);   return 0;
         case IDM_SORT_DATE:   set_sort_mode(SortMode::Date);   return 0;
         case IDM_SORT_SIZE:   set_sort_mode(SortMode::Size);   return 0;
@@ -469,6 +473,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case 'A':
             if (m_grid_mode) { toggle_thumb_square(); return 0; }
             return -1;
+        case 'I':
+            toggle_info(); return 0;
         case 'N':
             if (!ctrl) { set_sort_mode(SortMode::Name); return 0; }
             return -1;
@@ -595,6 +601,7 @@ void App::navigate_to(int idx) {
     if (idx < 0 || idx >= static_cast<int>(m_index.size())) return;
     const auto& path = m_index.path_at(idx);
     if (path.empty()) return;
+    m_show_info = false;
     open_image(path);
 }
 
@@ -762,6 +769,8 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         AppendMenuW(menu, MF_STRING, 3, L"\u5220\u9664\tDel");
         AppendMenuW(menu, MF_STRING, 4, L"\u6C38\u4E45\u5220\u9664\tShift+Del");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, 7, L"\u67E5\u770B\u751F\u6210\u4FE1\u606F\tI");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         UINT flags = MF_STRING;
         if (m_recursive) flags |= MF_CHECKED;
         AppendMenuW(menu, flags, 6, L"\u9012\u5F52\u6D4F\u89C8\tCtrl+R");
@@ -801,6 +810,7 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         break;
     }
     case 6: toggle_recursive(); break;
+    case 7: toggle_info(); break;
     case 10: set_sort_mode(SortMode::Name);   break;
     case 11: set_sort_mode(SortMode::Date);   break;
     case 12: set_sort_mode(SortMode::Size);   break;
@@ -1083,6 +1093,16 @@ void App::grid_ensure_visible() {
     if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
 }
 
+void App::toggle_info() {
+    if (!m_has_image || m_grid_mode) return;
+    if (!m_show_info) {
+        m_info_meta = extract_metadata(m_current_path);
+        if (!m_info_meta.valid) return;
+    }
+    m_show_info = !m_show_info;
+    m_window.invalidate();
+}
+
 void App::toggle_thumb_square() {
     m_thumb_square = !m_thumb_square;
     m_thumb_d2d.clear();  // force redraw with new aspect
@@ -1256,6 +1276,30 @@ void App::render_frame() {
     if (m_has_image) {
         m_renderer.draw_image();
         m_renderer.draw_overlay();
+        if (m_show_info) {
+            std::vector<std::pair<std::wstring, std::wstring>> items;
+            if (!m_info_meta.positive_prompt.empty())
+                items.push_back({L"\u63D0\u793A\u8BCD", m_info_meta.positive_prompt});
+            if (!m_info_meta.negative_prompt.empty())
+                items.push_back({L"\u53CD\u5411\u8BCD", m_info_meta.negative_prompt});
+            if (!m_info_meta.model.empty())
+                items.push_back({L"\u6A21\u578B", m_info_meta.model});
+            if (!m_info_meta.vae.empty())
+                items.push_back({L"VAE", m_info_meta.vae});
+            if (m_info_meta.width > 0 && m_info_meta.height > 0)
+                items.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(m_info_meta.width) + L"\u00D7" + std::to_wstring(m_info_meta.height)});
+            if (m_info_meta.seed >= 0)
+                items.push_back({L"Seed", std::to_wstring(m_info_meta.seed)});
+            if (m_info_meta.steps > 0)
+                items.push_back({L"\u6B65\u6570", std::to_wstring(m_info_meta.steps)});
+            if (m_info_meta.cfg > 0)
+                items.push_back({L"CFG", std::to_wstring(m_info_meta.cfg)});
+            if (!m_info_meta.sampler.empty())
+                items.push_back({L"\u91C7\u6837\u5668", m_info_meta.sampler});
+            if (!m_info_meta.scheduler.empty())
+                items.push_back({L"\u8C03\u5EA6\u5668", m_info_meta.scheduler});
+            m_renderer.draw_info_card(items);
+        }
     } else {
         m_renderer.draw_hint(L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6");
     }

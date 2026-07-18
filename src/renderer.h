@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 #include <d2d1_3.h>
 #include <dwrite.h>
 #include <wincodec.h>
@@ -27,6 +29,7 @@ public:
     void draw_image();
     void draw_overlay();
     void draw_hint(const std::wstring& text);
+    void draw_info_card(const std::vector<std::pair<std::wstring, std::wstring>>& items);
 
     // Create a D2D bitmap from a WIC source (for grid thumbnails)
     HRESULT create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** out);

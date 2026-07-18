@@ -3,6 +3,7 @@
 #include "renderer.h"
 #include "decoder.h"
 #include "indexer.h"
+#include "metadata.h"
 #include <string>
 #include <thread>
 #include <mutex>
@@ -55,6 +56,7 @@ private:
     void    toggle_grid();
     void    set_sort_mode(SortMode mode);
     void    toggle_thumb_square();
+    void    toggle_info();
     bool    has_selection() const;
     void    clear_selection();
     void    select_range(int start, int end);
@@ -107,6 +109,8 @@ private:
     int   m_grid_cols = 0;
     int   m_grid_total_rows = 0;
     bool  m_thumb_square = false;
+    bool  m_show_info = false;
+    ImageMeta m_info_meta;
 
     // Multi-select (grid only)
     std::vector<bool> m_selected;
