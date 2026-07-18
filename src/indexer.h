@@ -22,6 +22,7 @@ public:
     const std::wstring& directory() const { return m_root_dir; }
 
     const std::wstring& path_at(size_t idx) const;
+    std::wstring        relpath_at(size_t idx) const;
     int  index_of(const std::wstring& path) const;
 
     /// Remove entry at sorted index. Returns true if removed.
@@ -29,6 +30,7 @@ public:
 
 private:
     void sort_by_name();
+    void sort_by_path();
     void rebuild_map();
 
     std::vector<ImageEntry>                  m_files;

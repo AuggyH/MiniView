@@ -1,6 +1,5 @@
 #include "app.h"
 #include <stdexcept>
-#include <chrono>
 #include <filesystem>
 #include <algorithm>
 #include <windowsx.h>
@@ -167,6 +166,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             case VK_OEM_PLUS: case VK_ADD:   zoom_at_center(1.25f); return 0;
             case VK_OEM_MINUS: case VK_SUBTRACT: zoom_at_center(1.0f/1.25f); return 0;
             case 'C': copy_to_clipboard(); return 0;
+            case 'R': toggle_recursive(); return 0;
             }
             return -1;
         }
@@ -209,7 +209,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // ── Image loading ────────────────────────────────────────────
 
 void App::open_image(const std::wstring& path) {
-    auto t0 = std::chrono::high_resolution_clock::now();
     try {
         // Try preload cache first
         auto cached = get_preloaded(path);
@@ -228,22 +227,11 @@ void App::open_image(const std::wstring& path) {
         if (dir.empty()) dir = L".";
 
         if (m_index.directory() != dir) {
-            m_index.scan(dir, false);
+            m_index.scan(dir, m_recursive);
         }
         m_current_idx = m_index.index_of(path);
 
-        auto t2 = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t0).count();
-
-        uint32_t iw, ih; m_renderer.image_size(iw, ih);
-        size_t pos = path.find_last_of(L"\\/");
-        std::wstring fn = (pos != std::wstring::npos) ? path.substr(pos + 1) : path;
-
-        std::wstring title = std::to_wstring(iw) + L"x" + std::to_wstring(ih) +
-            L" " + std::to_wstring(ms) + L"ms" +
-            L" [" + std::to_wstring(m_current_idx + 1) + L"/" +
-            std::to_wstring(m_index.size()) + L"] " + fn;
-        SetWindowTextW(m_window.handle(), title.c_str());
+        update_title();
 
         // Preload neighbors in background
         preload_neighbors();
@@ -256,13 +244,20 @@ void App::open_image(const std::wstring& path) {
 
 void App::update_title() {
     uint32_t iw, ih; m_renderer.image_size(iw, ih);
-    size_t pos = m_current_path.find_last_of(L"\\/");
-    std::wstring fn = (pos != std::wstring::npos)
-        ? m_current_path.substr(pos + 1) : m_current_path;
+
+    // Show relative path in recursive mode, filename only otherwise
+    std::wstring display_name;
+    if (m_recursive && m_current_idx >= 0) {
+        display_name = m_index.relpath_at(m_current_idx);
+    } else {
+        size_t pos = m_current_path.find_last_of(L"\\/");
+        display_name = (pos != std::wstring::npos)
+            ? m_current_path.substr(pos + 1) : m_current_path;
+    }
 
     std::wstring title = std::to_wstring(iw) + L"x" + std::to_wstring(ih) +
         L" [" + std::to_wstring(m_current_idx + 1) + L"/" +
-        std::to_wstring(m_index.size()) + L"] " + fn;
+        std::to_wstring(m_index.size()) + L"] " + display_name;
     SetWindowTextW(m_window.handle(), title.c_str());
 }
 
@@ -272,6 +267,28 @@ void App::navigate_to(int idx) {
     const auto& path = m_index.path_at(idx);
     if (path.empty()) return;
     open_image(path);
+}
+
+// ── Recursive browse ─────────────────────────────────────────
+
+void App::toggle_recursive() {
+    m_recursive = !m_recursive;
+
+    std::wstring dir = m_index.directory();
+    if (dir.empty() && !m_current_path.empty()) {
+        namespace fs = std::filesystem;
+        dir = fs::path(m_current_path).parent_path().wstring();
+    }
+    if (dir.empty()) return;
+
+    m_index.scan(dir, m_recursive);
+
+    // Re-locate current image in new index
+    if (!m_current_path.empty()) {
+        m_current_idx = m_index.index_of(m_current_path);
+    }
+    update_title();
+    m_window.invalidate();
 }
 
 // ── Preloader ────────────────────────────────────────────────
@@ -377,6 +394,10 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, 3, L"Delete\tDel");
         AppendMenuW(menu, MF_STRING, 4, L"Delete Permanently\tShift+Del");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        UINT flags = MF_STRING;
+        if (m_recursive) flags |= MF_CHECKED;
+        AppendMenuW(menu, flags, 6, L"Recursive Browse\tCtrl+R");
     } else {
         AppendMenuW(menu, MF_STRING, 5, L"Open File...");
     }
@@ -412,6 +433,7 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         }
         break;
     }
+    case 6: toggle_recursive(); break;
     }
 
     DestroyMenu(menu);
@@ -540,9 +562,6 @@ void App::render_frame() {
     if (m_has_image) {
         m_renderer.draw_image();
         m_renderer.draw_overlay();
-    } else {
-        // No image: show centered hint text
-        // (background already cleared to dark gray)
     }
     m_renderer.end_frame();
 }
