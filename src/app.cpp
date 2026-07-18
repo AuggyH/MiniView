@@ -523,30 +523,30 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode && !m_panel_clickable.empty()) {
             int tx = GET_X_LPARAM(lp);
             for (int i = 0; i < static_cast<int>(m_panel_clickable.size()); ++i) {
-                auto& [rc, text] = m_panel_clickable[i];
-                if (tx >= static_cast<int>(rc.left) && tx < static_cast<int>(rc.right) &&
-                    ty >= static_cast<int>(rc.top) && ty < static_cast<int>(rc.bottom)) {
+                auto& pc = m_panel_clickable[i];
+                int cty = GET_Y_LPARAM(lp);
+                if (tx >= static_cast<int>(pc.rect.left) && tx <= static_cast<int>(pc.rect.right)
+                    && cty >= static_cast<int>(pc.rect.top) && cty <= static_cast<int>(pc.rect.bottom))
+                {
+                    m_panel_sel = i;
+                    if (m_sel_timer) KillTimer(hwnd, m_sel_timer);
+                    m_sel_timer = SetTimer(hwnd, 3, 400, nullptr);
                     // Copy to clipboard
                     if (OpenClipboard(hwnd)) {
                         EmptyClipboard();
-                        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
-                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+                        size_t sz = (pc.text.size() + 1) * sizeof(wchar_t);
+                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sz);
                         if (hMem) {
-                            auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
-                            wcscpy_s(dst, text.size() + 1, text.c_str());
-                            GlobalUnlock(hMem);
+                            wchar_t* p = static_cast<wchar_t*>(GlobalLock(hMem));
+                            if (p) { wmemcpy(p, pc.text.c_str(), pc.text.size() + 1); GlobalUnlock(hMem); }
                             SetClipboardData(CF_UNICODETEXT, hMem);
                         }
                         CloseClipboard();
                     }
-                    // Brief highlight
-                    m_panel_sel = i;
-                    if (m_sel_timer) KillTimer(hwnd, m_sel_timer);
-                    m_sel_timer = SetTimer(hwnd, 2, 400, nullptr);
-                    // Toast
-                    m_panel_copied = L"已复制: " + text;
+                    // Toast: "已复制" + label
+                    m_panel_copied = L"\u5df2\u590d\u5236" + pc.label;  // 已复制
                     if (m_toast_timer) KillTimer(hwnd, m_toast_timer);
-                    m_toast_timer = SetTimer(hwnd, 3, 2000, nullptr);
+                    m_toast_timer = SetTimer(hwnd, 2, 2000, nullptr);
                     m_window.invalidate();
                     return 0;
                 }

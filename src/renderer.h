@@ -14,6 +14,8 @@ namespace mv {
 
 using Microsoft::WRL::ComPtr;
 
+struct PanelRegion { D2D1_RECT_F rect; std::wstring text; std::wstring label; };
+
 class Renderer {
 public:
     Renderer();
@@ -34,7 +36,7 @@ public:
         ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,
         const std::vector<std::pair<std::wstring, std::wstring>>& info,
         const std::vector<std::pair<std::wstring, std::wstring>>& gen_info,
-        std::vector<std::pair<D2D1_RECT_F, std::wstring>>* out_clickable = nullptr,
+        std::vector<PanelRegion>* out_clickable = nullptr,
         int sel_idx = -1, const std::wstring* toast = nullptr,
         float scroll_y = 0.0f);  // returns total content height
     void draw_scrollbar(float x, float y, float w, float h,
