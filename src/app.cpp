@@ -1006,6 +1006,7 @@ void App::toggle_recursive() {
         m_thumbs.clear();
         m_thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
+        m_last_cached_sel = -1;
         m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
         clear_selection();
         m_selected.resize(m_index.size(), false);
@@ -1038,6 +1039,7 @@ void App::set_sort_mode(SortMode mode) {
         m_thumbs.clear();
         m_thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
+        m_last_cached_sel = -1;
         m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
         clear_selection();
         m_selected.resize(m_index.size(), false);
@@ -2158,8 +2160,9 @@ void App::grid_render() {
     }  // end justified layout
     m_grid_total_rows = static_cast<int>(rows.size());
 
-    // Cache selected thumbnail rect for transition animation
-    if (m_grid_sel >= 0) {
+    // Cache selected thumbnail rect for transition animation (only when sel changes)
+    if (m_grid_sel >= 0 && m_grid_sel != m_last_cached_sel) {
+        m_last_cached_sel = m_grid_sel;
         for (auto& ri : rows) {
             if (m_grid_sel >= ri.start_idx && m_grid_sel < ri.end_idx) {
                 int j = m_grid_sel - ri.start_idx;
