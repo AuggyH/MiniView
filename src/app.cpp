@@ -783,7 +783,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_temp_preview) { m_temp_preview = false; m_window.invalidate(); return 0; }
             if (m_grid_mode) { toggle_grid(); return 0; }
             if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
-            DestroyWindow(hwnd); return 0;
+            return 0;  // in normal image mode, do nothing
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
         case 'G':
             if (!m_index.empty()) toggle_grid();
