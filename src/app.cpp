@@ -413,7 +413,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / 0.30f;  // 300ms total
+            m_anim_t = elapsed / 0.20f;  // 200ms
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
@@ -2309,17 +2309,17 @@ void App::grid_render() {
 
     m_renderer.pop_clip();
     if (m_animating) {
-        // Recompute dest/src in case window size changed
-        if (m_anim_forward) {
-            uint32_t iw, ih; m_renderer.image_size(iw, ih);
-            if (iw > 0 && ih > 0) {
-                float scale = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                                       static_cast<float>(m_renderer.target_size().height) / ih);
-                float dw = iw * scale, dh = ih * scale;
-                float dx = (m_renderer.target_size().width - dw) * 0.5f;
-                float dy = (m_renderer.target_size().height - dh) * 0.5f;
+        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        if (iw > 0 && ih > 0) {
+            float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
+                               static_cast<float>(m_renderer.target_size().height) / ih);
+            float dw = iw * s, dh = ih * s;
+            float dx = (m_renderer.target_size().width - dw) * 0.5f;
+            float dy = (m_renderer.target_size().height - dh) * 0.5f;
+            if (m_anim_forward)
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
-            }
+            else
+                m_anim_src = {dx, dy, dx + dw, dy + dh};
         }
         m_renderer.draw_fade_overlay(m_anim_t);
         if (m_anim_thumb)
@@ -2341,16 +2341,17 @@ void App::render_frame() {
             m_renderer.draw_overlay();
         }
         if (m_animating) {
-            if (m_anim_forward) {
-                uint32_t iw, ih; m_renderer.image_size(iw, ih);
-                if (iw > 0 && ih > 0) {
-                    float scale = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                                           static_cast<float>(m_renderer.target_size().height) / ih);
-                    float dw = iw * scale, dh = ih * scale;
-                    float dx = (m_renderer.target_size().width - dw) * 0.5f;
-                    float dy = (m_renderer.target_size().height - dh) * 0.5f;
+            uint32_t iw, ih; m_renderer.image_size(iw, ih);
+            if (iw > 0 && ih > 0) {
+                float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
+                                   static_cast<float>(m_renderer.target_size().height) / ih);
+                float dw = iw * s, dh = ih * s;
+                float dx = (m_renderer.target_size().width - dw) * 0.5f;
+                float dy = (m_renderer.target_size().height - dh) * 0.5f;
+                if (m_anim_forward)
                     m_anim_dst = {dx, dy, dx + dw, dy + dh};
-                }
+                else
+                    m_anim_src = {dx, dy, dx + dw, dy + dh};
             }
             m_renderer.draw_fade_overlay(m_anim_t);
             if (m_anim_thumb)
@@ -2423,16 +2424,17 @@ void App::render_frame() {
     }
     m_renderer.pop_clip();
     if (m_animating) {
-        if (m_anim_forward) {
-            uint32_t iw, ih; m_renderer.image_size(iw, ih);
-            if (iw > 0 && ih > 0) {
-                float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                                   static_cast<float>(m_renderer.target_size().height) / ih);
-                float dw = iw * s, dh = ih * s;
-                float dx = (m_renderer.target_size().width - dw) * 0.5f;
-                float dy = (m_renderer.target_size().height - dh) * 0.5f;
+        uint32_t iw, ih; m_renderer.image_size(iw, ih);
+        if (iw > 0 && ih > 0) {
+            float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
+                               static_cast<float>(m_renderer.target_size().height) / ih);
+            float dw = iw * s, dh = ih * s;
+            float dx = (m_renderer.target_size().width - dw) * 0.5f;
+            float dy = (m_renderer.target_size().height - dh) * 0.5f;
+            if (m_anim_forward)
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
-            }
+            else
+                m_anim_src = {dx, dy, dx + dw, dy + dh};
         }
         m_renderer.draw_fade_overlay(m_anim_t);
         if (m_anim_thumb)
