@@ -1539,7 +1539,7 @@ void App::toggle_grid() {
 }
 
 void App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int cols = m_grid_cols, gap_h = m_thumb_gap_h, gap_v = m_thumb_gap_v;
+    int cols = m_grid_cols, gap_h = m_thumb_gap_h;
     int total = static_cast<int>(m_index.size());
     if (cols == 0 || total == 0) return;
 
