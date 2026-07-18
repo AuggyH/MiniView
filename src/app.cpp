@@ -809,7 +809,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             navigate_to(m_current_idx + 1); return 0;
         case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
         case VK_RETURN:
-            if (m_has_image && !m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
+            if (m_has_image || m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
             return -1;
         case 'A':
             if (m_grid_mode) { toggle_thumb_square(); return 0; }
