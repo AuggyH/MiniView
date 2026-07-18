@@ -554,17 +554,24 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
 {
     if (!m_d2d_context || total <= 0 || view >= total) return;
 
+    // Track background
+    ComPtr<ID2D1SolidColorBrush> track;
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.15f, 0.15f, 0.18f, 0.6f), &track);
+    D2D1_RECT_F track_rc = {x, y, x + w, y + h};
+    D2D1_ROUNDED_RECT track_rr = {track_rc, w * 0.35f, w * 0.35f};
+    m_d2d_context->FillRoundedRectangle(&track_rr, track.Get());
+
     float ratio = view / total;
-    float thumb_h = std::max(24.0f, h * ratio);
+    float thumb_h = std::max(28.0f, h * ratio);
     float range = total - view;
     float pct = (range > 0) ? std::min(1.0f, pos / range) : 0.0f;
     float thumb_y = y + (h - thumb_h) * pct;
 
     ComPtr<ID2D1SolidColorBrush> thumb;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.35f, 0.35f, 0.40f, 0.7f), &thumb);
+    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.40f, 0.40f, 0.45f, 0.85f), &thumb);
 
-    D2D1_RECT_F tr = {x, thumb_y, x + w, thumb_y + thumb_h};
-    D2D1_ROUNDED_RECT rr = {tr, w * 0.4f, w * 0.4f};
+    D2D1_RECT_F tr = {x + 1.0f, thumb_y, x + w - 1.0f, thumb_y + thumb_h};
+    D2D1_ROUNDED_RECT rr = {tr, (w - 2) * 0.4f, (w - 2) * 0.4f};
     m_d2d_context->FillRoundedRectangle(&rr, thumb.Get());
 }
 

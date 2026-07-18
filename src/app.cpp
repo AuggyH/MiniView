@@ -11,6 +11,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <ole2.h>
+#include <ocidl.h>
 
 extern void save_last_dir(const std::wstring& dir);
 extern std::wstring get_config_dir();
@@ -248,7 +249,7 @@ int App::run(const std::wstring& initial_path) {
 
     // Scale thumbnail cell size by DPI
     float scale = dpi / 96.0f;
-    m_thumb_size = static_cast<int>(160 * scale);
+    m_thumb_size = static_cast<int>(200 * scale);
     m_thumb_gap  = static_cast<int>(6 * scale);
     m_thumb_pad  = static_cast<int>(0);      // zero padding — grid flush with edges
     m_cell_size  = m_thumb_size + m_thumb_gap;
@@ -468,6 +469,18 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        // Scrollbar click in grid mode?
+        if (m_grid_mode) {
+            int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width;
+            int sb_x = gw - 18;
+            int sb_w = 12;
+            int sx = GET_X_LPARAM(lp);
+            if (sx >= sb_x && sx < sb_x + sb_w && ty >= m_toolbar_h &&
+                ty < static_cast<int>(m_renderer.target_size().height)) {
+                handle_scrollbar_click(hwnd, sx, ty);
+                return 0;
+            }
+        }
     }
         if (m_grid_mode) {
             bool sd = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -483,6 +496,21 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_MOUSEMOVE:
+        // Scrollbar drag
+        if (m_scrollbar_dragging) {
+            int dy = GET_Y_LPARAM(lp) - m_scrollbar_drag_y;
+            int view_h = static_cast<int>(m_renderer.target_size().height);
+            int sb_h = view_h - m_toolbar_h;
+            float total = static_cast<float>(m_grid_total_h);
+            float view  = static_cast<float>(view_h);
+            if (total > view) {
+                float move_ratio = static_cast<float>(dy) / static_cast<float>(sb_h);
+                float new_pos = static_cast<float>(m_scrollbar_drag_pos) + move_ratio * total;
+                m_grid_scroll_y = static_cast<int>(std::clamp(new_pos, 0.0f, total - view));
+                m_window.invalidate();
+            }
+            return 0;
+        }
         // Toolbar hover tracking
         {
             int ty = GET_Y_LPARAM(lp);
@@ -524,6 +552,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return -1;
 
     case WM_LBUTTONUP:
+        if (m_scrollbar_dragging) {
+            m_scrollbar_dragging = false;
+            ReleaseCapture();
+            return 0;
+        }
         if (m_drag_pending) {
             m_drag_pending = false;
             ReleaseCapture();
@@ -947,6 +980,18 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
 }
 
 void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
+    // Precompute toolbar item bounds for hover-switching detection
+    float dpi = static_cast<float>(GetDpiForWindow(hwnd));
+    float fsize = 13.0f * dpi / 96.0f;
+    float item_x = 12.0f;
+    struct TbItem { float left, right; };
+    std::vector<TbItem> tb_bounds;
+    for (auto& item : m_toolbar_items) {
+        float iw = m_renderer.measure_text(item, fsize) + 24.0f;
+        tb_bounds.push_back({item_x, item_x + iw});
+        item_x += iw;
+    }
+
     HMENU popup = CreatePopupMenu();
     switch (idx) {
     case 0: // 文件
@@ -979,9 +1024,60 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         AppendMenuW(popup, MF_STRING, 31, L"关于 MinView");
         break;
     }
+
+    // Set up menu hover-switch state
+    static HWND  s_menu_hwnd = nullptr;
+    static int   s_active_idx = -1;
+    static int   s_switch_to = -1;
+    static std::vector<TbItem> s_tb_bounds;
+    static int   s_toolbar_h = 0;
+    s_menu_hwnd   = hwnd;
+    s_active_idx  = idx;
+    s_switch_to   = -1;
+    s_tb_bounds   = tb_bounds;
+    s_toolbar_h   = m_toolbar_h;
+
+    // Message filter hook for hover-switching menus
+    HHOOK hook = SetWindowsHookExW(WH_MSGFILTER,
+        [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
+            if (code == MSGF_MENU && s_switch_to < 0) {
+                MSG* msg = (MSG*)lp;
+                if (msg->message == WM_MOUSEMOVE || msg->message == WM_NCMOUSEMOVE) {
+                    POINT pt;
+                    GetCursorPos(&pt);
+                    ScreenToClient(s_menu_hwnd, &pt);
+                    if (pt.y >= 0 && pt.y < s_toolbar_h) {
+                        for (int i = 0; i < static_cast<int>(s_tb_bounds.size()); ++i) {
+                            if (i != s_active_idx &&
+                                pt.x >= s_tb_bounds[i].left &&
+                                pt.x < s_tb_bounds[i].right) {
+                                s_switch_to = i;
+                                PostMessageW(s_menu_hwnd, WM_CANCELMODE, 0, 0);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            return CallNextHookEx(nullptr, code, wp, lp);
+        }, nullptr, GetCurrentThreadId());
+
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
+
+    if (hook) UnhookWindowsHookEx(hook);
     DestroyMenu(popup);
+
+    // If menu was cancelled to switch to another toolbar item
+    if (cmd == 0 && s_switch_to >= 0) {
+        int next = s_switch_to;
+        s_switch_to = -1;
+        // Compute new popup position for the switched item
+        POINT pt = {static_cast<int>(s_tb_bounds[next].left), static_cast<int>(m_toolbar_h)};
+        ClientToScreen(hwnd, &pt);
+        show_toolbar_menu(hwnd, next, pt.x, pt.y);
+        return;
+    }
 
     // Handle commands
     switch (cmd) {
@@ -1114,10 +1210,19 @@ static void save_wic_as_jpeg(IWICBitmapSource* src, const std::wstring& path) {
     if (FAILED(hr)) return;
     encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
 
+    // Set JPEG quality to 90 (default is ~75, too low for thumbnails)
     ComPtr<IWICBitmapFrameEncode> frame;
-    hr = encoder->CreateNewFrame(&frame, nullptr);
+    ComPtr<IPropertyBag2> props;
+    hr = encoder->CreateNewFrame(&frame, &props);
     if (FAILED(hr)) return;
-    frame->Initialize(nullptr);
+    if (props) {
+        PROPBAG2 opt = {};
+        opt.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
+        VARIANT v; VariantInit(&v);
+        v.vt = VT_R4; v.fltVal = 0.90f;
+        props->Write(1, &opt, &v);
+    }
+    hr = frame->Initialize(props.Get());
 
     uint32_t w, h;
     src->GetSize(&w, &h);
@@ -1387,6 +1492,44 @@ void App::grid_click(int x, int y, bool shift, bool ctrl) {
         }
         cx += iw2 + gap;
     }
+}
+
+void App::handle_scrollbar_click(HWND hwnd, int /*mx*/, int my) {
+    int view_h = static_cast<int>(m_renderer.target_size().height);
+    int sb_h = view_h - m_toolbar_h;
+    int sb_y = m_toolbar_h;
+
+    // Compute thumb position (same as draw_scrollbar)
+    float total = static_cast<float>(m_grid_total_h);
+    float view  = static_cast<float>(view_h);
+    if (total <= view) return;
+
+    float ratio = view / total;
+    float thumb_h = std::max(28.0f, sb_h * ratio);
+    float range = total - view;
+    float pct = (range > 0) ? std::min(1.0f, m_grid_scroll_y / range) : 0.0f;
+    float thumb_y = sb_y + (sb_h - thumb_h) * pct;
+
+    int my_f = my;
+
+    // Check if click is on the thumb → start drag
+    if (my_f >= static_cast<int>(thumb_y) && my_f < static_cast<int>(thumb_y + thumb_h)) {
+        m_scrollbar_dragging = true;
+        m_scrollbar_drag_y = my_f;
+        m_scrollbar_drag_pos = m_grid_scroll_y;
+        SetCapture(hwnd);
+        return;
+    }
+
+    // Above thumb → page up
+    if (my_f < static_cast<int>(thumb_y)) {
+        m_grid_scroll_y = std::max(0, m_grid_scroll_y - static_cast<int>(view_h * 0.9f));
+    } else {
+        // Below thumb → page down
+        m_grid_scroll_y = std::min(static_cast<int>(total - view),
+            m_grid_scroll_y + static_cast<int>(view_h * 0.9f));
+    }
+    m_window.invalidate();
 }
 
 void App::grid_navigate(int dir, bool shift) {
@@ -1677,7 +1820,8 @@ void App::grid_render() {
     // Scrollbar
     int total_h = 0;
     for (auto& ri : rows) total_h += ri.row_h + gap;
-    m_renderer.draw_scrollbar(px - 14.0f, static_cast<float>(m_toolbar_h), 8.0f, view_h - m_toolbar_h,
+    m_grid_total_h = total_h;  // cache for scrollbar interaction
+    m_renderer.draw_scrollbar(px - 18.0f, static_cast<float>(m_toolbar_h), 12.0f, view_h - m_toolbar_h,
         static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y));
 
     // Toolbar always on top
