@@ -5,4 +5,5 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 if %ERRORLEVEL% NEQ 0 exit /b 1
 cmake --build build --config Release
 if %ERRORLEVEL% NEQ 0 exit /b 1
+copy /Y build\Release\MinView.exe MinView.exe >nul
 echo BUILD_OK
