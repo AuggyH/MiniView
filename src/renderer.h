@@ -36,6 +36,8 @@ public:
         const std::vector<std::pair<std::wstring, std::wstring>>& gen_info);
     void draw_scrollbar(float x, float y, float w, float h,
         float total, float view, float pos);
+    float draw_text_line(float x, float y, float w,
+        const std::wstring& text, ID2D1SolidColorBrush* brush);
 
     // Create a D2D bitmap from a WIC source (for grid thumbnails)
     HRESULT create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** out);

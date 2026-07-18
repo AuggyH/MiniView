@@ -255,7 +255,14 @@ int App::run(const std::wstring& initial_path) {
 
     SetMenu(m_window.handle(), build_menu_bar());
 
+    // Dark menu: theme + background brush
     SetWindowTheme(m_window.handle(), L"DarkMode_Explorer", nullptr);
+    {
+        MENUINFO mi = {sizeof(MENUINFO)};
+        mi.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
+        mi.hbrBack = CreateSolidBrush(RGB(32, 32, 36));
+        SetMenuInfo(GetMenu(m_window.handle()), &mi);
+    }
     DrawMenuBar(m_window.handle());
     SetWindowPos(m_window.handle(), nullptr, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
@@ -1444,9 +1451,9 @@ void App::grid_render() {
     m_grid_cols = cols;
     int cell = m_thumb_size + m_thumb_gap;
     int visible_rows = (static_cast<int>(m_renderer.target_size().height) - m_thumb_pad * 2 + m_thumb_gap) / cell;
-    int grid_content_w = cols * m_cell_size - m_thumb_gap + m_thumb_pad * 2;
-    int extra = std::max(0, (grid_area_w - grid_content_w) / 2);
-    int tx = m_thumb_pad + extra;
+    int grid_content_w = cols * m_cell_size - m_thumb_gap;
+    int extra = grid_area_w - grid_content_w - m_thumb_pad * 2;
+    int tx = m_thumb_pad + std::max(0, extra / 2);
     int top_row = m_grid_scroll_y / cell;
     int bot_row = top_row + visible_rows + 1;  // +1 for partial
 
