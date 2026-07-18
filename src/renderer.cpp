@@ -917,6 +917,8 @@ void Renderer::draw_fade_overlay(float t, bool forward) {
 
 void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
     if (!m_d2d_context || !bmp) return;
+    if (src.right <= src.left || src.bottom <= src.top) return;
+    if (dst.right <= dst.left || dst.bottom <= dst.top) return;
     // Ease-out quartic
     float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t) * (1.0f - t);
     float x = src.left   + (dst.left   - src.left)   * et;

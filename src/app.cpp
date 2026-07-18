@@ -1385,7 +1385,9 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
     if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
 
     if (!forward) {
-        m_anim_dst = m_anim_src;  // dest = thumb pos
+        // Only use cached src if valid (non-zero area)
+        if (m_anim_src.right > m_anim_src.left && m_anim_src.bottom > m_anim_src.top)
+            m_anim_dst = m_anim_src;
     }
 }
 
