@@ -413,32 +413,41 @@ void Renderer::draw_grid_placeholder(float x, float y, float size,
 }
 
 void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitmap1* thumb, bool square) {
-    if (!m_d2d_context || !thumb) return;
+    if (!m_d2d_context || !thumb || !m_d2d_factory) return;
 
     D2D1_SIZE_F bmp_size = thumb->GetSize();
     if (bmp_size.width == 0 || bmp_size.height == 0) return;
 
+    float scale = square ? std::max(w / bmp_size.width, h / bmp_size.height)
+                         : std::min(w / bmp_size.width, h / bmp_size.height);
+    float dw = bmp_size.width * scale;
+    float dh = bmp_size.height * scale;
+    float ox = x + (w - dw) / 2.0f;
+    float oy = y + (h - dh) / 2.0f;
+    D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
+
+    // Rounded corner clip
+    float radius = 8.0f * m_dpi_y / 96.0f;
+    D2D1_ROUNDED_RECT rr = {{x, y, x + w, y + h}, radius, radius};
+    ComPtr<ID2D1RoundedRectangleGeometry> geo;
+    m_d2d_factory->CreateRoundedRectangleGeometry(&rr, &geo);
+
     if (square) {
-        float scale = std::max(w / bmp_size.width, h / bmp_size.height);
-        float dw = bmp_size.width * scale;
-        float dh = bmp_size.height * scale;
-        float ox = x + (w - dw) / 2.0f;
-        float oy = y + (h - dh) / 2.0f;
         D2D1_RECT_F clip = {x, y, x + w, y + h};
         m_d2d_context->PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
-        D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
-        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
-            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+    }
+
+    m_d2d_context->PushLayer(
+        D2D1::LayerParameters(D2D1::InfiniteRect(), geo.Get(),
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            D2D1::IdentityMatrix(), 1.0f, nullptr, D2D1_LAYER_OPTIONS_NONE),
+        nullptr);
+    m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+    m_d2d_context->PopLayer();
+
+    if (square) {
         m_d2d_context->PopAxisAlignedClip();
-    } else {
-        float scale = std::min(w / bmp_size.width, h / bmp_size.height);
-        float dw = bmp_size.width * scale;
-        float dh = bmp_size.height * scale;
-        float ox = x + (w - dw) / 2.0f;
-        float oy = y + (h - dh) / 2.0f;
-        D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
-        m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
-            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
     }
 }
 
