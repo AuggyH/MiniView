@@ -50,7 +50,8 @@ public:
     void draw_grid_placeholder(float x, float y, float size, const std::wstring& name, bool selected);
     void draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitmap1* thumb, bool square = false);
     void draw_selection_border(D2D1_RECT_F rc);
-    void draw_label(float x, float y, float w, const std::wstring& text, float font_size);
+    void draw_label(float x, float y, float w, const std::wstring& text, float font_size,
+        float r = 0.82f, float g = 0.82f, float b = 0.85f);
     float label_height(const std::wstring& text, float w, float font_size);
 
     void clear(float r = 0.102f, float g = 0.102f, float b = 0.102f);
