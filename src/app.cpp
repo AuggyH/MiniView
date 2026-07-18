@@ -890,6 +890,7 @@ void App::open_image(const std::wstring& path) {
             m_grid_scroll_saved = m_grid_scroll_y;
             m_grid_saved_idx = m_grid_sel;
             m_grid_mode = false;
+            m_temp_preview = true;  // Esc will return to grid
             if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
             stop_thumb_loader();
         }
