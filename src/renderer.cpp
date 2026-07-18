@@ -113,7 +113,7 @@ bool Renderer::create_text_resources() {
     if (FAILED(hr)) return false;
 
     hr = m_dwrite_factory->CreateTextFormat(
-        L"Segoe UI", nullptr,
+        L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
@@ -467,7 +467,7 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return;
     ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
-    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
@@ -490,7 +490,7 @@ float Renderer::label_height(const std::wstring& text, float w, float font_size)
     if (!m_dwrite_factory || text.empty()) return 0;
     ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
-    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     ComPtr<IDWriteTextLayout> layout;
@@ -636,7 +636,7 @@ float Renderer::draw_text_line(float x, float y, float w,
     IDWriteTextFormat* fmt = m_text_format.Get();
     ComPtr<IDWriteTextFormat> sized_fmt;
     if (font_size > 0.0f && m_dwrite_factory) {
-        m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+        m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             font_size * m_dpi_y / 96.0f, L"en-US", &sized_fmt);
@@ -661,7 +661,7 @@ float Renderer::draw_text_line(float x, float y, float w,
 float Renderer::measure_text(const std::wstring& text, float font_size) {
     if (!m_dwrite_factory) return 0;
     ComPtr<IDWriteTextFormat> tf;
-    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         font_size, L"en-US", &tf);
     ComPtr<IDWriteTextLayout> layout;
@@ -685,7 +685,7 @@ void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
     ComPtr<IDWriteTextFormat> tf;
-    m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
+    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         13.0f * m_dpi_y / 96.0f, L"en-US", &tf);
 
