@@ -1908,12 +1908,7 @@ void App::grid_ensure_visible() {
         int top_y = 0;
         for (int r = 0; r < row; ++r) top_y += m_row_heights[r];
         int row_h = m_row_heights[row];
-        int bot_y = top_y + row_h;
-
-        if (top_y < m_grid_scroll_y)
-            m_grid_scroll_y = top_y - m_thumb_pad;
-        else if (bot_y > m_grid_scroll_y + visible_h)
-            m_grid_scroll_y = bot_y - visible_h + m_thumb_pad;
+        m_grid_scroll_y = top_y + row_h / 2 - visible_h / 2;
     } else {
         // Fallback: uniform cell estimate
         int sbz2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
@@ -1921,10 +1916,7 @@ void App::grid_ensure_visible() {
         int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap_h) / m_grid_cols;
         int cell_h = thumb_w + m_thumb_gap_h;
         int top_y = row * cell_h;
-        int bot_y = top_y + cell_h;
-
-        if (top_y < m_grid_scroll_y) m_grid_scroll_y = top_y - m_thumb_pad;
-        else if (bot_y > m_grid_scroll_y + visible_h) m_grid_scroll_y = bot_y - visible_h + m_thumb_pad;
+        m_grid_scroll_y = top_y + cell_h / 2 - visible_h / 2;
     }
     if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
     // Clamp to bottom
