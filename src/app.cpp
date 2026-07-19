@@ -940,6 +940,8 @@ void App::open_image(const std::wstring& path) {
             auto bitmap = m_decoder.decode(path);
             m_renderer.upload_image(bitmap.Get());
         }
+        // Center image in content area (below title bar)
+        m_renderer.set_offset(0, m_toolbar_h * 0.5f);
         m_current_path = path;
         m_has_image = true;
 
@@ -1471,10 +1473,11 @@ void App::fit_to_window() {
     if (iw == 0 || ih == 0) return;
     RECT rc; GetClientRect(m_window.handle(), &rc);
     float cw = static_cast<float>(rc.right - rc.left);
-    float ch = static_cast<float>(rc.bottom - rc.top);
+    float ch = static_cast<float>(rc.bottom - rc.top) - m_toolbar_h;  // exclude title bar
     if (cw <= 0 || ch <= 0) return;
     m_renderer.set_scale(std::min(cw / iw, ch / ih));
-    m_renderer.set_offset(0, 0);
+    m_renderer.set_offset(0, m_toolbar_h * 0.5f);
+    m_renderer.set_scroll_y(0);
 }
 
 void App::zoom_at_center(float factor) {
