@@ -1450,20 +1450,24 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     s_toolbar_h   = m_toolbar_h;
 
     // CBT hook: remove border from popup menu window at creation
+    static HBRUSH s_menu_bg = CreateSolidBrush(RGB(32, 32, 36));
     HHOOK cbt_hook = SetWindowsHookExW(WH_CBT,
         [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
             if (code == HCBT_CREATEWND) {
                 HWND hwnd = reinterpret_cast<HWND>(wp);
                 wchar_t cls[16];
                 if (GetClassNameW(hwnd, cls, 16) && wcscmp(cls, L"#32768") == 0) {
+                    // Strip all border styles
                     LONG style = GetWindowLongW(hwnd, GWL_STYLE);
                     style &= ~(WS_BORDER | WS_DLGFRAME | WS_THICKFRAME);
                     SetWindowLongW(hwnd, GWL_STYLE, style);
                     LONG ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
                     ex &= ~(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME);
                     SetWindowLongW(hwnd, GWL_EXSTYLE, ex);
-                    // Disable theme border rendering
                     SetWindowTheme(hwnd, L"", L"");
+                    // Set dark background for gaps between owner-draw items
+                    SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(s_menu_bg));
+                    InvalidateRect(hwnd, nullptr, TRUE);
                 }
             }
             return CallNextHookEx(nullptr, code, wp, lp);
