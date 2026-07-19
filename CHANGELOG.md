@@ -54,3 +54,14 @@
 - 打断不稳定（已禁用）
 - 缩略图加载偶发停滞（可能为 COM/Shell thumbnail 超时）
 - 快速滚动时缩略图加载跟不上（可考虑 `m_scroll_active` 优化或虚拟化）
+
+## 2026-07-19: 连续空格位移动画消失修复
+
+**根因**: `m_last_cached_sel` 缓存 + 循环动画状态残留。EXIT 动画结束后 `m_anim_src` 被覆写为 image-fit rect，下次 ENTER 时缓存命中导致 `grid_render` 跳过重算 → src==dst → 缩略图不飞。
+
+另有 stale `WM_TIMER(4)` 竞态（清 `m_anim_thumb`）和 `m_anim_iw/ih` 为 0 时动画计算被跳过的次要问题。
+
+**修复** (3 处，共 5 行):
+- `start_transition()`: `m_last_cached_sel = -1` 强制重算
+- WM_TIMER handler: `&& m_anim_timer` 过滤 stale 消息
+- ×3 动画渲染块: `image_size()` 后备当 `iw==0`
