@@ -1435,21 +1435,26 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     s_tb_bounds   = tb_bounds;
     s_toolbar_h   = m_toolbar_h;
 
-    // Message filter hook for hover-switching menus + border removal
     static bool s_border_fixed = false;
+
+    // Message filter hook for hover-switching menus + border removal
     HHOOK hook = SetWindowsHookExW(WH_MSGFILTER,
         [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
             if (code == MSGF_MENU) {
                 MSG* msg = (MSG*)lp;
-                // Remove white border from popup on first idle
+                // Remove white border from popup
                 if (msg->message == WM_ENTERIDLE && !s_border_fixed) {
-                    HWND hmenu = msg->hwnd;
+                    HWND hmenu = FindWindowW(L"#32768", nullptr);
                     if (hmenu) {
                         LONG style = GetWindowLongW(hmenu, GWL_STYLE);
-                        style &= ~WS_BORDER;
+                        style &= ~(WS_BORDER | WS_DLGFRAME);
                         SetWindowLongW(hmenu, GWL_STYLE, style);
+                        // Also remove extended border
+                        LONG ex = GetWindowLongW(hmenu, GWL_EXSTYLE);
+                        ex &= ~(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE);
+                        SetWindowLongW(hmenu, GWL_EXSTYLE, ex);
                         SetWindowPos(hmenu, nullptr, 0, 0, 0, 0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
                         s_border_fixed = true;
                     }
                 }
@@ -1486,6 +1491,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         x, y, 0, hwnd, nullptr);
 
     DeleteObject(mi.hbrBack);
+
+    s_border_fixed = false;  // reset for next popup
 
     if (hook) UnhookWindowsHookEx(hook);
     DestroyMenu(popup);
