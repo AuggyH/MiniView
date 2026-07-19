@@ -1319,7 +1319,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         }, nullptr, GetCurrentThreadId());
 
     // Offset popup left by menu gutter so text aligns with toolbar text
-    x -= static_cast<int>(24 * dpi_s_tb);
+    int icon_gutter = GetSystemMetrics(SM_CXMENUCHECK) + GetSystemMetrics(SM_CXEDGE);
+    x -= icon_gutter;
 
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
