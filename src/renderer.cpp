@@ -840,7 +840,7 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
         DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    float title_w = 80.0f * dpi_s;
+    float title_w = 68.0f * dpi_s;
     D2D1_RECT_F trc = {pad, 0, pad + title_w, h};
     m_d2d_context->DrawText(L"MinView", 7, tf.Get(), &trc, title_br.Get());
 
@@ -849,7 +849,7 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &mtf);
-    float mx = pad + title_w + 8.0f * dpi_s;
+    float mx = pad + title_w + 4.0f * dpi_s;
     for (int i = 0; i < static_cast<int>(menu_items.size()); ++i) {
         ComPtr<IDWriteTextLayout> layout;
         m_dwrite_factory->CreateTextLayout(menu_items[i].c_str(),
@@ -861,7 +861,7 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
         // Hover highlight
         if (i == active_menu) {
             D2D1_RECT_F hr = {mx - 4.0f * dpi_s, 2.0f * dpi_s,
-                              mx + mw + 4.0f * dpi_s, h - 2.0f * dpi_s};
+                              mx + mw - 4.0f * dpi_s, h - 2.0f * dpi_s};
             m_d2d_context->FillRoundedRectangle(
                 D2D1::RoundedRect(hr, 4.0f * dpi_s, 4.0f * dpi_s), menu_hover_bg.Get());
         }
