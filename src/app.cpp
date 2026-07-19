@@ -2230,10 +2230,8 @@ void App::grid_render() {
     float tw = static_cast<float>(m_renderer.target_size().width);
     float view_h = static_cast<float>(m_renderer.target_size().height);
 
-    // Title bar with menus (drawn before content, clip keeps content below)
+    // Title bar height for clipping (title bar itself drawn later, on top of everything)
     float title_h2 = m_title_h * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
-        m_toolbar_items, m_toolbar_active);
     m_renderer.push_clip_below(title_h2);
 
     // --- Second pass: render ---
@@ -2364,6 +2362,9 @@ void App::grid_render() {
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
+    // Title bar always on top, even above animation overlay
+    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
+        m_toolbar_items, m_toolbar_active);
     m_renderer.end_frame();
 }
 
