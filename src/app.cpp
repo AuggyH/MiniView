@@ -1717,7 +1717,8 @@ void App::toggle_grid() {
         } else {
             // User navigated: center on current image
             m_grid_sel = m_current_idx;
-            m_grid_scroll_y = 0;  // grid_ensure_visible will set correct position
+            m_grid_scroll_y = 0;
+            grid_ensure_visible();
         }
         m_selected.clear();
         m_selected.resize(n, false);
@@ -1739,7 +1740,6 @@ void App::toggle_grid() {
         for (int i = 0; i < std::min(n, cols * (rows + 2)); ++i)
             request_thumb(i);
 
-        grid_ensure_visible();
         update_title();
 
         // 100ms timer for lazy thumbnail loading (fires even when unfocused)
