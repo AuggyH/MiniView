@@ -499,7 +499,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                          static_cast<int>(rc.left + pad_l + icon_w), rc.bottom };
         if (d->checked) {
             SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(220,220,225));
-            HFONT f = CreateFontW(static_cast<int>(14 * dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            HFONT f = CreateFontW(-MulDiv(14, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH, L"Segoe UI");
             SelectObject(hdc, f);
@@ -513,7 +513,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT text_rc = { static_cast<int>(rc.left + icon_right), rc.top,
                          rc.right - 4, rc.bottom };
         SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(230,230,235));
-        HFONT f2 = CreateFontW(static_cast<int>(12 * dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        HFONT f2 = CreateFontW(-MulDiv(12, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH, L"Microsoft YaHei");
         SelectObject(hdc, f2);
@@ -523,7 +523,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Shortcut
         if (!d->shortcut.empty()) {
             SetTextColor(hdc, disabled ? RGB(80,80,85) : RGB(160,160,168));
-            HFONT f3 = CreateFontW(static_cast<int>(11 * dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            HFONT f3 = CreateFontW(-MulDiv(11, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH, L"Microsoft YaHei");
             SelectObject(hdc, f3);
@@ -1463,8 +1463,16 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     // Align popup text with toolbar text (gutter = pad(4) + icon(16) + gap(8) - toolbar_pad(4) = 24 DIPs)
     x -= static_cast<int>(24 * dpi_s_tb);
 
+    // Dark menu background
+    MENUINFO mi = { sizeof(mi) };
+    mi.fMask = MIM_BACKGROUND;
+    mi.hbrBack = CreateSolidBrush(RGB(32, 32, 36));
+    SetMenuInfo(popup, &mi);
+
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
+
+    DeleteObject(mi.hbrBack);
 
     if (hook) UnhookWindowsHookEx(hook);
     DestroyMenu(popup);
