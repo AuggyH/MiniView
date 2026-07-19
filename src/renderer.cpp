@@ -197,7 +197,7 @@ void Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
     m_scale = std::min(sx, sy);
     m_fit_scale = m_scale;
     m_offset_x = 0;
-    m_offset_y = m_content_top * 0.5f;
+    m_offset_y = 0;
     m_scroll_y = 0;
 }
 
