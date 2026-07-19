@@ -647,6 +647,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetCapture(hwnd);
         return 0;
 
+    case WM_NCMOUSEMOVE:
+        // Non-client mouse move (title bar area): clear menu hover
+        if (m_toolbar_active >= 0) {
+            m_toolbar_active = -1;
+            m_window.invalidate();
+        }
+        return 0;
+
     case WM_MOUSEMOVE:
         // Scrollbar drag
         if (m_scrollbar_dragging) {
