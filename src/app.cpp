@@ -1319,6 +1319,12 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     if (hook) UnhookWindowsHookEx(hook);
     DestroyMenu(popup);
 
+    // Clear menu hover state after popup dismissed
+    if (m_toolbar_active >= 0) {
+        m_toolbar_active = -1;
+        m_window.invalidate();
+    }
+
     // If menu was cancelled to switch to another toolbar item
     if (cmd == 0 && s_switch_to >= 0) {
         int next = s_switch_to;
