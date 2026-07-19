@@ -1408,7 +1408,17 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
         ? ((m_grid_sel >= 0) ? m_grid_sel : m_grid_saved_idx)
         : ((m_current_idx >= 0) ? m_current_idx : m_grid_saved_idx);
     auto it = m_thumb_d2d.find(thumb_idx);
-    if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
+    if (it != m_thumb_d2d.end()) {
+        m_anim_thumb = it->second;
+    } else if (thumb_idx >= 0 && thumb_idx < static_cast<int>(m_index.size())) {
+        // Thumb not cached (e.g. navigated to unseen image in preview): decode on demand
+        auto wic = m_decoder.decode_scaled(m_index.path_at(thumb_idx), m_thumb_size);
+        if (wic) {
+            ComPtr<ID2D1Bitmap1> d2d;
+            if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d)) && d2d)
+                m_anim_thumb = d2d;
+        }
+    }
 
     // Pre-store target image size from thumbnail metadata (avoids stale image_size())
     if (forward && thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
