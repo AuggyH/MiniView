@@ -310,7 +310,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (pt.x >= cx - btn_w)        return HTCLIENT;
             if (pt.x >= cx - btn_w * 2)    return HTCLIENT;
             // Menu items → HTCLIENT (handled by WM_LBUTTONDOWN)
-            float mx = 12.0f * dpi_s + 80.0f * dpi_s + 8.0f * dpi_s;
+            float mx = 12.0f * dpi_s + 68.0f * dpi_s + 4.0f * dpi_s;
             float fsize = 12.0f * dpi_s;
             for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
                 float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + 16.0f * dpi_s;
@@ -567,7 +567,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (tx2 >= tw2 - bw * 3)  { m_title_btn_press = 0; m_window.invalidate(); return 0; }
 
                 // Menu items (after "MinView" title)
-                float mx = 12.0f * ts + 80.0f * ts + 8.0f * ts;
+                float mx = 12.0f * ts + 68.0f * ts + 4.0f * ts;
                 float fsize = 12.0f * ts;
                 m_toolbar_active = -1;
                 for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
@@ -685,7 +685,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 float dpi_m = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
                 int tx = GET_X_LPARAM(lp);
                 // Menu items start after "MinView" title
-                float x = 12.0f * dpi_m + 80.0f * dpi_m + 8.0f * dpi_m;  // pad + title_w + gap
+                float x = 12.0f * dpi_m + 68.0f * dpi_m + 4.0f * dpi_m;  // pad + title_w + gap
                 float fs = 12.0f * dpi_m;
                 for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
                     float iw = m_renderer.measure_text(m_toolbar_items[i], fs) + 16.0f * dpi_m;
@@ -1223,7 +1223,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     // Precompute menu item bounds (after "MinView" title, matching draw_title_bar)
     float dpi_s_tb = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
     float fsize = 12.0f * dpi_s_tb;
-    float item_x = 12.0f * dpi_s_tb + 80.0f * dpi_s_tb + 8.0f * dpi_s_tb;
+    float item_x = 12.0f * dpi_s_tb + 68.0f * dpi_s_tb + 4.0f * dpi_s_tb;
     struct TbItem { float left, right; };
     std::vector<TbItem> tb_bounds;
     for (auto& item : m_toolbar_items) {
