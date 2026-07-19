@@ -770,17 +770,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        if (m_has_image) {
-            start_transition(hwnd, false);
-            int scroll_before = m_grid_scroll_y;
-            toggle_grid();
-            float delta = static_cast<float>(scroll_before - m_grid_scroll_y);
-            m_anim_dst.top += delta;
-            m_anim_dst.bottom += delta;
-            m_anim_action = ACT_NONE;
-            begin_animation(hwnd);
-            return 0;
-        }
+        if (m_has_image) { start_transition(hwnd, false); toggle_grid(); m_anim_action = ACT_NONE; begin_animation(hwnd); return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -819,11 +809,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                int scroll_before = m_grid_scroll_y;
                 toggle_grid();
-                float delta = static_cast<float>(scroll_before - m_grid_scroll_y);
-                m_anim_dst.top += delta;
-                m_anim_dst.bottom += delta;
                 m_anim_action = ACT_NONE;
                 begin_animation(hwnd);
                 m_window.invalidate();
@@ -838,11 +824,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                int scroll_before = m_grid_scroll_y;
                 toggle_grid();
-                float delta = static_cast<float>(scroll_before - m_grid_scroll_y);
-                m_anim_dst.top += delta;
-                m_anim_dst.bottom += delta;
                 m_anim_action = ACT_NONE;
                 begin_animation(hwnd);
                 m_window.invalidate();
@@ -1404,7 +1386,9 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
     m_anim_thumb.Reset();
     m_last_cached_sel = -1;  // force m_anim_src recalculation on next grid_render
 
-    int thumb_idx = (m_grid_sel >= 0) ? m_grid_sel : m_grid_saved_idx;
+    int thumb_idx = forward
+        ? ((m_grid_sel >= 0) ? m_grid_sel : m_grid_saved_idx)
+        : ((m_current_idx >= 0) ? m_current_idx : m_grid_saved_idx);
     auto it = m_thumb_d2d.find(thumb_idx);
     if (it != m_thumb_d2d.end()) m_anim_thumb = it->second;
 
@@ -1418,11 +1402,6 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
         uint32_t iw, ih; m_renderer.image_size(iw, ih);
         m_anim_iw = static_cast<float>(iw);
         m_anim_ih = static_cast<float>(ih);
-    }
-
-    if (!forward) {
-        if (m_anim_src.right > m_anim_src.left && m_anim_src.bottom > m_anim_src.top)
-            m_anim_dst = m_anim_src;
     }
 }
 
@@ -2364,8 +2343,10 @@ void App::grid_render() {
             float dy = (m_renderer.target_size().height - dh) * 0.5f;
             if (m_anim_forward)
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
-            else
+            else {
+                m_anim_dst = m_anim_src;  // capture grid cell computed by grid_render
                 m_anim_src = {dx, dy, dx + dw, dy + dh};
+            }
         }
         m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
@@ -2398,8 +2379,10 @@ void App::render_frame() {
                 float dy = (m_renderer.target_size().height - dh) * 0.5f;
                 if (m_anim_forward)
                     m_anim_dst = {dx, dy, dx + dw, dy + dh};
-                else
+                else {
+                    m_anim_dst = m_anim_src;
                     m_anim_src = {dx, dy, dx + dw, dy + dh};
+                }
             }
             m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
             if (m_anim_thumb)
