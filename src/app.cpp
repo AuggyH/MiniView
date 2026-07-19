@@ -277,6 +277,19 @@ static LRESULT CALLBACK MenuSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         if (bg) FillRect(hdc, &rc, bg);
         return 1;
     }
+    if (msg == WM_PAINT) {
+        // Some system classes skip WM_ERASEBKGND; fill bg here too
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc; GetClientRect(hwnd, &rc);
+        HBRUSH bg = reinterpret_cast<HBRUSH>(GetPropW(hwnd, L"MV_BG"));
+        if (bg) FillRect(hdc, &rc, bg);
+        EndPaint(hwnd, &ps);
+        // Don't return — let owner-draw items paint themselves
+    }
+    if (msg == WM_NCPAINT) {
+        return 0;
+    }
     if (msg == WM_NCDESTROY) {
         RemovePropW(hwnd, L"MV_OLD");
         RemovePropW(hwnd, L"MV_BG");
