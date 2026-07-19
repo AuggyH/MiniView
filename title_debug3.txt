@@ -1,3 +1,0 @@
-Message-only window: [HELLO_MESSAGE_ONLY]
-Before ShowWindow: [B.exe]
-After ShowWindow: [B

@@ -1,4 +1,0 @@
-After SetWindowTextW(L"ABCDEFGHIJ"): [A.exe]
-After SendMessage SETTEXT: [1.exe]
-After SetWindowTextA("QWERTYUIOP"): [Q]
-After direct WM_SETTEXT: [D.exe]
