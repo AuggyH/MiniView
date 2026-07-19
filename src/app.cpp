@@ -1708,7 +1708,7 @@ void App::toggle_grid() {
             m_thumbs.resize(n);
             m_thumb_d2d.clear();
         }
-
+        start_thumb_loader();
         // Smart scroll restoration
         if (m_current_idx == m_grid_saved_idx) {
             // User didn't navigate: restore original scroll
@@ -1724,7 +1724,6 @@ void App::toggle_grid() {
         m_selected.resize(n, false);
         if (m_grid_sel < n) m_selected[m_grid_sel] = true;
         m_sel_anchor = m_grid_sel;
-        if (!re_entry) start_thumb_loader();
 
         // Request first visible page of thumbnails
         int sb_zone3 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
