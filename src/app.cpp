@@ -447,8 +447,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         auto* d = reinterpret_cast<OwnerItemData*>(mis->itemData);
         if (!d) break;
         float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-        float text_w = m_renderer.measure_text(d->text, 12.0f * dpi);
-        float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, 12.0f * dpi);
+        float text_w = m_renderer.measure_text(d->text, 10.0f * dpi);
+        float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, 10.0f * dpi);
         float icon_w = 16.0f * dpi;
         float pad_l = 4.0f * dpi;
         float pad_icon = 8.0f * dpi;
@@ -499,7 +499,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                          static_cast<int>(rc.left + pad_l + icon_w), rc.bottom };
         if (d->checked) {
             SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(220,220,225));
-            HFONT f = CreateFontW(-MulDiv(14, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            HFONT f = CreateFontW(-MulDiv(12, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH, L"Segoe UI");
             SelectObject(hdc, f);
@@ -513,7 +513,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT text_rc = { static_cast<int>(rc.left + icon_right), rc.top,
                          rc.right - 4, rc.bottom };
         SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(230,230,235));
-        HFONT f2 = CreateFontW(-MulDiv(12, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        HFONT f2 = CreateFontW(-MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH, L"Microsoft YaHei");
         SelectObject(hdc, f2);
@@ -523,7 +523,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Shortcut
         if (!d->shortcut.empty()) {
             SetTextColor(hdc, disabled ? RGB(80,80,85) : RGB(160,160,168));
-            HFONT f3 = CreateFontW(-MulDiv(11, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            HFONT f3 = CreateFontW(-MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH, L"Microsoft YaHei");
             SelectObject(hdc, f3);
@@ -1435,11 +1435,24 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     s_tb_bounds   = tb_bounds;
     s_toolbar_h   = m_toolbar_h;
 
-    // Message filter hook for hover-switching menus
+    // Message filter hook for hover-switching menus + border removal
+    static bool s_border_fixed = false;
     HHOOK hook = SetWindowsHookExW(WH_MSGFILTER,
         [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
-            if (code == MSGF_MENU && s_switch_to < 0) {
+            if (code == MSGF_MENU) {
                 MSG* msg = (MSG*)lp;
+                // Remove white border from popup on first idle
+                if (msg->message == WM_ENTERIDLE && !s_border_fixed) {
+                    HWND hmenu = msg->hwnd;
+                    if (hmenu) {
+                        LONG style = GetWindowLongW(hmenu, GWL_STYLE);
+                        style &= ~WS_BORDER;
+                        SetWindowLongW(hmenu, GWL_STYLE, style);
+                        SetWindowPos(hmenu, nullptr, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+                        s_border_fixed = true;
+                    }
+                }
                 if (msg->message == WM_MOUSEMOVE || msg->message == WM_NCMOUSEMOVE) {
                     POINT pt;
                     GetCursorPos(&pt);
