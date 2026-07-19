@@ -2196,7 +2196,7 @@ void App::grid_render() {
     int top_px = m_grid_scroll_y;
     int top_row = 0, bot_row = static_cast<int>(rows.size()) - 1;
     for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
-        if (rows[i].row_y + rows[i].row_h > top_px) { top_row = i; break; }
+        if (rows[i].row_y + rows[i].row_h + rows[i].label_extra > top_px) { top_row = i; break; }
     }
     for (int i = top_row; i < static_cast<int>(rows.size()); ++i) {
         if (rows[i].row_y > top_px + visible_h) { bot_row = i; break; }
