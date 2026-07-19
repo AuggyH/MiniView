@@ -233,7 +233,7 @@ struct OwnerItemData {
 };
 
 static void AddOwnerSeparator(HMENU menu) {
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_SEPARATOR | MF_OWNERDRAW, 0, nullptr);
 }
 
 static OwnerItemData* AddOwnerItem(HMENU menu, UINT id, const std::wstring& label, bool disabled = false, bool checked = false) {
@@ -269,16 +269,15 @@ static void BuildOwnerMenu(HMENU parent, HMENU sub, const std::wstring& label) {
 }
 
 // Recursively apply dark background to menu and submenus
-static void ApplyMenuTheme(HMENU menu) {
+static void ApplyMenuTheme(HMENU menu, HBRUSH br) {
     MENUINFO mi = { sizeof(mi) };
     mi.fMask = MIM_BACKGROUND;
-    mi.hbrBack = CreateSolidBrush(RGB(32, 32, 36));
+    mi.hbrBack = br;
     SetMenuInfo(menu, &mi);
-    // Walk submenus
     int cnt = GetMenuItemCount(menu);
     for (int i = 0; i < cnt; ++i) {
         HMENU sub = GetSubMenu(menu, i);
-        if (sub) ApplyMenuTheme(sub);
+        if (sub) ApplyMenuTheme(sub, br);
     }
 }
 
@@ -480,8 +479,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT rc = dis->rcItem;
         float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
 
-        // Separator
-        if (dis->itemData == 0 || dis->itemID == 0) {
+        // Separator (only itemData == 0, not by itemID)
+        if (dis->itemData == 0) {
             COLORREF bg = RGB(32, 32, 36);
             HBRUSH br = CreateSolidBrush(bg);
             FillRect(hdc, &rc, br);
@@ -1458,11 +1457,13 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
                 wchar_t cls[16];
                 if (GetClassNameW(hwnd, cls, 16) && wcscmp(cls, L"#32768") == 0) {
                     LONG style = GetWindowLongW(hwnd, GWL_STYLE);
-                    style &= ~(WS_BORDER | WS_DLGFRAME);
+                    style &= ~(WS_BORDER | WS_DLGFRAME | WS_THICKFRAME);
                     SetWindowLongW(hwnd, GWL_STYLE, style);
                     LONG ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
-                    ex &= ~(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE);
+                    ex &= ~(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME);
                     SetWindowLongW(hwnd, GWL_EXSTYLE, ex);
+                    // Disable theme border rendering
+                    SetWindowTheme(hwnd, L"", L"");
                 }
             }
             return CallNextHookEx(nullptr, code, wp, lp);
@@ -1497,7 +1498,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     x -= static_cast<int>(24 * dpi_s_tb);
 
     // Dark menu background (recursive)
-    ApplyMenuTheme(popup);
+    HBRUSH menu_br = CreateSolidBrush(RGB(32, 32, 36));
+    ApplyMenuTheme(popup, menu_br);
 
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
@@ -1505,6 +1507,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     if (hook) UnhookWindowsHookEx(hook);
     if (cbt_hook) UnhookWindowsHookEx(cbt_hook);
     DestroyMenu(popup);
+    DeleteObject(menu_br);
 
     // Clear menu hover state after popup dismissed
     if (m_toolbar_active >= 0) {
