@@ -770,26 +770,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        if (m_has_image) {
-            start_transition(hwnd, false);
-            int scroll_before = m_grid_scroll_y;
-            int old_row = (m_grid_saved_idx >= 0 && m_grid_cols > 0) ? m_grid_saved_idx / m_grid_cols : 0;
-            toggle_grid();
-            int new_row = (m_grid_sel >= 0 && m_grid_cols > 0) ? m_grid_sel / m_grid_cols : 0;
-            // Estimate row height: use saved heights if available, else uniform
-            float est_h = 120.0f + m_thumb_gap_v;
-            if (!m_row_heights.empty()) {
-                float sum = 0; for (auto h : m_row_heights) sum += static_cast<float>(h);
-                est_h = sum / m_row_heights.size();
-            }
-            float delta = static_cast<float>(scroll_before - m_grid_scroll_y)
-                        + static_cast<float>(new_row - old_row) * est_h;
-            m_anim_dst.top += delta;
-            m_anim_dst.bottom += delta;
-            m_anim_action = ACT_NONE;
-            begin_animation(hwnd);
-            return 0;
-        }
+        if (m_has_image) { start_transition(hwnd, false); toggle_grid(); m_anim_action = ACT_NONE; begin_animation(hwnd); return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -828,19 +809,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                int scroll_before = m_grid_scroll_y;
-                int old_row = (m_grid_saved_idx >= 0 && m_grid_cols > 0) ? m_grid_saved_idx / m_grid_cols : 0;
-                toggle_grid();
-                int new_row = (m_grid_sel >= 0 && m_grid_cols > 0) ? m_grid_sel / m_grid_cols : 0;
-                float est_h2 = 120.0f + m_thumb_gap_v;
-                if (!m_row_heights.empty()) {
-                    float sum = 0; for (auto h : m_row_heights) sum += static_cast<float>(h);
-                    est_h2 = sum / m_row_heights.size();
-                }
-                float delta = static_cast<float>(scroll_before - m_grid_scroll_y)
-                            + static_cast<float>(new_row - old_row) * est_h2;
-                m_anim_dst.top += delta;
-                m_anim_dst.bottom += delta;
+                toggle_grid();  // switch to grid immediately
                 m_anim_action = ACT_NONE;
                 begin_animation(hwnd);
                 m_window.invalidate();
@@ -855,19 +824,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                int scroll_before = m_grid_scroll_y;
-                int old_row = (m_grid_saved_idx >= 0 && m_grid_cols > 0) ? m_grid_saved_idx / m_grid_cols : 0;
-                toggle_grid();
-                int new_row = (m_grid_sel >= 0 && m_grid_cols > 0) ? m_grid_sel / m_grid_cols : 0;
-                float est_h2 = 120.0f + m_thumb_gap_v;
-                if (!m_row_heights.empty()) {
-                    float sum = 0; for (auto h : m_row_heights) sum += static_cast<float>(h);
-                    est_h2 = sum / m_row_heights.size();
-                }
-                float delta = static_cast<float>(scroll_before - m_grid_scroll_y)
-                            + static_cast<float>(new_row - old_row) * est_h2;
-                m_anim_dst.top += delta;
-                m_anim_dst.bottom += delta;
+                toggle_grid();  // switch to grid immediately
                 m_anim_action = ACT_NONE;
                 begin_animation(hwnd);
                 m_window.invalidate();
@@ -2204,7 +2161,7 @@ void App::grid_render() {
     m_grid_total_rows = static_cast<int>(rows.size());
 
     // Cache selected thumbnail rect for transition animation (only when sel changes)
-    if (m_grid_sel >= 0 && m_grid_sel != m_last_cached_sel) {
+    if (m_animating || (m_grid_sel >= 0 && m_grid_sel != m_last_cached_sel)) {
         m_last_cached_sel = m_grid_sel;
         for (auto& ri : rows) {
             if (m_grid_sel >= ri.start_idx && m_grid_sel < ri.end_idx) {
@@ -2400,8 +2357,10 @@ void App::grid_render() {
             float dy = (m_renderer.target_size().height - dh) * 0.5f;
             if (m_anim_forward)
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
-            else
+            else {
+                m_anim_dst = m_anim_src;
                 m_anim_src = {dx, dy, dx + dw, dy + dh};
+            }
         }
         m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
@@ -2434,8 +2393,10 @@ void App::render_frame() {
                 float dy = (m_renderer.target_size().height - dh) * 0.5f;
                 if (m_anim_forward)
                     m_anim_dst = {dx, dy, dx + dw, dy + dh};
-                else
+                else {
+                    m_anim_dst = m_anim_src;
                     m_anim_src = {dx, dy, dx + dw, dy + dh};
+                }
             }
             m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
             if (m_anim_thumb)
@@ -2519,8 +2480,10 @@ void App::render_frame() {
             float dy = (m_renderer.target_size().height - dh) * 0.5f;
             if (m_anim_forward)
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
-            else
+            else {
+                m_anim_dst = m_anim_src;
                 m_anim_src = {dx, dy, dx + dw, dy + dh};
+            }
         }
         m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
