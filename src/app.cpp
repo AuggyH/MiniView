@@ -144,35 +144,35 @@ HMENU build_menu_bar() {
     HMENU bar = CreateMenu();
 
     HMENU file_menu = CreatePopupMenu();
-    AppendMenuW(file_menu, MF_STRING, IDM_OPEN_FILE,   L"\u6253\u5F00\u6587\u4EF6...\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_OPEN_FILE,   L"\u6253\u5F00\u6587\u4EF6...	Ctrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_OPEN_FOLDER, L"\u6253\u5F00\u6587\u4EF6\u5939...");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(file_menu, MF_STRING, IDM_EXIT,        L"\u9000\u51FA\tAlt+F4");
+    AppendMenuW(file_menu, MF_STRING, IDM_EXIT,        L"\u9000\u51FA	Alt+F4");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu), L"\u6587\u4EF6(&F)");
 
     HMENU view_menu = CreatePopupMenu();
-    AppendMenuW(view_menu, MF_STRING, IDM_GRID,        L"\u7F29\u7565\u56FE\u7F51\u683C\tG");
-    AppendMenuW(view_menu, MF_STRING, IDM_FULLSCREEN,  L"\u5168\u5C4F\tF11");
+    AppendMenuW(view_menu, MF_STRING, IDM_GRID,        L"\u7F29\u7565\u56FE\u7F51\u683C	G");
+    AppendMenuW(view_menu, MF_STRING, IDM_FULLSCREEN,  L"\u5168\u5C4F	F11");
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
 
     HMENU sort_menu = CreatePopupMenu();
-    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_NAME,   L"\u6309\u540D\u79F0\tN");
-    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_DATE,   L"\u6309\u65E5\u671F\tD");
-    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_SIZE,   L"\u6309\u5927\u5C0F\tS");
-    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_RANDOM, L"\u968F\u673A\u6253\u4E71\tR");
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_NAME,   L"\u6309\u540D\u79F0	N");
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_DATE,   L"\u6309\u65E5\u671F	D");
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_SIZE,   L"\u6309\u5927\u5C0F	S");
+    AppendMenuW(sort_menu, MF_STRING, IDM_SORT_RANDOM, L"\u968F\u673A\u6253\u4E71	R");
     AppendMenuW(view_menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"\u6392\u5E8F\u65B9\u5F0F");
 
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(view_menu, MF_STRING, IDM_RECURSIVE,    L"\u9012\u5F52\u6D4F\u89C8\tCtrl+R");
-    AppendMenuW(view_menu, MF_STRING, IDM_THUMB_SQUARE, L"\u65B9\u5F62\u7F29\u7565\u56FE\tA");
+    AppendMenuW(view_menu, MF_STRING, IDM_RECURSIVE,    L"\u9012\u5F52\u6D4F\u89C8	Ctrl+R");
+    AppendMenuW(view_menu, MF_STRING, IDM_THUMB_SQUARE, L"\u65B9\u5F62\u7F29\u7565\u56FE	A");
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(view_menu, MF_STRING, IDM_INFO,         L"\u751F\u6210\u4FE1\u606F\tI");
+    AppendMenuW(view_menu, MF_STRING, IDM_INFO,         L"\u751F\u6210\u4FE1\u606F	I");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu), L"\u67E5\u770B(&V)");
 
     HMENU edit_menu = CreatePopupMenu();
-    AppendMenuW(edit_menu, MF_STRING, IDM_COPY,        L"\u590D\u5236\tCtrl+C");
-    AppendMenuW(edit_menu, MF_STRING, IDM_DELETE,      L"\u5220\u9664\tDel");
-    AppendMenuW(edit_menu, MF_STRING, IDM_DELETE_PERM, L"\u6C38\u4E45\u5220\u9664\tShift+Del");
+    AppendMenuW(edit_menu, MF_STRING, IDM_COPY,        L"\u590D\u5236	Ctrl+C");
+    AppendMenuW(edit_menu, MF_STRING, IDM_DELETE,      L"\u5220\u9664	Del");
+    AppendMenuW(edit_menu, MF_STRING, IDM_DELETE_PERM, L"\u6C38\u4E45\u5220\u9664	Shift+Del");
     AppendMenuW(edit_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(edit_menu, MF_STRING, IDM_EXPLORER,    L"\u5728\u8D44\u6E90\u7BA1\u7406\u5668\u4E2D\u6253\u5F00");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(edit_menu), L"\u7F16\u8F91(&E)");
@@ -221,6 +221,50 @@ static void preload_worker(
         // Decoder creation failed — thread exits cleanly
     }
     CoUninitialize();
+}
+
+// ── Owner-draw menu support ──────────────────────────────────
+
+struct OwnerItemData {
+    std::wstring text;
+    std::wstring shortcut;
+    bool disabled  = false;
+    bool checked   = false;
+};
+
+static void AddOwnerSeparator(HMENU menu) {
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+}
+
+static OwnerItemData* AddOwnerItem(HMENU menu, UINT id, const std::wstring& label, bool disabled = false, bool checked = false) {
+    auto* d = new OwnerItemData;
+    size_t tab = label.find(L'\t');
+    if (tab != std::wstring::npos) {
+        d->text = label.substr(0, tab);
+        d->shortcut = label.substr(tab + 1);
+    } else {
+        d->text = label;
+    }
+    d->disabled = disabled;
+    d->checked  = checked;
+    MENUITEMINFOW mii = { sizeof(mii) };
+    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA;
+    mii.fType = MFT_OWNERDRAW;
+    mii.wID   = id;
+    mii.dwItemData = reinterpret_cast<ULONG_PTR>(d);
+    InsertMenuItemW(menu, GetMenuItemCount(menu), TRUE, &mii);
+    return d;
+}
+
+static void BuildOwnerMenu(HMENU parent, HMENU sub, const std::wstring& label) {
+    auto* d = new OwnerItemData;
+    d->text = label;
+    MENUITEMINFOW mii = { sizeof(mii) };
+    mii.fMask = MIIM_FTYPE | MIIM_DATA | MIIM_SUBMENU;
+    mii.fType = MFT_OWNERDRAW;
+    mii.hSubMenu = sub;
+    mii.dwItemData = reinterpret_cast<ULONG_PTR>(d);
+    InsertMenuItemW(parent, GetMenuItemCount(parent), TRUE, &mii);
 }
 
 // ── App lifecycle ────────────────────────────────────────────
@@ -391,6 +435,83 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_ERASEBKGND:
         return 0;
+
+    case WM_MEASUREITEM: {
+        auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
+        if (mis->CtlType != ODT_MENU) break;
+        auto* d = reinterpret_cast<OwnerItemData*>(mis->itemData);
+        if (!d) break;
+        float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+        // Compute text width
+        float text_w = m_renderer.measure_text(d->text, 12.0f * dpi);
+        float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, 12.0f * dpi);
+        float icon_w = 16.0f * dpi;  // checkmark/icon area
+        float pad_l = 4.0f * dpi;
+        float pad_icon = 8.0f * dpi;
+        float pad_shortcut = 16.0f * dpi;
+        mis->itemWidth  = static_cast<UINT>(icon_w + pad_icon + text_w + pad_shortcut + shortcut_w + pad_l * 2);
+        mis->itemHeight = static_cast<UINT>(28.0f * dpi);
+        return TRUE;
+    }
+
+    case WM_DRAWITEM: {
+        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
+        if (dis->CtlType != ODT_MENU) break;
+        auto* d = reinterpret_cast<OwnerItemData*>(dis->itemData);
+        if (!d) break;
+        HDC hdc = dis->hDC;
+        RECT rc = dis->rcItem;
+        float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+        bool selected = (dis->itemState & ODS_SELECTED) != 0;
+        bool disabled = d->disabled || (dis->itemState & ODS_GRAYED);
+
+        // Background
+        COLORREF bg = selected ? RGB(50, 50, 55) : RGB(32, 32, 36);
+        HBRUSH br = CreateSolidBrush(bg);
+        FillRect(hdc, &rc, br);
+        DeleteObject(br);
+
+        // Icon/checkmark area
+        float icon_w = 16.0f * dpi;
+        float pad_l = 4.0f * dpi;
+        RECT icon_rc = { static_cast<int>(rc.left + pad_l), rc.top,
+                         static_cast<int>(rc.left + pad_l + icon_w), rc.bottom };
+        if (d->checked) {
+            SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(220,220,225));
+            HFONT f = CreateFontW(static_cast<int>(14 * dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                DEFAULT_PITCH, L"Segoe UI");
+            SelectObject(hdc, f);
+            SetBkMode(hdc, TRANSPARENT);
+            DrawTextW(hdc, L"\x2713", 1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            DeleteObject(f);
+        }
+
+        // Text
+        float icon_right = pad_l + icon_w + 8.0f * dpi;
+        RECT text_rc = { static_cast<int>(rc.left + icon_right), rc.top,
+                         rc.right - 4, rc.bottom };
+        SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(230,230,235));
+        HFONT f2 = CreateFontW(static_cast<int>(12 * dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH, L"Microsoft YaHei");
+        SelectObject(hdc, f2);
+        SetBkMode(hdc, TRANSPARENT);
+        DrawTextW(hdc, d->text.c_str(), -1, &text_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        // Shortcut
+        if (!d->shortcut.empty()) {
+            SetTextColor(hdc, disabled ? RGB(80,80,85) : RGB(160,160,168));
+            HFONT f3 = CreateFontW(static_cast<int>(11 * dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                DEFAULT_PITCH, L"Microsoft YaHei");
+            SelectObject(hdc, f3);
+            DrawTextW(hdc, d->shortcut.c_str(), -1, &text_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DeleteObject(f3);
+        }
+        DeleteObject(f2);
+        return TRUE;
+    }
 
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
@@ -1160,27 +1281,27 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
 
     if (m_has_image) {
         AppendMenuW(menu, MF_STRING, 1, L"\u5728\u8D44\u6E90\u7BA1\u7406\u5668\u4E2D\u6253\u5F00");
-        AppendMenuW(menu, MF_STRING, 2, L"\u590D\u5236\u56FE\u7247\tCtrl+C");
+        AppendMenuW(menu, MF_STRING, 2, L"\u590D\u5236\u56FE\u7247	Ctrl+C");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
         // Sort submenu
         HMENU sort_menu = CreatePopupMenu();
         auto sm = m_index.sort_mode();
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Name   ? MF_CHECKED : 0), 10, L"\u6309\u540D\u79F0\tN");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Date   ? MF_CHECKED : 0), 11, L"\u6309\u65E5\u671F\tD");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Size   ? MF_CHECKED : 0), 12, L"\u6309\u5927\u5C0F\tS");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Random ? MF_CHECKED : 0), 13, L"\u968F\u673A\u6253\u4E71\tR");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Name   ? MF_CHECKED : 0), 10, L"\u6309\u540D\u79F0	N");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Date   ? MF_CHECKED : 0), 11, L"\u6309\u65E5\u671F	D");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Size   ? MF_CHECKED : 0), 12, L"\u6309\u5927\u5C0F	S");
+        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Random ? MF_CHECKED : 0), 13, L"\u968F\u673A\u6253\u4E71	R");
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"\u6392\u5E8F\u65B9\u5F0F");
 
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, 3, L"\u5220\u9664\tDel");
-        AppendMenuW(menu, MF_STRING, 4, L"\u6C38\u4E45\u5220\u9664\tShift+Del");
+        AppendMenuW(menu, MF_STRING, 3, L"\u5220\u9664	Del");
+        AppendMenuW(menu, MF_STRING, 4, L"\u6C38\u4E45\u5220\u9664	Shift+Del");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, 7, L"\u67E5\u770B\u751F\u6210\u4FE1\u606F\tI");
+        AppendMenuW(menu, MF_STRING, 7, L"\u67E5\u770B\u751F\u6210\u4FE1\u606F	I");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         UINT flags = MF_STRING;
         if (m_recursive) flags |= MF_CHECKED;
-        AppendMenuW(menu, flags, 6, L"\u9012\u5F52\u6D4F\u89C8\tCtrl+R");
+        AppendMenuW(menu, flags, 6, L"\u9012\u5F52\u6D4F\u89C8	Ctrl+R");
     } else {
         AppendMenuW(menu, MF_STRING, 5, L"\u6253\u5F00\u6587\u4EF6...");
     }
@@ -1243,41 +1364,41 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     HMENU popup = CreatePopupMenu();
     switch (idx) {
     case 0: // 文件
-        AppendMenuW(popup, MF_STRING, IDM_OPEN_FILE, L"打开文件...\tCtrl+O");
-        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AddOwnerItem(popup, IDM_OPEN_FILE, L"打开文件...	Ctrl+O");
+        AddOwnerSeparator(popup);
         {
             bool has_sel = !m_grid_mode || m_grid_sel >= 0;
-            AppendMenuW(popup, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_EXPLORER, L"在资源管理器中打开");
+            AddOwnerItem(popup, IDM_EXPLORER, L"在资源管理器中打开", has_sel ? false : true);
         }
         break;
     case 1: // 查看
-        AppendMenuW(popup, MF_STRING, IDM_FULLSCREEN, L"全屏\tF11");
-        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
+        AddOwnerItem(popup, IDM_FULLSCREEN, L"全屏	F11");
+        AddOwnerSeparator(popup);
         {
             HMENU sort_menu = CreatePopupMenu();
             SortMode cur = m_index.sort_mode();
-            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Name   ? MF_CHECKED : 0), IDM_SORT_NAME,   L"按名称排序\tN");
-            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Date   ? MF_CHECKED : 0), IDM_SORT_DATE,   L"按日期排序\tD");
-            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Size   ? MF_CHECKED : 0), IDM_SORT_SIZE,   L"按大小排序\tS");
-            AppendMenuW(sort_menu, MF_STRING | (cur == SortMode::Random ? MF_CHECKED : 0), IDM_SORT_RANDOM, L"随机排序\tR");
-            AppendMenuW(popup, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"排序方式");
+            AddOwnerItem(sort_menu, IDM_SORT_NAME,   L"按名称排序	N", false, cur == SortMode::Name);
+            AddOwnerItem(sort_menu, IDM_SORT_DATE,   L"按日期排序	D", false, cur == SortMode::Date);
+            AddOwnerItem(sort_menu, IDM_SORT_SIZE,   L"按大小排序	S", false, cur == SortMode::Size);
+            AddOwnerItem(sort_menu, IDM_SORT_RANDOM, L"随机排序	R", false, cur == SortMode::Random);
+            BuildOwnerMenu(popup, sort_menu, L"排序方式");
         }
-        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING | (m_recursive ? MF_CHECKED : 0), IDM_RECURSIVE, L"递归浏览子文件夹\tCtrl+R");
-        AppendMenuW(popup, MF_STRING, IDM_THUMB_SQUARE,
-            m_thumb_square ? L"原始比例网格\tA" : L"方形缩略图\tA");
-        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, IDM_INFO, L"查看生成信息\tI");
+        AddOwnerSeparator(popup);
+        AddOwnerItem(popup, IDM_RECURSIVE, L"递归浏览子文件夹	Ctrl+R", false, m_recursive);
+        AddOwnerItem(popup, IDM_THUMB_SQUARE,
+            m_thumb_square ? L"原始比例网格	A" : L"方形缩略图	A");
+        AddOwnerSeparator(popup);
+        AddOwnerItem(popup, IDM_INFO, L"查看生成信息	I");
         break;
     case 2: // 编辑
-        AppendMenuW(popup, MF_STRING, IDM_COPY, L"复制文件\tCtrl+C");
-        AppendMenuW(popup, MF_STRING, IDM_COPY, L"复制图片数据");
-        AppendMenuW(popup, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(popup, MF_STRING, IDM_DELETE, L"移动到回收站\tDel");
-        AppendMenuW(popup, MF_STRING, IDM_DELETE_PERM, L"永久删除\tShift+Del");
+        AddOwnerItem(popup, IDM_COPY, L"复制文件	Ctrl+C");
+        AddOwnerItem(popup, IDM_COPY, L"复制图片数据");
+        AddOwnerSeparator(popup);
+        AddOwnerItem(popup, IDM_DELETE, L"移动到回收站	Del");
+        AddOwnerItem(popup, IDM_DELETE_PERM, L"永久删除	Shift+Del");
         break;
     case 3: // 帮助
-        AppendMenuW(popup, MF_STRING, IDM_ABOUT, L"关于 MinView...");
+        AddOwnerItem(popup, IDM_ABOUT, L"关于 MinView...");
         break;
     }
 
@@ -1318,10 +1439,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
             return CallNextHookEx(nullptr, code, wp, lp);
         }, nullptr, GetCurrentThreadId());
 
-    // Offset popup left so its text aligns with toolbar item text.
-    // Toolbar text starts at item_left + 4dpi; menu text starts at popup_left + gutter.
-    int gutter = GetSystemMetrics(SM_CXMENUCHECK) + GetSystemMetrics(SM_CXBORDER) * 2 + 4;
-    x -= (gutter - static_cast<int>(4 * dpi_s_tb));
+    // Align popup text with toolbar text (gutter = icon 16 + padding 8 - internal 4 = 20 DIPs)
+    x -= static_cast<int>(20 * dpi_s_tb);
 
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
@@ -1633,7 +1752,7 @@ static void thumb_loader_worker(
                 std::hash<std::wstring> hasher;
                 wchar_t key[32];
                 swprintf_s(key, L"%016llx", hasher(path));
-                std::wstring cache_file = get_config_dir() + L"\\thumbs\\" + key + L".jpg";
+                std::wstring cache_file = get_config_dir() + L"	humbs\\" + key + L".jpg";
 
                 ComPtr<IWICBitmapSource> wic;
                 WIN32_FILE_ATTRIBUTE_DATA src_attr, cache_attr;
@@ -1657,7 +1776,7 @@ static void thumb_loader_worker(
                     }
                     // Save to disk cache
                     if (wic) {
-                        CreateDirectoryW((get_config_dir() + L"\\thumbs").c_str(), nullptr);
+                        CreateDirectoryW((get_config_dir() + L"	humbs").c_str(), nullptr);
                         save_wic_as_jpeg(wic.Get(), cache_file);
                     }
                 }
