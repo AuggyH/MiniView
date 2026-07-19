@@ -260,11 +260,26 @@ static void BuildOwnerMenu(HMENU parent, HMENU sub, const std::wstring& label) {
     auto* d = new OwnerItemData;
     d->text = label;
     MENUITEMINFOW mii = { sizeof(mii) };
-    mii.fMask = MIIM_FTYPE | MIIM_DATA | MIIM_SUBMENU;
+    mii.fMask = MIIM_FTYPE | MIIM_STRING | MIIM_DATA | MIIM_SUBMENU;
     mii.fType = MFT_OWNERDRAW;
     mii.hSubMenu = sub;
+    mii.dwTypeData = const_cast<LPWSTR>(label.c_str());
     mii.dwItemData = reinterpret_cast<ULONG_PTR>(d);
     InsertMenuItemW(parent, GetMenuItemCount(parent), TRUE, &mii);
+}
+
+// Recursively apply dark background to menu and submenus
+static void ApplyMenuTheme(HMENU menu) {
+    MENUINFO mi = { sizeof(mi) };
+    mi.fMask = MIM_BACKGROUND;
+    mi.hbrBack = CreateSolidBrush(RGB(32, 32, 36));
+    SetMenuInfo(menu, &mi);
+    // Walk submenus
+    int cnt = GetMenuItemCount(menu);
+    for (int i = 0; i < cnt; ++i) {
+        HMENU sub = GetSubMenu(menu, i);
+        if (sub) ApplyMenuTheme(sub);
+    }
 }
 
 // ── App lifecycle ────────────────────────────────────────────
@@ -1435,29 +1450,29 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     s_tb_bounds   = tb_bounds;
     s_toolbar_h   = m_toolbar_h;
 
-    static bool s_border_fixed = false;
+    // CBT hook: remove border from popup menu window at creation
+    HHOOK cbt_hook = SetWindowsHookExW(WH_CBT,
+        [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
+            if (code == HCBT_CREATEWND) {
+                HWND hwnd = reinterpret_cast<HWND>(wp);
+                wchar_t cls[16];
+                if (GetClassNameW(hwnd, cls, 16) && wcscmp(cls, L"#32768") == 0) {
+                    LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+                    style &= ~(WS_BORDER | WS_DLGFRAME);
+                    SetWindowLongW(hwnd, GWL_STYLE, style);
+                    LONG ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                    ex &= ~(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE);
+                    SetWindowLongW(hwnd, GWL_EXSTYLE, ex);
+                }
+            }
+            return CallNextHookEx(nullptr, code, wp, lp);
+        }, nullptr, GetCurrentThreadId());
 
-    // Message filter hook for hover-switching menus + border removal
+    // Message filter hook for hover-switching menus
     HHOOK hook = SetWindowsHookExW(WH_MSGFILTER,
         [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
             if (code == MSGF_MENU) {
                 MSG* msg = (MSG*)lp;
-                // Remove white border from popup
-                if (msg->message == WM_ENTERIDLE && !s_border_fixed) {
-                    HWND hmenu = FindWindowW(L"#32768", nullptr);
-                    if (hmenu) {
-                        LONG style = GetWindowLongW(hmenu, GWL_STYLE);
-                        style &= ~(WS_BORDER | WS_DLGFRAME);
-                        SetWindowLongW(hmenu, GWL_STYLE, style);
-                        // Also remove extended border
-                        LONG ex = GetWindowLongW(hmenu, GWL_EXSTYLE);
-                        ex &= ~(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE);
-                        SetWindowLongW(hmenu, GWL_EXSTYLE, ex);
-                        SetWindowPos(hmenu, nullptr, 0, 0, 0, 0,
-                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
-                        s_border_fixed = true;
-                    }
-                }
                 if (msg->message == WM_MOUSEMOVE || msg->message == WM_NCMOUSEMOVE) {
                     POINT pt;
                     GetCursorPos(&pt);
@@ -1481,20 +1496,14 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     // Align popup text with toolbar text (gutter = pad(4) + icon(16) + gap(8) - toolbar_pad(4) = 24 DIPs)
     x -= static_cast<int>(24 * dpi_s_tb);
 
-    // Dark menu background
-    MENUINFO mi = { sizeof(mi) };
-    mi.fMask = MIM_BACKGROUND;
-    mi.hbrBack = CreateSolidBrush(RGB(32, 32, 36));
-    SetMenuInfo(popup, &mi);
+    // Dark menu background (recursive)
+    ApplyMenuTheme(popup);
 
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
 
-    DeleteObject(mi.hbrBack);
-
-    s_border_fixed = false;  // reset for next popup
-
     if (hook) UnhookWindowsHookEx(hook);
+    if (cbt_hook) UnhookWindowsHookEx(cbt_hook);
     DestroyMenu(popup);
 
     // Clear menu hover state after popup dismissed
