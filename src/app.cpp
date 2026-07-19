@@ -408,7 +408,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_toast_timer = 0;
             m_window.invalidate();
         }
-        if (wp == 4) {
+        if (wp == 4 && m_anim_timer) {
             LARGE_INTEGER now, freq;
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
@@ -1384,6 +1384,7 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
     if (m_animating) return;
     m_anim_forward = forward;
     m_anim_thumb.Reset();
+    m_last_cached_sel = -1;  // force m_anim_src recalculation on next grid_render
 
     int thumb_idx = (m_grid_sel >= 0) ? m_grid_sel : m_grid_saved_idx;
     auto it = m_thumb_d2d.find(thumb_idx);
@@ -2345,6 +2346,7 @@ void App::grid_render() {
     if (m_animating) {
         uint32_t iw = static_cast<uint32_t>(m_anim_iw);
         uint32_t ih = static_cast<uint32_t>(m_anim_ih);
+        if (iw == 0 || ih == 0) m_renderer.image_size(iw, ih);
         if (iw > 0 && ih > 0) {
             float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
                                static_cast<float>(m_renderer.target_size().height) / ih);
@@ -2378,6 +2380,7 @@ void App::render_frame() {
         if (m_animating) {
             uint32_t iw = static_cast<uint32_t>(m_anim_iw);
             uint32_t ih = static_cast<uint32_t>(m_anim_ih);
+            if (iw == 0 || ih == 0) m_renderer.image_size(iw, ih);
             if (iw > 0 && ih > 0) {
                 float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
                                    static_cast<float>(m_renderer.target_size().height) / ih);
@@ -2462,6 +2465,7 @@ void App::render_frame() {
     if (m_animating) {
         uint32_t iw = static_cast<uint32_t>(m_anim_iw);
         uint32_t ih = static_cast<uint32_t>(m_anim_ih);
+        if (iw == 0 || ih == 0) m_renderer.image_size(iw, ih);
         if (iw > 0 && ih > 0) {
             float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
                                static_cast<float>(m_renderer.target_size().height) / ih);
