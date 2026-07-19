@@ -439,13 +439,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MEASUREITEM: {
         auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
         if (mis->CtlType != ODT_MENU) break;
+        if (mis->itemData == 0) {  // separator
+            mis->itemWidth  = 20;
+            mis->itemHeight = static_cast<UINT>(8.0f * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
+            return TRUE;
+        }
         auto* d = reinterpret_cast<OwnerItemData*>(mis->itemData);
         if (!d) break;
         float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-        // Compute text width
         float text_w = m_renderer.measure_text(d->text, 12.0f * dpi);
         float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, 12.0f * dpi);
-        float icon_w = 16.0f * dpi;  // checkmark/icon area
+        float icon_w = 16.0f * dpi;
         float pad_l = 4.0f * dpi;
         float pad_icon = 8.0f * dpi;
         float pad_shortcut = 16.0f * dpi;
@@ -457,11 +461,28 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DRAWITEM: {
         auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
         if (dis->CtlType != ODT_MENU) break;
-        auto* d = reinterpret_cast<OwnerItemData*>(dis->itemData);
-        if (!d) break;
         HDC hdc = dis->hDC;
         RECT rc = dis->rcItem;
         float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+
+        // Separator
+        if (dis->itemData == 0 || dis->itemID == 0) {
+            COLORREF bg = RGB(32, 32, 36);
+            HBRUSH br = CreateSolidBrush(bg);
+            FillRect(hdc, &rc, br);
+            DeleteObject(br);
+            int mid_y = (rc.top + rc.bottom) / 2;
+            COLORREF sep_c = RGB(60, 60, 65);
+            HPEN pen = CreatePen(PS_SOLID, 1, sep_c);
+            SelectObject(hdc, pen);
+            MoveToEx(hdc, rc.left + static_cast<int>(28 * dpi), mid_y, nullptr);
+            LineTo(hdc, rc.right - 4, mid_y);
+            DeleteObject(pen);
+            return TRUE;
+        }
+
+        auto* d = reinterpret_cast<OwnerItemData*>(dis->itemData);
+        if (!d) break;
         bool selected = (dis->itemState & ODS_SELECTED) != 0;
         bool disabled = d->disabled || (dis->itemState & ODS_GRAYED);
 
@@ -1439,8 +1460,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
             return CallNextHookEx(nullptr, code, wp, lp);
         }, nullptr, GetCurrentThreadId());
 
-    // Align popup text with toolbar text (gutter = icon 16 + padding 8 - internal 4 = 20 DIPs)
-    x -= static_cast<int>(20 * dpi_s_tb);
+    // Align popup text with toolbar text (gutter = pad(4) + icon(16) + gap(8) - toolbar_pad(4) = 24 DIPs)
+    x -= static_cast<int>(24 * dpi_s_tb);
 
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
         x, y, 0, hwnd, nullptr);
