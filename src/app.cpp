@@ -257,6 +257,7 @@ int App::run(const std::wstring& initial_path) {
     m_cell_size   = m_thumb_cell + m_thumb_gap_h;
     m_panel_width = static_cast<int>(280 * scale);
     m_toolbar_h  = static_cast<int>(m_title_h * scale);
+    m_renderer.set_content_top(static_cast<float>(m_toolbar_h));
 
     // No native menu bar — custom toolbar drawn via D2D
     SetMenu(m_window.handle(), nullptr);
@@ -940,8 +941,6 @@ void App::open_image(const std::wstring& path) {
             auto bitmap = m_decoder.decode(path);
             m_renderer.upload_image(bitmap.Get());
         }
-        // Center image in content area (below title bar)
-        m_renderer.set_offset(0, m_toolbar_h * 0.5f);
         m_current_path = path;
         m_has_image = true;
 
@@ -1473,10 +1472,10 @@ void App::fit_to_window() {
     if (iw == 0 || ih == 0) return;
     RECT rc; GetClientRect(m_window.handle(), &rc);
     float cw = static_cast<float>(rc.right - rc.left);
-    float ch = static_cast<float>(rc.bottom - rc.top) - m_toolbar_h;  // exclude title bar
+    float ch = static_cast<float>(rc.bottom - rc.top);
     if (cw <= 0 || ch <= 0) return;
-    m_renderer.set_scale(std::min(cw / iw, ch / ih));
-    m_renderer.set_offset(0, m_toolbar_h * 0.5f);
+    m_renderer.set_scale(std::min(cw / iw, (ch - m_toolbar_h) / ih));
+    m_renderer.set_offset(0, 0);
     m_renderer.set_scroll_y(0);
 }
 
