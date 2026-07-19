@@ -268,6 +268,24 @@ static void BuildOwnerMenu(HMENU parent, HMENU sub, const std::wstring& label) {
     InsertMenuItemW(parent, GetMenuItemCount(parent), TRUE, &mii);
 }
 
+// Subclass proc for popup menu windows: fill background dark
+static LRESULT CALLBACK MenuSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_ERASEBKGND) {
+        HDC hdc = reinterpret_cast<HDC>(wp);
+        RECT rc; GetClientRect(hwnd, &rc);
+        HBRUSH bg = reinterpret_cast<HBRUSH>(GetPropW(hwnd, L"MV_BG"));
+        if (bg) FillRect(hdc, &rc, bg);
+        return 1;
+    }
+    if (msg == WM_NCDESTROY) {
+        RemovePropW(hwnd, L"MV_OLD");
+        RemovePropW(hwnd, L"MV_BG");
+    }
+    WNDPROC oldProc = reinterpret_cast<WNDPROC>(GetPropW(hwnd, L"MV_OLD"));
+    return oldProc ? CallWindowProcW(oldProc, hwnd, msg, wp, lp)
+                   : DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 // Recursively apply dark background to menu and submenus
 static void ApplyMenuTheme(HMENU menu, HBRUSH br) {
     MENUINFO mi = { sizeof(mi) };
@@ -1449,7 +1467,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     s_tb_bounds   = tb_bounds;
     s_toolbar_h   = m_toolbar_h;
 
-    // CBT hook: remove border from popup menu window at creation
+    // CBT hook: subclass popup menu to enforce dark background
     static HBRUSH s_menu_bg = CreateSolidBrush(RGB(32, 32, 36));
     HHOOK cbt_hook = SetWindowsHookExW(WH_CBT,
         [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
@@ -1457,7 +1475,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
                 HWND hwnd = reinterpret_cast<HWND>(wp);
                 wchar_t cls[16];
                 if (GetClassNameW(hwnd, cls, 16) && wcscmp(cls, L"#32768") == 0) {
-                    // Strip all border styles
+                    // Strip border styles
                     LONG style = GetWindowLongW(hwnd, GWL_STYLE);
                     style &= ~(WS_BORDER | WS_DLGFRAME | WS_THICKFRAME);
                     SetWindowLongW(hwnd, GWL_STYLE, style);
@@ -1465,9 +1483,12 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
                     ex &= ~(WS_EX_CLIENTEDGE | WS_EX_STATICEDGE | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME);
                     SetWindowLongW(hwnd, GWL_EXSTYLE, ex);
                     SetWindowTheme(hwnd, L"", L"");
-                    // Set dark background for gaps between owner-draw items
-                    SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(s_menu_bg));
-                    InvalidateRect(hwnd, nullptr, TRUE);
+                    // Subclass to fill background dark
+                    WNDPROC oldProc = reinterpret_cast<WNDPROC>(
+                        SetWindowLongPtrW(hwnd, GWLP_WNDPROC,
+                            reinterpret_cast<LONG_PTR>(MenuSubclassProc)));
+                    SetPropW(hwnd, L"MV_OLD", oldProc);
+                    SetPropW(hwnd, L"MV_BG", s_menu_bg);
                 }
             }
             return CallNextHookEx(nullptr, code, wp, lp);
