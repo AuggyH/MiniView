@@ -1403,6 +1403,11 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
         m_anim_iw = static_cast<float>(iw);
         m_anim_ih = static_cast<float>(ih);
     }
+
+    if (!forward) {
+        if (m_anim_src.right > m_anim_src.left && m_anim_src.bottom > m_anim_src.top)
+            m_anim_dst = m_anim_src;  // fallback: will be refined by grid_render in first frame
+    }
 }
 
 void App::begin_animation(HWND hwnd) {
