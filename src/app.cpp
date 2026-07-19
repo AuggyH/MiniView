@@ -770,7 +770,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        if (m_has_image) { start_transition(hwnd, false); toggle_grid(); m_anim_action = ACT_NONE; begin_animation(hwnd); return 0; }
+        if (m_has_image) { start_transition(hwnd, false); begin_animation(hwnd); toggle_grid(); m_anim_action = ACT_NONE; return 0; }
         return 0;
 
     case WM_KEYDOWN: {
@@ -809,10 +809,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                toggle_grid();  // switch to grid immediately
-                m_anim_action = ACT_NONE;
                 begin_animation(hwnd);
-                m_window.invalidate();
+                toggle_grid();
+                m_anim_action = ACT_NONE;
                 return 0;
             }
             if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
@@ -824,10 +823,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_from_grid = false;
                 m_temp_preview = false;
                 start_transition(hwnd, false);
-                toggle_grid();  // switch to grid immediately
-                m_anim_action = ACT_NONE;
                 begin_animation(hwnd);
-                m_window.invalidate();
+                toggle_grid();
+                m_anim_action = ACT_NONE;
                 return 0;
             }
             if (m_grid_mode && m_grid_sel >= 0) {
