@@ -75,6 +75,7 @@ public:
 
     void  set_scale(float s);
     void  set_offset(float x, float y);
+    void  set_content_top(float top) { m_content_top = top; }
     void  set_scroll_y(float y);
     float scale()    const { return m_scale; }
     float fit_scale() const { return m_fit_scale; }
@@ -111,6 +112,7 @@ private:
     float       m_offset_x = 0.0f;
     float       m_offset_y = 0.0f;
     float       m_scroll_y = 0.0f;
+    float       m_content_top = 0.0f;  // title bar height, for centering below
     float       m_dpi_x = 96.0f;
     float       m_dpi_y = 96.0f;
 };

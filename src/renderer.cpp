@@ -193,11 +193,11 @@ void Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
     if (FAILED(hr)) return;
 
     float sx = static_cast<float>(m_target_size.width)  / w;
-    float sy = static_cast<float>(m_target_size.height) / h;
+    float sy = static_cast<float>(m_target_size.height - m_content_top) / h;
     m_scale = std::min(sx, sy);
     m_fit_scale = m_scale;
     m_offset_x = 0;
-    m_offset_y = 0;
+    m_offset_y = m_content_top * 0.5f;
     m_scroll_y = 0;
 }
 
@@ -236,7 +236,7 @@ void Renderer::draw_image() {
     float scaled_w = m_img_width  * m_scale;
     float scaled_h = m_img_height * m_scale;
     float x = (m_target_size.width  - scaled_w) / 2.0f + m_offset_x;
-    float y = (m_target_size.height - scaled_h) / 2.0f + m_offset_y + m_scroll_y;
+    float y = m_content_top + (m_target_size.height - m_content_top - scaled_h) / 2.0f + m_offset_y + m_scroll_y;
 
     D2D1_RECT_F dest = {x, y, x + scaled_w, y + scaled_h};
     D2D1_RECT_F src  = {0, 0,
