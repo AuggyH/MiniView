@@ -1307,11 +1307,11 @@ void App::open_directory(const std::wstring& path) {
     }
 }
 
-void App::open_image(const std::wstring& path) {
+bool App::open_image(const std::wstring& path) {
     DWORD attributes = GetFileAttributesW(path.c_str());
     if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
         open_directory(path);
-        return;
+        return true;
     }
     try {
         // A recursive grid can contain files from many child directories.  Keep
@@ -1321,7 +1321,7 @@ void App::open_image(const std::wstring& path) {
         auto bitmap = get_preloaded(path);
         if (!bitmap) bitmap = m_decoder.decode(path);
         bitmap = m_decoder.materialize(bitmap.Get());
-        if (!m_renderer.upload_image(bitmap.Get())) return;
+        if (!m_renderer.upload_image(bitmap.Get())) return false;
 
         // Exit grid mode if active (file dialog, drag-drop, IPC)
         if (m_grid_mode) {
@@ -1334,9 +1334,7 @@ void App::open_image(const std::wstring& path) {
         }
         update_content_viewport(false);
         fit_to_window();
-        m_current_path = path;
         m_current_wic = bitmap;
-        m_has_image = true;
 
         namespace fs = std::filesystem;
         fs::path p(path);
@@ -1349,7 +1347,8 @@ void App::open_image(const std::wstring& path) {
             save_last_dir(dir);
             indexed_position = m_index.index_of(path);
         }
-        m_current_idx = indexed_position;
+        commit_current_image_identity(path, indexed_position,
+            m_current_path, m_current_idx, m_has_image);
         m_from_grid = m_current_idx >= 0;
 
         update_title();
@@ -1358,8 +1357,10 @@ void App::open_image(const std::wstring& path) {
         preload_neighbors();
 
         m_window.invalidate();
+        return true;
     } catch (const std::exception&) {
         update_title();
+        return false;
     }
 }
 
@@ -1539,12 +1540,13 @@ void App::preload_neighbors() {
 // ── Delete ───────────────────────────────────────────────────
 
 void App::delete_current_file(bool permanent) {
-    if (!m_has_image || m_current_path.empty()) return;
+    if (!can_delete_current_image(m_has_image, m_current_path)) return;
 
     const bool loader_was_running = m_thumb_running;
     if (loader_was_running) stop_thumb_loader();
 
-    std::wstring from = m_current_path;
+    const std::wstring deleted_path = m_current_path;
+    std::wstring from = deleted_path;
     from.push_back(L'\0'); from.push_back(L'\0');
 
     SHFILEOPSTRUCTW fos = {};
@@ -1554,7 +1556,7 @@ void App::delete_current_file(bool permanent) {
     if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
 
     const int shell_result = SHFileOperationW(&fos);
-    const bool removed = path_is_confirmed_missing(m_current_path);
+    const bool removed = path_is_confirmed_missing(deleted_path);
     const bool complete = delete_fully_completed(
         shell_result, fos.fAnyOperationsAborted != FALSE, 1, removed ? 1 : 0);
     if (!removed) {
@@ -1567,18 +1569,20 @@ void App::delete_current_file(bool permanent) {
         return;
     }
 
-    m_index.remove_many({m_current_idx});
+    const int removed_index = m_index.index_of(deleted_path);
+    if (removed_index >= 0) m_index.remove_many({removed_index});
     m_thumbs.clear();
     m_thumbs.resize(m_index.size());
     m_thumb_d2d.clear();
     m_thumb_d2d_use.clear();
     m_grid_layout_dirty = true;
 
-    if (m_index.empty()) {
-        m_has_image = false;
-        m_current_path.clear();
-        m_current_wic.Reset();
-        m_current_idx = -1;
+    const int successor_index = begin_post_delete_transition(
+        removed_index, static_cast<int>(m_index.size()),
+        m_current_path, m_current_idx, m_has_image);
+    m_current_wic.Reset();
+
+    if (successor_index < 0) {
         update_title();
         m_window.invalidate();
         if (!complete) {
@@ -1589,10 +1593,11 @@ void App::delete_current_file(bool permanent) {
         return;
     }
 
-    if (m_current_idx >= static_cast<int>(m_index.size()))
-        m_current_idx = static_cast<int>(m_index.size()) - 1;
-
-    open_image(m_index.path_at(m_current_idx));
+    const std::wstring successor_path = m_index.path_at(successor_index);
+    if (!open_image(successor_path)) {
+        update_title();
+        m_window.invalidate();
+    }
     if (loader_was_running) start_thumb_loader();
     if (!complete) {
         MessageBoxW(m_window.handle(),

@@ -1,6 +1,8 @@
 #include "app_state.h"
 
 #include <iostream>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -34,6 +36,30 @@ int main() {
         "scroll position should never be negative");
     expect(mv::clamp_grid_scroll_position(100, 300, 400) == 0,
         "content shorter than the viewport should reset scrolling");
+
+    std::wstring current_path;
+    int current_index = -1;
+    bool has_image = false;
+    mv::commit_current_image_identity(
+        L"A-valid.png", 0, current_path, current_index, has_image);
+    expect(mv::can_delete_current_image(has_image, current_path),
+        "a successfully committed image should be deletable");
+
+    const std::vector<std::wstring> remaining_paths = {L"B-damaged.png"};
+    const int damaged_successor = mv::begin_post_delete_transition(
+        0, static_cast<int>(remaining_paths.size()),
+        current_path, current_index, has_image);
+    expect(damaged_successor == 0,
+        "deleting A should select B's remaining index for an open attempt");
+    expect(remaining_paths[static_cast<size_t>(damaged_successor)] == L"B-damaged.png",
+        "the successor attempt should remain bound to damaged B's path");
+    // Simulate B failing decode/upload: open_image must not call commit.
+    expect(current_path.empty() && current_index == -1 && !has_image,
+        "a damaged successor must leave current image identity cleared");
+    expect(!mv::can_delete_current_image(has_image, current_path),
+        "a consecutive delete must not act on the still-indexed damaged successor");
+    expect(remaining_paths.size() == 1,
+        "the skipped consecutive delete must leave damaged B indexed");
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";

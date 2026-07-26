@@ -31,7 +31,7 @@ public:
 
 private:
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
-    void    open_image(const std::wstring& path);
+    bool    open_image(const std::wstring& path);
     void    open_directory(const std::wstring& path);
     void    navigate_to(int idx);
     void    fit_to_window();
