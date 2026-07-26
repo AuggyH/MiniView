@@ -54,4 +54,4 @@ Windows Imaging Component（WIC）会自动使用系统已安装的编解码器�
 
 ## 5. 当前建议结论
 
-短期批准 `P0 + 系统 WIC 的 AVIF/HEIC/HEIF`，预计 2.5–4.5 天；SVG 独立立项，预计 7–12 天达到可发布质量。暂不引入 libheif、stb_image 或 DirectXTex，以免在需求量不足时破坏单文件、零运行时依赖和安全维护边界。
+建议 Product Owner 批准 `P0 + 系统 WIC 的 AVIF/HEIC/HEIF`，预计 2.5–4.5 天；SVG 建议独立立项，预计 7–12 天达到可发布质量。在 Issue #4 作出范围决策前不实施。暂不建议引入 libheif、stb_image 或 DirectXTex，以免在需求量不足时破坏单文件、零运行时依赖和安全维护边界。

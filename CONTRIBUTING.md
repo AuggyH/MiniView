@@ -83,7 +83,7 @@ ci: 增加 Windows Release 门禁
 | 风险 | `risk: low`、`risk: medium`、`risk: high` |
 | 状态 | `status: blocked`、`status: needs-qa`、`status: needs-review` |
 
-路径标签由 `.github/workflows/pr-labeler.yml` 自动维护；类型、风险和状态由作者根据实际变更设置。标签定义可用以下命令同步，先 dry-run：
+区域路径标签由 `.github/workflows/pr-labeler.yml` 自动维护；类型、风险和状态由作者根据实际变更设置。标签定义可用以下命令同步，先 dry-run：
 
 ```powershell
 .\tools\sync-labels.ps1 -WhatIf

@@ -16,5 +16,6 @@ ctest --test-dir "%MINVIEW_ROOT%\build" -C Release --output-on-failure
 if errorlevel 1 exit /b 1
 
 copy /Y "%MINVIEW_ROOT%\build\Release\MinView.exe" "%MINVIEW_ROOT%\MinView.exe" >nul
+if errorlevel 1 exit /b 1
 echo BUILD_OK
 endlocal

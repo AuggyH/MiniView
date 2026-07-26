@@ -156,6 +156,12 @@ if(BUILD_TESTING)
     target_link_options(file_operation_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME file_operation.unit COMMAND file_operation_tests)
 
+    add_test(NAME governance.unit
+        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_SOURCE_DIR}/tests/governance_tests.ps1"
+            -RepositoryRoot "${CMAKE_SOURCE_DIR}"
+    )
+
     add_executable(indexer_benchmark
         tools/indexer_benchmark.cpp
         src/indexer.cpp
