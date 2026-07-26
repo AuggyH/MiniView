@@ -1,7 +1,9 @@
 #include "indexer.h"
+#include <Windows.h>
 #include <filesystem>
 #include <algorithm>
 #include <cwchar>
+#include <limits>
 
 namespace mv {
 
@@ -10,9 +12,22 @@ namespace {
 std::wstring normalize_path_key(std::wstring path) {
     for (auto& ch : path) {
         if (ch == L'/') ch = L'\\';
-        ch = static_cast<wchar_t>(towlower(ch));
     }
-    return path;
+    if (path.empty() || path.size() > static_cast<size_t>((std::numeric_limits<int>::max)()))
+        return path;
+
+    const int source_length = static_cast<int>(path.size());
+    const int mapped_length = LCMapStringEx(
+        LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE,
+        path.data(), source_length, nullptr, 0, nullptr, nullptr, 0);
+    if (mapped_length <= 0) return path;
+
+    std::wstring key(static_cast<size_t>(mapped_length), L'\0');
+    const int written = LCMapStringEx(
+        LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE,
+        path.data(), source_length, key.data(), mapped_length,
+        nullptr, nullptr, 0);
+    return written == mapped_length ? key : path;
 }
 
 } // namespace

@@ -1,5 +1,6 @@
 #include "indexer.h"
 
+#include <Windows.h>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -46,6 +47,15 @@ void write_file(const fs::path& path, size_t size) {
 
 std::wstring filename_at(const mv::ImageIndex& index, size_t position) {
     return fs::path(index.path_at(position)).filename().wstring();
+}
+
+bool is_ntfs_volume(const fs::path& path) {
+    wchar_t volume_root[MAX_PATH]{};
+    wchar_t file_system[MAX_PATH]{};
+    if (!GetVolumePathNameW(path.c_str(), volume_root, MAX_PATH)) return false;
+    if (!GetVolumeInformationW(volume_root, nullptr, 0, nullptr, nullptr, nullptr,
+            file_system, MAX_PATH)) return false;
+    return CompareStringOrdinal(file_system, -1, L"NTFS", -1, TRUE) == CSTR_EQUAL;
 }
 
 } // namespace
@@ -116,6 +126,33 @@ int main() {
 
     expect(index.scan((root / L"missing").wstring(), true) == -1,
         "scan should report an inaccessible directory");
+
+    fs::path unicode_fixture_path;
+    {
+        TempDirectory unicode_fixture;
+        unicode_fixture_path = unicode_fixture.path();
+        const fs::path upper_path = unicode_fixture_path / L"\u00C4.PNG";
+        const fs::path lower_alias = unicode_fixture_path / L"\u00E4.png";
+        write_file(upper_path, 4);
+
+        expect(is_ntfs_volume(unicode_fixture_path),
+            "the Unicode path identity fixture must run on NTFS");
+        std::error_code identity_error;
+        expect(fs::equivalent(upper_path, lower_alias, identity_error) && !identity_error,
+            "uppercase and lowercase Unicode paths should address the same NTFS file");
+
+        mv::ImageIndex unicode_index;
+        expect(unicode_index.scan(unicode_fixture_path.wstring(), false) == 1,
+            "the Unicode path fixture should contain one indexed image");
+        std::wstring slash_alias = lower_alias.wstring();
+        std::replace(slash_alias.begin(), slash_alias.end(), L'\\', L'/');
+        expect(unicode_index.index_of(lower_alias.wstring()) == 0,
+            "Windows invariant case folding should match the lowercase Unicode alias");
+        expect(unicode_index.index_of(slash_alias) == 0,
+            "Unicode path identity should also normalize slash direction");
+    }
+    expect(!fs::exists(unicode_fixture_path),
+        "the isolated Unicode path fixture should be removed after the test");
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";
