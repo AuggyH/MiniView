@@ -14,6 +14,395 @@ param(
 $ErrorActionPreference = 'Stop'
 $failures = [System.Collections.Generic.List[string]]::new()
 $script:RegistryProbeInvocationRoot = $null
+$script:ProductionProcessTimeoutMilliseconds = 30000
+$script:MinimumProcessTimeoutMilliseconds = 100
+$script:ConcurrencyWorkerTimeoutMilliseconds = 60000
+$script:TaskkillTimeoutMilliseconds = 5000
+$script:ProcessExitConfirmationTimeoutMilliseconds = 5000
+$script:OutputDrainTimeoutMilliseconds = 5000
+$script:HangRegressionTimeoutMilliseconds = 1500
+$script:HangSentinelDelayMilliseconds = 2000
+$script:LargeOutputLength = 262144
+$script:GovernanceStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+function ConvertTo-WindowsCommandLineArgument {
+    param([string]$Value)
+    if ($null -eq $Value) {
+        throw 'process arguments must not contain null values'
+    }
+    if ($Value.Length -eq 0) { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+
+    $quoted = [System.Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$quoted.Append(('\' * (2 * $backslashes + 1)))
+            [void]$quoted.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$quoted.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$quoted.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$quoted.Append(('\' * (2 * $backslashes)))
+    }
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+
+function ConvertTo-WindowsCommandLine {
+    param([string[]]$Arguments)
+    return (@($Arguments | ForEach-Object {
+        ConvertTo-WindowsCommandLineArgument $_
+    }) -join ' ')
+}
+
+function New-RedirectedProcessStartInfo {
+    param(
+        [string]$FileName,
+        [string[]]$Arguments,
+        [string]$WorkingDirectory
+    )
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FileName
+    $startInfo.Arguments = ConvertTo-WindowsCommandLine $Arguments
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding =
+        [System.Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding =
+        [System.Text.UTF8Encoding]::new($false)
+    return $startInfo
+}
+
+function Complete-RedirectedTextTask {
+    param(
+        [object]$Task,
+        [string]$StreamName,
+        [System.Collections.Generic.List[string]]$Diagnostics
+    )
+    try {
+        if (-not $Task.Wait($script:OutputDrainTimeoutMilliseconds)) {
+            $Diagnostics.Add(
+                "$StreamName drain exceeded $($script:OutputDrainTimeoutMilliseconds) ms")
+            return ''
+        }
+        return [string]$Task.Result
+    } catch {
+        $Diagnostics.Add("$StreamName drain failed: $($_.Exception.Message)")
+        return ''
+    }
+}
+
+function Invoke-BoundedTaskkill {
+    param([int]$OwnedProcessId)
+    $taskkillPath = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+    if (-not (Test-Path -LiteralPath $taskkillPath -PathType Leaf)) {
+        return [pscustomobject]@{
+            Started = $false
+            ExitCode = $null
+            TimedOut = $false
+            OutputDrainSucceeded = $false
+            Stdout = ''
+            Stderr = ''
+            Diagnostic = "taskkill executable not found: $taskkillPath"
+        }
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $started = $false
+    $stdoutTask = $null
+    $stderrTask = $null
+    $diagnostics = [System.Collections.Generic.List[string]]::new()
+    $timedOut = $false
+    $exitCode = $null
+    try {
+        $process.StartInfo = New-RedirectedProcessStartInfo `
+            $taskkillPath `
+            @('/PID', [string]$OwnedProcessId, '/T', '/F') `
+            $RepositoryRoot
+        try {
+            $started = $process.Start()
+        } catch {
+            $diagnostics.Add("taskkill start failed: $($_.Exception.Message)")
+        }
+        if (-not $started) {
+            if ($diagnostics.Count -eq 0) {
+                $diagnostics.Add('taskkill start returned false')
+            }
+            return [pscustomobject]@{
+                Started = $false
+                ExitCode = $null
+                TimedOut = $false
+                OutputDrainSucceeded = $false
+                Stdout = ''
+                Stderr = ''
+                Diagnostic = [string]::Join('; ', $diagnostics.ToArray())
+            }
+        }
+
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($script:TaskkillTimeoutMilliseconds)) {
+            $timedOut = $true
+            $diagnostics.Add(
+                "taskkill timed out after $($script:TaskkillTimeoutMilliseconds) ms")
+            try {
+                $process.Kill()
+            } catch {
+                $diagnostics.Add(
+                    "taskkill fallback Kill failed: $($_.Exception.Message)")
+            }
+            if (-not $process.WaitForExit(
+                    $script:ProcessExitConfirmationTimeoutMilliseconds)) {
+                $diagnostics.Add('taskkill process did not exit after fallback Kill')
+            }
+        }
+        if ($process.HasExited) { $exitCode = $process.ExitCode }
+        $stdout = Complete-RedirectedTextTask `
+            $stdoutTask 'taskkill stdout' $diagnostics
+        $stderr = Complete-RedirectedTextTask `
+            $stderrTask 'taskkill stderr' $diagnostics
+        $drainSucceeded = -not (@($diagnostics | Where-Object {
+            $_ -match 'drain (?:exceeded|failed)'
+        }).Count -gt 0)
+        if ($null -ne $exitCode -and $exitCode -ne 0) {
+            $diagnostics.Add("taskkill exited with code $exitCode")
+        }
+        return [pscustomobject]@{
+            Started = $true
+            ExitCode = $exitCode
+            TimedOut = $timedOut
+            OutputDrainSucceeded = $drainSucceeded
+            Stdout = $stdout
+            Stderr = $stderr
+            Diagnostic = [string]::Join('; ', $diagnostics.ToArray())
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Stop-OwnedProcessTree {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$Operation
+    )
+    try {
+        if ($Process.HasExited) {
+            return [pscustomobject]@{
+                Succeeded = $true
+                FallbackUsed = $false
+                Diagnostic = 'owned process had already exited'
+            }
+        }
+    } catch {
+        return [pscustomobject]@{
+            Succeeded = $false
+            FallbackUsed = $false
+            Diagnostic = "$Operation process state read failed: $($_.Exception.Message)"
+        }
+    }
+
+    $taskkill = Invoke-BoundedTaskkill $Process.Id
+    $details = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($taskkill.Diagnostic)) {
+        $details.Add($taskkill.Diagnostic)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($taskkill.Stderr)) {
+        $details.Add("taskkill stderr: $($taskkill.Stderr)")
+    }
+    $taskkillSucceeded = $taskkill.Started -and
+        -not $taskkill.TimedOut -and
+        $taskkill.OutputDrainSucceeded -and
+        $taskkill.ExitCode -eq 0
+    $parentExited = $Process.WaitForExit(
+        $script:ProcessExitConfirmationTimeoutMilliseconds)
+    $fallbackUsed = $false
+    if (-not $parentExited) {
+        $fallbackUsed = $true
+        $details.Add('owned parent did not exit after taskkill; using parent Kill fallback')
+        try {
+            $Process.Kill()
+        } catch {
+            $details.Add("owned parent Kill fallback failed: $($_.Exception.Message)")
+        }
+        $parentExited = $Process.WaitForExit(
+            $script:ProcessExitConfirmationTimeoutMilliseconds)
+        if (-not $parentExited) {
+            $details.Add('owned parent remained after Kill fallback')
+        }
+    }
+    if (-not $taskkillSucceeded) {
+        $details.Add('owned process-tree taskkill did not complete successfully')
+    }
+    return [pscustomobject]@{
+        Succeeded = $taskkillSucceeded -and $parentExited -and -not $fallbackUsed
+        FallbackUsed = $fallbackUsed
+        Diagnostic = [string]::Join('; ', $details.ToArray())
+    }
+}
+
+function Invoke-BoundedProcess {
+    param(
+        [string]$Operation,
+        [string]$FileName,
+        [string[]]$Arguments,
+        [string]$WorkingDirectory = $RepositoryRoot,
+        [int]$TimeoutMilliseconds =
+            $script:ProductionProcessTimeoutMilliseconds
+    )
+    if ($TimeoutMilliseconds -lt $script:MinimumProcessTimeoutMilliseconds) {
+        throw ("process timeout must be at least {0} ms: {1}" -f
+            $script:MinimumProcessTimeoutMilliseconds, $TimeoutMilliseconds)
+    }
+
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $process = [System.Diagnostics.Process]::new()
+    $started = $false
+    $stdoutTask = $null
+    $stderrTask = $null
+    $diagnostics = [System.Collections.Generic.List[string]]::new()
+    $timedOut = $false
+    $terminationAttempted = $false
+    $terminationSucceeded = $true
+    $terminationDetails = ''
+    $exitCode = $null
+    $processId = $null
+    try {
+        $process.StartInfo = New-RedirectedProcessStartInfo `
+            $FileName $Arguments $WorkingDirectory
+        try {
+            $started = $process.Start()
+        } catch {
+            $diagnostics.Add("start failed: $($_.Exception.Message)")
+        }
+        if (-not $started) {
+            if ($diagnostics.Count -eq 0) {
+                $diagnostics.Add('start returned false')
+            }
+            $stopwatch.Stop()
+            return [pscustomobject]@{
+                Operation = $Operation
+                FileName = $FileName
+                Started = $false
+                ProcessId = $null
+                ExitCode = $null
+                TimedOut = $false
+                TimeoutMilliseconds = $TimeoutMilliseconds
+                DurationMilliseconds = $stopwatch.ElapsedMilliseconds
+                Stdout = ''
+                Stderr = ''
+                OutputDrainSucceeded = $false
+                StartDiagnostic = [string]::Join('; ', $diagnostics.ToArray())
+                TerminationAttempted = $false
+                TerminationSucceeded = $false
+                TerminationDiagnostic = ''
+            }
+        }
+
+        $processId = $process.Id
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+            $timedOut = $true
+            $terminationAttempted = $true
+            $termination = Stop-OwnedProcessTree $process $Operation
+            $terminationSucceeded = $termination.Succeeded
+            $terminationDetails = $termination.Diagnostic
+        }
+        if ($process.HasExited) { $exitCode = $process.ExitCode }
+        $stdout = Complete-RedirectedTextTask `
+            $stdoutTask "$Operation stdout" $diagnostics
+        $stderr = Complete-RedirectedTextTask `
+            $stderrTask "$Operation stderr" $diagnostics
+        $drainSucceeded = -not (@($diagnostics | Where-Object {
+            $_ -match 'drain (?:exceeded|failed)'
+        }).Count -gt 0)
+        $stopwatch.Stop()
+        return [pscustomobject]@{
+            Operation = $Operation
+            FileName = $FileName
+            Started = $true
+            ProcessId = $processId
+            ExitCode = $exitCode
+            TimedOut = $timedOut
+            TimeoutMilliseconds = $TimeoutMilliseconds
+            DurationMilliseconds = $stopwatch.ElapsedMilliseconds
+            Stdout = $stdout
+            Stderr = $stderr
+            OutputDrainSucceeded = $drainSucceeded
+            StartDiagnostic = [string]::Join('; ', $diagnostics.ToArray())
+            TerminationAttempted = $terminationAttempted
+            TerminationSucceeded = $terminationSucceeded
+            TerminationDiagnostic = $terminationDetails
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Get-ProcessOutputExcerpt {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    $limit = 4096
+    if ($Value.Length -le $limit) { return $Value }
+    return $Value.Substring(0, $limit) +
+        "`n...[truncated $($Value.Length - $limit) characters]"
+}
+
+function Get-BoundedProcessFailureDiagnostic {
+    param([object]$Result)
+    if (-not $Result.Started) {
+        return ("{0} start failed: {1}" -f
+            $Result.Operation, $Result.StartDiagnostic)
+    }
+    if ($Result.TimedOut) {
+        $terminationState = if ($Result.TerminationSucceeded) {
+            'owned process tree terminated'
+        } else {
+            'owned process-tree termination failed'
+        }
+        return ("{0} timed out after {1} ms (duration {2} ms); {3}; {4}; " +
+            "stdout: {5}; stderr: {6}" -f
+            $Result.Operation,
+            $Result.TimeoutMilliseconds,
+            $Result.DurationMilliseconds,
+            $terminationState,
+            $Result.TerminationDiagnostic,
+            (Get-ProcessOutputExcerpt $Result.Stdout),
+            (Get-ProcessOutputExcerpt $Result.Stderr))
+    }
+    if (-not $Result.OutputDrainSucceeded) {
+        return ("{0} output drain failed: {1}" -f
+            $Result.Operation, $Result.StartDiagnostic)
+    }
+    if ($null -eq $Result.ExitCode -or $Result.ExitCode -ne 0) {
+        return ("{0} exited with code {1}; stdout: {2}; stderr: {3}" -f
+            $Result.Operation,
+            $Result.ExitCode,
+            (Get-ProcessOutputExcerpt $Result.Stdout),
+            (Get-ProcessOutputExcerpt $Result.Stderr))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Result.Stderr)) {
+        return ("{0} wrote to stderr: {1}" -f
+            $Result.Operation, (Get-ProcessOutputExcerpt $Result.Stderr))
+    }
+    return $null
+}
 
 function Assert-Present {
     param(
@@ -63,36 +452,26 @@ function Test-ObjectHasExactProperty {
 
 function ConvertFrom-CTestShowOnlyResult {
     param(
-        [object[]]$OutputRecords,
+        [string]$Stdout,
+        [string]$Stderr,
         [int]$ExitCode
     )
-    $stdoutLines = [System.Collections.Generic.List[string]]::new()
-    $stderrLines = [System.Collections.Generic.List[string]]::new()
-    foreach ($record in @($OutputRecords)) {
-        if ($record -is [System.Management.Automation.ErrorRecord]) {
-            $stderrLines.Add($record.ToString())
-        } else {
-            $stdoutLines.Add($record.ToString())
-        }
-    }
-    $stdout = [string]::Join("`n", $stdoutLines.ToArray())
-    $stderr = [string]::Join("`n", $stderrLines.ToArray())
     if ($ExitCode -ne 0) {
-        $detailLines = @(@($stderr, $stdout) | Where-Object {
+        $detailLines = @(@($Stderr, $Stdout) | Where-Object {
             -not [string]::IsNullOrWhiteSpace($_)
         })
         $details = [string]::Join("`n", $detailLines)
         throw ("ctest show-only failed with exit code {0}: {1}" -f
             $ExitCode, $details)
     }
-    if ($stderrLines.Count -gt 0) {
-        throw "ctest show-only wrote to stderr: $stderr"
+    if (-not [string]::IsNullOrWhiteSpace($Stderr)) {
+        throw "ctest show-only wrote to stderr: $Stderr"
     }
-    if ([string]::IsNullOrWhiteSpace($stdout)) {
+    if ([string]::IsNullOrWhiteSpace($Stdout)) {
         throw 'ctest show-only returned empty output'
     }
     try {
-        $registry = $stdout | ConvertFrom-Json
+        $registry = $Stdout | ConvertFrom-Json
     } catch {
         throw "ctest show-only returned invalid JSON: $($_.Exception.Message)"
     }
@@ -155,15 +534,15 @@ function Get-CTestTestNames {
     if (-not [string]::IsNullOrWhiteSpace($Configuration)) {
         $arguments += @('-C', $Configuration)
     }
-    $previousErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        $outputRecords = @(& $CTestCommand @arguments 2>&1)
-        $exitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-    }
-    return @(ConvertFrom-CTestShowOnlyResult $outputRecords $exitCode)
+    $result = Invoke-BoundedProcess `
+        'ctest show-only' `
+        $CTestCommand `
+        $arguments `
+        $RepositoryRoot
+    $failure = Get-BoundedProcessFailureDiagnostic $result
+    if ($null -ne $failure) { throw $failure }
+    return @(ConvertFrom-CTestShowOnlyResult `
+        $result.Stdout $result.Stderr $result.ExitCode)
 }
 
 function Remove-MarkdownHiddenContent {
@@ -307,13 +686,15 @@ function Test-RegistryMultiplicity {
 
 function Assert-CTestShowOnlyRejected {
     param(
-        [object[]]$OutputRecords,
+        [string]$Stdout,
+        [string]$Stderr,
         [int]$ExitCode,
         [string]$ExpectedPattern,
         [string]$MutationName
     )
     try {
-        $null = @(ConvertFrom-CTestShowOnlyResult $OutputRecords $ExitCode)
+        $null = @(ConvertFrom-CTestShowOnlyResult `
+            $Stdout $Stderr $ExitCode)
         $failures.Add("$MutationName was accepted")
     } catch {
         if ($_.Exception.Message -notmatch $ExpectedPattern) {
@@ -331,7 +712,7 @@ function Test-CTestShowOnlySchemaGuards {
         '{"kind":"ctestInfo","version":{"major":1,"minor":0},' +
         '"tests":[{"name":"same.unit"},{"name":"same.unit"}]}'
     try {
-        $singleNames = @(ConvertFrom-CTestShowOnlyResult @($validSingle) 0)
+        $singleNames = @(ConvertFrom-CTestShowOnlyResult $validSingle '' 0)
         [void](Test-RegistryMultiplicity $singleNames `
             'one.unit' 1 'valid single-item JSON array')
     } catch {
@@ -339,7 +720,8 @@ function Test-CTestShowOnlySchemaGuards {
             "valid single-item JSON array was rejected: $($_.Exception.Message)")
     }
     try {
-        $duplicateNames = @(ConvertFrom-CTestShowOnlyResult @($validDuplicate) 0)
+        $duplicateNames = @(ConvertFrom-CTestShowOnlyResult `
+            $validDuplicate '' 0)
         [void](Test-RegistryMultiplicity $duplicateNames `
             'same.unit' 2 'valid duplicate-preserving JSON array')
     } catch {
@@ -349,153 +731,148 @@ function Test-CTestShowOnlySchemaGuards {
 
     $checks = 0
     $checks++
-    Assert-CTestShowOnlyRejected @('command failed') 7 `
+    Assert-CTestShowOnlyRejected 'command failed' '' 7 `
         'exit code 7' 'nonzero CTest exit'
-    $stderrRecord = [System.Management.Automation.ErrorRecord]::new(
-        [System.Exception]::new('synthetic stderr'),
-        'SyntheticNativeError',
-        [System.Management.Automation.ErrorCategory]::NotSpecified,
-        $null)
     $checks++
-    Assert-CTestShowOnlyRejected @($validSingle, $stderrRecord) 0 `
+    Assert-CTestShowOnlyRejected $validSingle 'synthetic stderr' 0 `
         'wrote to stderr' 'CTest stderr'
 
     $mutations = @(
         [pscustomobject]@{
-            Name = 'empty output'; Value = @(); Pattern = 'empty output'
+            Name = 'empty output'; Value = ''; Pattern = 'empty output'
         },
         [pscustomobject]@{
-            Name = 'whitespace output'; Value = @('   '); Pattern = 'empty output'
+            Name = 'whitespace output'; Value = '   '; Pattern = 'empty output'
         },
         [pscustomobject]@{
-            Name = 'malformed JSON'; Value = @('{'); Pattern = 'invalid JSON'
+            Name = 'malformed JSON'; Value = '{'; Pattern = 'invalid JSON'
         },
         [pscustomobject]@{
-            Name = 'null JSON root'; Value = @('null'); Pattern = 'root must be an object'
+            Name = 'null JSON root'; Value = 'null'; Pattern = 'root must be an object'
         },
         [pscustomobject]@{
-            Name = 'array JSON root'; Value = @('[]'); Pattern = 'root must be an object'
+            Name = 'array JSON root'; Value = '[]'; Pattern = 'root must be an object'
         },
         [pscustomobject]@{
             Name = 'missing kind'
-            Value = @('{"version":{"major":1,"minor":0},"tests":[{"name":"one"}]}')
+            Value = '{"version":{"major":1,"minor":0},"tests":[{"name":"one"}]}'
             Pattern = 'kind'
         },
         [pscustomobject]@{
             Name = 'wrong kind'
-            Value = @('{"kind":"other","version":{"major":1,"minor":0},"tests":[{"name":"one"}]}')
+            Value = '{"kind":"other","version":{"major":1,"minor":0},"tests":[{"name":"one"}]}'
             Pattern = 'kind'
         },
         [pscustomobject]@{
             Name = 'missing version'
-            Value = @('{"kind":"ctestInfo","tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","tests":[{"name":"one"}]}'
             Pattern = 'version must be an object'
         },
         [pscustomobject]@{
             Name = 'string version'
-            Value = @('{"kind":"ctestInfo","version":"1.0","tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":"1.0","tests":[{"name":"one"}]}'
             Pattern = 'version must be an object'
         },
         [pscustomobject]@{
             Name = 'array version'
-            Value = @('{"kind":"ctestInfo","version":[1,0],"tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":[1,0],"tests":[{"name":"one"}]}'
             Pattern = 'version must be an object'
         },
         [pscustomobject]@{
             Name = 'missing version major'
-            Value = @('{"kind":"ctestInfo","version":{"minor":0},"tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":{"minor":0},"tests":[{"name":"one"}]}'
             Pattern = 'version.major'
         },
         [pscustomobject]@{
             Name = 'string version major'
-            Value = @('{"kind":"ctestInfo","version":{"major":"1","minor":0},"tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":"1","minor":0},"tests":[{"name":"one"}]}'
             Pattern = 'version.major'
         },
         [pscustomobject]@{
             Name = 'unsupported version major'
-            Value = @('{"kind":"ctestInfo","version":{"major":2,"minor":0},"tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":2,"minor":0},"tests":[{"name":"one"}]}'
             Pattern = 'version.major'
         },
         [pscustomobject]@{
             Name = 'missing version minor'
-            Value = @('{"kind":"ctestInfo","version":{"major":1},"tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1},"tests":[{"name":"one"}]}'
             Pattern = 'version.minor'
         },
         [pscustomobject]@{
             Name = 'string version minor'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":"0"},"tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":"0"},"tests":[{"name":"one"}]}'
             Pattern = 'version.minor'
         },
         [pscustomobject]@{
             Name = 'unsupported version minor'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":1},"tests":[{"name":"one"}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":1},"tests":[{"name":"one"}]}'
             Pattern = 'version.minor'
         },
         [pscustomobject]@{
             Name = 'missing tests'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0}}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0}}'
             Pattern = 'tests must be a JSON array'
         },
         [pscustomobject]@{
             Name = 'null tests'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":null}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":null}'
             Pattern = 'tests must be a JSON array'
         },
         [pscustomobject]@{
             Name = 'object tests'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":{"name":"one"}}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":{"name":"one"}}'
             Pattern = 'tests must be a JSON array'
         },
         [pscustomobject]@{
             Name = 'string tests'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":"one"}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":"one"}'
             Pattern = 'tests must be a JSON array'
         },
         [pscustomobject]@{
             Name = 'numeric tests'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":1}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":1}'
             Pattern = 'tests must be a JSON array'
         },
         [pscustomobject]@{
             Name = 'empty registry'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[]}'
             Pattern = 'empty test registry'
         },
         [pscustomobject]@{
             Name = 'null test item'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[null]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[null]}'
             Pattern = 'item at index 0 must be an object'
         },
         [pscustomobject]@{
             Name = 'string test item'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":["one"]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":["one"]}'
             Pattern = 'item at index 0 must be an object'
         },
         [pscustomobject]@{
             Name = 'missing test name'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{}]}'
             Pattern = 'non-empty name string'
         },
         [pscustomobject]@{
             Name = 'empty test name'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{"name":""}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{"name":""}]}'
             Pattern = 'non-empty name string'
         },
         [pscustomobject]@{
             Name = 'whitespace test name'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{"name":" "}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{"name":" "}]}'
             Pattern = 'non-empty name string'
         },
         [pscustomobject]@{
             Name = 'numeric test name'
-            Value = @('{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{"name":1}]}')
+            Value = '{"kind":"ctestInfo","version":{"major":1,"minor":0},"tests":[{"name":1}]}'
             Pattern = 'non-empty name string'
         }
     )
     foreach ($mutation in $mutations) {
         $checks++
         Assert-CTestShowOnlyRejected `
-            $mutation.Value 0 $mutation.Pattern $mutation.Name
+            $mutation.Value '' 0 $mutation.Pattern $mutation.Name
     }
     return $checks
 }
@@ -566,6 +943,267 @@ function Remove-RegistryProbeInvocationRoot {
     }
 }
 
+function Test-ProcessIdRunning {
+    param([int]$ProcessId)
+    return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+function Test-BoundedProcessGuards {
+    if ([string]::IsNullOrWhiteSpace($script:RegistryProbeInvocationRoot)) {
+        throw 'bounded process guard invocation root was not initialized'
+    }
+    $guardRoot = Get-NormalizedFullPath (
+        Join-Path $script:RegistryProbeInvocationRoot 'bounded-process-guards')
+    if (-not (Test-IsStrictChildPath `
+            $script:RegistryProbeInvocationRoot $guardRoot)) {
+        throw "bounded process guard root escaped invocation root: $guardRoot"
+    }
+    if (Test-Path -LiteralPath $guardRoot) {
+        throw "bounded process guard root already exists: $guardRoot"
+    }
+
+    $checks = 0
+    $hangParentId = $null
+    $hangChildId = $null
+    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+    try {
+        [void][System.IO.Directory]::CreateDirectory($guardRoot)
+        $powerShellPath = Join-Path $PSHOME 'powershell.exe'
+
+        $argumentDirectory = Join-Path $guardRoot (
+            "argument path $([char]0x8def)$([char]0x5f84)")
+        [void][System.IO.Directory]::CreateDirectory($argumentDirectory)
+        $argumentScript = Join-Path $argumentDirectory 'echo args.ps1'
+        [System.IO.File]::WriteAllText(
+            $argumentScript,
+            '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); ' +
+                '[Environment]::GetCommandLineArgs() | ConvertTo-Json -Compress',
+            $utf8WithoutBom)
+        $unicodeArgument = "Unicode-$([char]0x8def)$([char]0x5f84)"
+        $argumentSamples = @(
+            'plain',
+            'space value',
+            $unicodeArgument,
+            'quote"inside',
+            'trail\',
+            'mix\"quote',
+            ''
+        )
+        $argumentResult = Invoke-BoundedProcess `
+            'bounded argument round-trip' `
+            $powerShellPath `
+            (@(
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-File', $argumentScript
+            ) + $argumentSamples) `
+            $guardRoot
+        $checks++
+        $argumentFailure = Get-BoundedProcessFailureDiagnostic $argumentResult
+        if ($null -ne $argumentFailure) {
+            $failures.Add("bounded argument round-trip failed: $argumentFailure")
+        } else {
+            [object[]]$actualArguments =
+                $argumentResult.Stdout | ConvertFrom-Json
+            if ($actualArguments.Count -lt $argumentSamples.Count) {
+                $failures.Add('bounded argument round-trip omitted arguments')
+            } else {
+                $firstTailIndex =
+                    $actualArguments.Count - $argumentSamples.Count
+                $actualTail = @($actualArguments[
+                    $firstTailIndex..($actualArguments.Count - 1)])
+                if (($actualTail -join [char]0) -cne
+                    ($argumentSamples -join [char]0)) {
+                    $failures.Add(
+                        'bounded argument round-trip changed Windows argv values; ' +
+                        'expected=' +
+                        ($argumentSamples | ConvertTo-Json -Compress) +
+                        '; actual=' +
+                        ($actualTail | ConvertTo-Json -Compress) +
+                        '; stdout=' + $argumentResult.Stdout)
+                }
+            }
+        }
+
+        $largeOutputScript = Join-Path $guardRoot 'large-output.ps1'
+        [System.IO.File]::WriteAllText(
+            $largeOutputScript,
+            'param([int]$Length);' +
+                '[Console]::Out.Write((''O'' * $Length));' +
+                '[Console]::Error.Write((''E'' * $Length))',
+            $utf8WithoutBom)
+        $largeOutputResult = Invoke-BoundedProcess `
+            'bounded large output' `
+            $powerShellPath `
+            @(
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-File', $largeOutputScript,
+                '-Length', [string]$script:LargeOutputLength
+            ) `
+            $guardRoot
+        $checks++
+        $largeOutputDiagnostic =
+            Get-BoundedProcessFailureDiagnostic $largeOutputResult
+        if (-not $largeOutputResult.Started -or
+            $largeOutputResult.TimedOut -or
+            -not $largeOutputResult.OutputDrainSucceeded -or
+            $largeOutputResult.ExitCode -ne 0 -or
+            $largeOutputResult.Stdout.Length -ne $script:LargeOutputLength -or
+            $largeOutputResult.Stderr.Length -ne $script:LargeOutputLength -or
+            $largeOutputDiagnostic -notmatch 'wrote to stderr') {
+            $failures.Add(
+                'bounded large stdout/stderr guard did not drain or reject stderr')
+        }
+
+        $nonzeroScript = Join-Path $guardRoot 'nonzero.ps1'
+        [System.IO.File]::WriteAllText(
+            $nonzeroScript,
+            '[Console]::Out.Write(''NONZERO_OUT'');' +
+                '[Console]::Error.Write(''NONZERO_ERR'');exit 7',
+            $utf8WithoutBom)
+        $nonzeroResult = Invoke-BoundedProcess `
+            'bounded nonzero' `
+            $powerShellPath `
+            @(
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-File', $nonzeroScript
+            ) `
+            $guardRoot
+        $checks++
+        $nonzeroDiagnostic = Get-BoundedProcessFailureDiagnostic $nonzeroResult
+        if ($nonzeroResult.ExitCode -ne 7 -or
+            $nonzeroResult.Stdout -cne 'NONZERO_OUT' -or
+            $nonzeroResult.Stderr -cne 'NONZERO_ERR' -or
+            $nonzeroDiagnostic -notmatch 'exited with code 7') {
+            $failures.Add('bounded nonzero guard did not fail closed')
+        }
+
+        $startupResult = Invoke-BoundedProcess `
+            'bounded startup failure' `
+            (Join-Path $guardRoot 'missing executable.exe') `
+            @() `
+            $guardRoot
+        $checks++
+        $startupDiagnostic = Get-BoundedProcessFailureDiagnostic $startupResult
+        if ($startupResult.Started -or
+            $startupDiagnostic -notmatch 'start failed') {
+            $failures.Add('bounded startup failure guard did not fail closed')
+        }
+
+        $hangRoot = Join-Path $guardRoot 'hang'
+        [void][System.IO.Directory]::CreateDirectory($hangRoot)
+        $hangChildScript = Join-Path $hangRoot 'child.ps1'
+        $hangParentScript = Join-Path $hangRoot 'parent.ps1'
+        $hangChildPidPath = Join-Path $hangRoot 'child.pid'
+        $hangSentinelPath = Join-Path $hangRoot 'delayed-sentinel.txt'
+        [System.IO.File]::WriteAllText(
+            $hangChildScript,
+            'param([string]$PidPath,[string]$SentinelPath,' +
+                '[int]$DelayMilliseconds);' +
+                '[IO.File]::WriteAllText($PidPath,[string]$PID);' +
+                'Start-Sleep -Milliseconds $DelayMilliseconds;' +
+                '[IO.File]::WriteAllText($SentinelPath,''survived'');' +
+                'Start-Sleep -Seconds 60',
+            $utf8WithoutBom)
+        [System.IO.File]::WriteAllText(
+            $hangParentScript,
+            'param([string]$ChildScript,[string]$ChildPidPath,' +
+                '[string]$SentinelPath,[int]$SentinelDelay,' +
+                '[int]$FloodLength);' +
+                '$child=Start-Process -FilePath ' +
+                '(Join-Path $PSHOME ''powershell.exe'') -ArgumentList @(' +
+                '''-NoProfile'',''-ExecutionPolicy'',''Bypass'',''-File'',' +
+                '$ChildScript,''-PidPath'',$ChildPidPath,' +
+                '''-SentinelPath'',$SentinelPath,' +
+                '''-DelayMilliseconds'',[string]$SentinelDelay) -PassThru;' +
+                '[Console]::Out.Write((''H'' * $FloodLength));' +
+                '[Console]::Error.Write((''E'' * $FloodLength));' +
+                'Start-Sleep -Seconds 60',
+            $utf8WithoutBom)
+        $hangResult = Invoke-BoundedProcess `
+            'bounded hang regression' `
+            $powerShellPath `
+            @(
+                '-NoProfile',
+                '-ExecutionPolicy', 'Bypass',
+                '-File', $hangParentScript,
+                '-ChildScript', $hangChildScript,
+                '-ChildPidPath', $hangChildPidPath,
+                '-SentinelPath', $hangSentinelPath,
+                '-SentinelDelay',
+                    [string]$script:HangSentinelDelayMilliseconds,
+                '-FloodLength', [string]$script:LargeOutputLength
+            ) `
+            $guardRoot `
+            $script:HangRegressionTimeoutMilliseconds
+        $hangParentId = $hangResult.ProcessId
+        if (Test-Path -LiteralPath $hangChildPidPath) {
+            $hangChildId = [int][System.IO.File]::ReadAllText(
+                $hangChildPidPath)
+        }
+        $checks++
+        $hangDiagnostic = Get-BoundedProcessFailureDiagnostic $hangResult
+        if (-not $hangResult.Started -or
+            -not $hangResult.TimedOut -or
+            -not $hangResult.TerminationAttempted -or
+            -not $hangResult.TerminationSucceeded -or
+            -not $hangResult.OutputDrainSucceeded -or
+            $hangResult.Stdout.Length -lt $script:LargeOutputLength -or
+            $hangResult.Stderr.Length -lt $script:LargeOutputLength -or
+            $hangDiagnostic -notmatch 'timed out after') {
+            $failures.Add(
+                "bounded hang regression failed: $hangDiagnostic")
+        }
+        if ($null -eq $hangChildId) {
+            $failures.Add('bounded hang regression omitted child PID marker')
+        } elseif (Test-ProcessIdRunning $hangChildId) {
+            $failures.Add('bounded hang regression left child process running')
+        }
+        if ($null -ne $hangParentId -and
+            (Test-ProcessIdRunning $hangParentId)) {
+            $failures.Add('bounded hang regression left parent process running')
+        }
+        if (Test-Path -LiteralPath $hangChildPidPath) {
+            $sentinelDeadline =
+                [System.IO.File]::GetLastWriteTimeUtc($hangChildPidPath).
+                AddMilliseconds(
+                    $script:HangSentinelDelayMilliseconds + 250)
+            while ([DateTime]::UtcNow -lt $sentinelDeadline -and
+                -not (Test-Path -LiteralPath $hangSentinelPath)) {
+                Start-Sleep -Milliseconds 25
+            }
+        }
+        if (Test-Path -LiteralPath $hangSentinelPath) {
+            $failures.Add('bounded hang regression allowed delayed sentinel')
+        }
+    } finally {
+        foreach ($ownedProcessId in @($hangParentId, $hangChildId)) {
+            if ($null -eq $ownedProcessId) { continue }
+            $ownedProcess = Get-Process `
+                -Id $ownedProcessId -ErrorAction SilentlyContinue
+            if ($null -ne $ownedProcess) {
+                $cleanupTermination = Stop-OwnedProcessTree `
+                    $ownedProcess 'bounded hang guard cleanup'
+                if (-not $cleanupTermination.Succeeded) {
+                    $failures.Add(
+                        "bounded hang guard cleanup failed for PID " +
+                        "$ownedProcessId`: $($cleanupTermination.Diagnostic)")
+                }
+                $ownedProcess.Dispose()
+            }
+        }
+        if (Test-Path -LiteralPath $guardRoot) {
+            Remove-Item -Recurse -Force -LiteralPath $guardRoot
+        }
+        if (Test-Path -LiteralPath $guardRoot) {
+            throw "bounded process guard root remains after cleanup: $guardRoot"
+        }
+    }
+    return $checks
+}
+
 function Invoke-RegistryProbe {
     param(
         [string]$VariantName,
@@ -620,14 +1258,15 @@ function Invoke-RegistryProbe {
         '-B', $probeBuildDirectory,
         '-DBUILD_TESTING=ON'
     )
-    $configureOutput = @(& $CMakeCommand @configureArguments 2>&1)
-    $configureExitCode = $LASTEXITCODE
-    if ($configureExitCode -ne 0) {
+    $configureResult = Invoke-BoundedProcess `
+        "$VariantName $CaseName probe configure" `
+        $CMakeCommand `
+        $configureArguments `
+        $RepositoryRoot
+    $configureFailure = Get-BoundedProcessFailureDiagnostic $configureResult
+    if ($null -ne $configureFailure) {
         $failures.Add(
-            "$VariantName $CaseName probe configure failed: " +
-            [string]::Join(
-                "`n",
-                @($configureOutput | ForEach-Object { $_.ToString() })))
+            "$VariantName $CaseName probe configure failed: $configureFailure")
         return @()
     }
     try {
@@ -901,14 +1540,6 @@ function Invoke-RegistryConcurrencyWorkerCheck {
     }
 }
 
-function ConvertTo-QuotedProcessArgument {
-    param([string]$Value)
-    if ($Value.Contains('"')) {
-        throw "process argument contains an unsupported quote: $Value"
-    }
-    return '"' + $Value + '"'
-}
-
 function Test-RegistryProbeConcurrency {
     param([int]$ProcessCount = 4)
     $powerShellPath = Join-Path $PSHOME 'powershell.exe'
@@ -929,9 +1560,7 @@ function Test-RegistryProbeConcurrency {
         $workerArguments += @('-Configuration', $Configuration)
     }
     $workerArguments += '-RegistryConcurrencyWorker'
-    $argumentString = (@($workerArguments | ForEach-Object {
-        ConvertTo-QuotedProcessArgument $_
-    }) -join ' ')
+    $argumentString = ConvertTo-WindowsCommandLine $workerArguments
     $workers = [System.Collections.Generic.List[object]]::new()
     $workerRoots = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
@@ -958,16 +1587,33 @@ function Test-RegistryProbeConcurrency {
             })
         }
         foreach ($worker in $workers) {
-            if (-not $worker.Process.WaitForExit(60000)) {
-                $worker.Process.Kill()
-                $worker.Process.WaitForExit()
+            if (-not $worker.Process.WaitForExit(
+                    $script:ConcurrencyWorkerTimeoutMilliseconds)) {
+                $termination = Stop-OwnedProcessTree `
+                    $worker.Process `
+                    "concurrency worker $($worker.Index)"
                 $failures.Add(
-                    "concurrency worker $($worker.Index) timed out")
+                    "concurrency worker $($worker.Index) timed out after " +
+                    "$($script:ConcurrencyWorkerTimeoutMilliseconds) ms; " +
+                    "$($termination.Diagnostic)")
                 continue
             }
-            $worker.Process.WaitForExit()
-            $stdout = $worker.Stdout.Result
-            $stderr = $worker.Stderr.Result
+            $workerDiagnostics =
+                [System.Collections.Generic.List[string]]::new()
+            $stdout = Complete-RedirectedTextTask `
+                $worker.Stdout `
+                "concurrency worker $($worker.Index) stdout" `
+                $workerDiagnostics
+            $stderr = Complete-RedirectedTextTask `
+                $worker.Stderr `
+                "concurrency worker $($worker.Index) stderr" `
+                $workerDiagnostics
+            if ($workerDiagnostics.Count -gt 0) {
+                $failures.Add(
+                    "concurrency worker $($worker.Index) output failed: " +
+                    [string]::Join('; ', $workerDiagnostics.ToArray()))
+                continue
+            }
             if ($worker.Process.ExitCode -ne 0) {
                 $failures.Add(
                     "concurrency worker $($worker.Index) exited " +
@@ -1008,8 +1654,14 @@ function Test-RegistryProbeConcurrency {
     } finally {
         foreach ($worker in $workers) {
             if (-not $worker.Process.HasExited) {
-                $worker.Process.Kill()
-                $worker.Process.WaitForExit()
+                $termination = Stop-OwnedProcessTree `
+                    $worker.Process `
+                    "concurrency worker $($worker.Index) cleanup"
+                if (-not $termination.Succeeded) {
+                    $failures.Add(
+                        "concurrency worker $($worker.Index) cleanup failed: " +
+                        $termination.Diagnostic)
+                }
             }
             $worker.Process.Dispose()
         }
@@ -1105,10 +1757,12 @@ $registryVariants = @(
 )
 $registryMutationChecks = 0
 $registryConcurrencyProcesses = 0
+$boundedProcessChecks = 0
 $mainInvocationRoot = $null
 try {
     $mainInvocationRoot = New-RegistryProbeInvocationRoot
     $script:RegistryProbeInvocationRoot = $mainInvocationRoot
+    $boundedProcessChecks = Test-BoundedProcessGuards
     foreach ($variant in $registryVariants) {
         if (-not (Test-TestRegistryContract `
             $registeredTests $variant.Architecture)) {
@@ -1141,6 +1795,19 @@ if ($registryMutationChecks -ne 26) {
 if ($registryConcurrencyProcesses -ne 4) {
     $failures.Add('registry concurrency suite must execute 4 processes')
 }
+if ($boundedProcessChecks -ne 5) {
+    $failures.Add('bounded process suite must execute 5 checks')
+}
+$currentInvocationResidues = if (
+    -not [string]::IsNullOrWhiteSpace($mainInvocationRoot) -and
+    (Test-Path -LiteralPath $mainInvocationRoot)) {
+    1
+} else {
+    0
+}
+if ($currentInvocationResidues -ne 0) {
+    $failures.Add('current governance invocation root must be cleaned')
+}
 
 $negatedWorkerMutation = '- 1 metadata worker does not exist; UI parsing does not use mutex/condition variable, WM_METADATA_READY, or path expiry.'
 if (Test-MetadataWorkerStructure $negatedWorkerMutation) {
@@ -1156,9 +1823,15 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
+$script:GovernanceStopwatch.Stop()
 Write-Output (
     "governance tests passed (live registry $($registeredTests.Count), " +
     "$($registryVariants.Count) registry variants, " +
     "$registryMutationChecks registry mutations, " +
     "$schemaMutationChecks schema mutations, " +
-    "$registryConcurrencyProcesses concurrent processes)")
+    "$registryConcurrencyProcesses concurrent processes, " +
+    "$boundedProcessChecks bounded process checks, " +
+    "production timeout $($script:ProductionProcessTimeoutMilliseconds) ms, " +
+    "hang timeout $($script:HangRegressionTimeoutMilliseconds) ms, " +
+    "elapsed $($script:GovernanceStopwatch.ElapsedMilliseconds) ms, " +
+    "$currentInvocationResidues current invocation residues)")

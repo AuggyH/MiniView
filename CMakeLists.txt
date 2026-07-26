@@ -165,6 +165,10 @@ if(BUILD_TESTING)
             -BuildDirectory "${CMAKE_BINARY_DIR}"
             -Configuration "$<CONFIG>"
     )
+    set(MINVIEW_GOVERNANCE_TEST_TIMEOUT_SECONDS 120)
+    set_tests_properties(governance.unit PROPERTIES
+        TIMEOUT ${MINVIEW_GOVERNANCE_TEST_TIMEOUT_SECONDS}
+    )
 
     add_executable(indexer_benchmark
         tools/indexer_benchmark.cpp
