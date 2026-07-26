@@ -120,7 +120,7 @@ ci: 增加 Windows Release 门禁
 - 校验 PR 标题格式。
 - 使用 Windows Server 2022、Visual Studio 2022 和 x64 Release 配置。
 - 以 `/W4 /WX` 编译 `MinView`、诊断工具和自动化测试。
-- 运行 CTest；当前自动化覆盖索引扫描、过滤、排序、相对路径、查找和移除。
+- 运行 CTest；当前注册测试及各自覆盖边界以 `docs/ARCHITECTURE.md` 的“当前自动化边界”为唯一清单；CI 对该清单与 `CMakeLists.txt` 的 `add_test(NAME ...)` 注册集合做精确一致性校验。
 - 上传 `MinView.exe` 候选产物，保留 7 天供 QA 使用。
 
 CI 证明可重复构建和已注册的自动化测试通过，不证明 GUI、DPI、GPU、可选系统 codec 或文件删除行为正确。
