@@ -96,29 +96,74 @@ int main() {
             680, 820, 1400, 500) == 320,
         "square and justified structural reflows should retain selection visibility");
 
-    std::wstring current_path;
-    int current_index = -1;
-    bool has_image = false;
-    mv::commit_current_image_identity(
-        L"A-valid.png", 0, current_path, current_index, has_image);
+    std::vector<std::wstring> indexed_paths = {
+        L"A-valid.png", L"B-damaged.png"};
+    std::wstring current_path = indexed_paths.front();
+    int current_index = 0;
+    bool has_image = true;
     expect(mv::can_delete_current_image(has_image, current_path),
         "a successfully committed image should be deletable");
 
-    const std::vector<std::wstring> remaining_paths = {L"B-damaged.png"};
-    const int damaged_successor = mv::begin_post_delete_transition(
-        0, static_cast<int>(remaining_paths.size()),
+    const std::wstring deleted_path = current_path;
+    const int deleted_index = current_index;
+    indexed_paths.erase(indexed_paths.begin());
+    int open_attempts = 0;
+    const auto failed_transition = mv::run_post_delete_transition(
+        deleted_path, deleted_index, static_cast<int>(indexed_paths.size()),
+        [&indexed_paths](int index) { return indexed_paths[static_cast<size_t>(index)]; },
+        [&open_attempts](const std::wstring&, int) {
+            ++open_attempts;
+            return false;
+        },
         current_path, current_index, has_image);
-    expect(damaged_successor == 0,
-        "deleting A should select B's remaining index for an open attempt");
-    expect(remaining_paths[static_cast<size_t>(damaged_successor)] == L"B-damaged.png",
-        "the successor attempt should remain bound to damaged B's path");
-    // Simulate B failing decode/upload: open_image must not call commit.
+    expect(failed_transition.deleted_path == L"A-valid.png"
+            && failed_transition.deleted_index == 0,
+        "the production transition should stay bound to deleted A's identity");
+    expect(failed_transition.successor_attempted && open_attempts == 1,
+        "deleting A should attempt to open exactly one successor");
+    expect(failed_transition.successor_path == L"B-damaged.png"
+            && failed_transition.successor_index == 0,
+        "the failed successor attempt should remain bound to indexed B");
+    expect(!failed_transition.successor_opened,
+        "the injected damaged B open should be reported as failed");
     expect(current_path.empty() && current_index == -1 && !has_image,
         "a damaged successor must leave current image identity cleared");
-    expect(!mv::can_delete_current_image(has_image, current_path),
-        "a consecutive delete must not act on the still-indexed damaged successor");
-    expect(remaining_paths.size() == 1,
-        "the skipped consecutive delete must leave damaged B indexed");
+    if (mv::can_delete_current_image(has_image, current_path))
+        indexed_paths.erase(indexed_paths.begin());
+    expect(indexed_paths.size() == 1 && indexed_paths.front() == L"B-damaged.png",
+        "a consecutive delete must leave damaged B indexed");
+
+    current_path = L"A-valid.png";
+    current_index = 0;
+    has_image = true;
+    const auto successful_transition = mv::run_post_delete_transition(
+        L"A-valid.png", 0, 1,
+        [](int) { return std::wstring(L"B-valid.png"); },
+        [](const std::wstring& path, int index) {
+            return path == L"B-valid.png" && index == 0;
+        },
+        current_path, current_index, has_image);
+    expect(successful_transition.successor_opened
+            && current_path == L"B-valid.png"
+            && current_index == 0 && has_image,
+        "a successful successor open should atomically commit B's identity");
+
+    current_path = L"only.png";
+    current_index = 0;
+    has_image = true;
+    bool unexpected_open = false;
+    const auto final_transition = mv::run_post_delete_transition(
+        L"only.png", 0, 0,
+        [](int) { return std::wstring(); },
+        [&unexpected_open](const std::wstring&, int) {
+            unexpected_open = true;
+            return true;
+        },
+        current_path, current_index, has_image);
+    expect(!final_transition.successor_attempted && !unexpected_open,
+        "deleting the final item should not attempt a successor open");
+    expect(current_path.empty() && current_index == -1 && !has_image,
+        "deleting the final item should clear current identity");
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";

@@ -1577,12 +1577,14 @@ void App::delete_current_file(bool permanent) {
     m_thumb_d2d_use.clear();
     m_grid_layout_dirty = true;
 
-    const int successor_index = begin_post_delete_transition(
-        removed_index, static_cast<int>(m_index.size()),
-        m_current_path, m_current_idx, m_has_image);
     m_current_wic.Reset();
+    const PostDeleteTransitionResult transition = run_post_delete_transition(
+        deleted_path, removed_index, static_cast<int>(m_index.size()),
+        [this](int index) { return m_index.path_at(index); },
+        [this](const std::wstring& path, int) { return open_image(path); },
+        m_current_path, m_current_idx, m_has_image);
 
-    if (successor_index < 0) {
+    if (!transition.successor_attempted) {
         update_title();
         m_window.invalidate();
         if (!complete) {
@@ -1593,8 +1595,7 @@ void App::delete_current_file(bool permanent) {
         return;
     }
 
-    const std::wstring successor_path = m_index.path_at(successor_index);
-    if (!open_image(successor_path)) {
+    if (!transition.successor_opened) {
         update_title();
         m_window.invalidate();
     }

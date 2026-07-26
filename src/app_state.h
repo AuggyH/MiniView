@@ -69,14 +69,44 @@ inline void commit_current_image_identity(
     has_image = true;
 }
 
-inline int begin_post_delete_transition(
-    int removed_index, int remaining_count,
+struct PostDeleteTransitionResult {
+    std::wstring deleted_path;
+    int deleted_index = -1;
+    std::wstring successor_path;
+    int successor_index = -1;
+    bool successor_attempted = false;
+    bool successor_opened = false;
+};
+
+template <typename RemainingPathAt, typename OpenSuccessor>
+inline PostDeleteTransitionResult run_post_delete_transition(
+    const std::wstring& deleted_path, int deleted_index, int remaining_count,
+    RemainingPathAt remaining_path_at, OpenSuccessor open_successor,
     std::wstring& current_path, int& current_index, bool& has_image) {
+    PostDeleteTransitionResult result;
+    result.deleted_path = deleted_path;
+    result.deleted_index = deleted_index;
+
     current_path.clear();
     current_index = -1;
     has_image = false;
-    if (removed_index < 0 || remaining_count <= 0) return -1;
-    return std::min(removed_index, remaining_count - 1);
+    if (deleted_index < 0 || remaining_count <= 0) return result;
+
+    result.successor_index = std::min(deleted_index, remaining_count - 1);
+    result.successor_path = remaining_path_at(result.successor_index);
+    result.successor_attempted = true;
+    result.successor_opened =
+        open_successor(result.successor_path, result.successor_index);
+    if (result.successor_opened) {
+        commit_current_image_identity(
+            result.successor_path, result.successor_index,
+            current_path, current_index, has_image);
+    } else {
+        current_path.clear();
+        current_index = -1;
+        has_image = false;
+    }
+    return result;
 }
 
 } // namespace mv
