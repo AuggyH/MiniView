@@ -160,6 +160,10 @@ if(BUILD_TESTING)
         COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_SOURCE_DIR}/tests/governance_tests.ps1"
             -RepositoryRoot "${CMAKE_SOURCE_DIR}"
+            -CMakeCommand "${CMAKE_COMMAND}"
+            -CTestCommand "${CMAKE_CTEST_COMMAND}"
+            -BuildDirectory "${CMAKE_BINARY_DIR}"
+            -Configuration "$<CONFIG>"
     )
 
     add_executable(indexer_benchmark

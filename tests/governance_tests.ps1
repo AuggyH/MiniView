@@ -1,6 +1,13 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$RepositoryRoot
+    [string]$RepositoryRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$CMakeCommand,
+    [Parameter(Mandatory = $true)]
+    [string]$CTestCommand,
+    [Parameter(Mandatory = $true)]
+    [string]$BuildDirectory,
+    [string]$Configuration = 'Release'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,7 +19,6 @@ function Assert-Present {
         [string]$Pattern,
         [string]$FailureMessage
     )
-
     $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
     if ($content -notmatch $Pattern) { $failures.Add($FailureMessage) }
 }
@@ -23,7 +29,6 @@ function Assert-Absent {
         [string]$Pattern,
         [string]$FailureMessage
     )
-
     $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
     if ($content -match $Pattern) { $failures.Add($FailureMessage) }
 }
@@ -36,172 +41,57 @@ function ConvertFrom-Utf8Base64 {
 
 function Test-MetadataWorkerStructure {
     param([string]$Content)
-
     # Exact UTF-8 architecture line, encoded to keep this script ASCII-only.
     $expectedLine = ConvertFrom-Utf8Base64 'LSDnlJ/miJDkv6Hmga/nlLEgMSDkuKogYG1ldGFkYXRhIHdvcmtlcmAg5ZyoIFVJIOe6v+eoi+Wkluino+aekO+8m+ivt+axguOAgee7k+aenOWSjCByZWFkeSDnirbmgIHnlLEgbXV0ZXgvY29uZGl0aW9uIHZhcmlhYmxlIOS/neaKpO+8jOmAmui/hyBgV01fTUVUQURBVEFfUkVBRFlgIOWbnuWIsOeql+WPo+e6v+eoi++8jOW5tuaMieW9k+WJjemdouadvyBwYXRoIOS4ouW8g+i/h+acn+e7k+aenOOAgg=='
     return [regex]::IsMatch(
         $Content, '(?m)^' + [regex]::Escape($expectedLine) + '\r?$')
 }
 
-function Get-CMakeTokens {
-    param([string]$Content)
-
-    $tokens = [System.Collections.Generic.List[object]]::new()
-    $index = 0
-    while ($index -lt $Content.Length) {
-        $character = $Content[$index]
-        if ([char]::IsWhiteSpace($character)) {
-            $index++
-            continue
-        }
-
-        if ($character -eq '#') {
-            $commentStart = ([regex]'\G#\[(=*)\[').Match(
-                $Content, $index)
-            if ($commentStart.Success) {
-                $commentEnd = ']' + $commentStart.Groups[1].Value + ']'
-                $endIndex = $Content.IndexOf(
-                    $commentEnd,
-                    $index + $commentStart.Length,
-                    [System.StringComparison]::Ordinal)
-                if ($endIndex -lt 0) { break }
-                $index = $endIndex + $commentEnd.Length
-                continue
-            }
-
-            while ($index -lt $Content.Length -and
-                $Content[$index] -ne "`r" -and
-                $Content[$index] -ne "`n") {
-                $index++
-            }
-            continue
-        }
-
-        if ($character -eq '"') {
-            $value = [System.Text.StringBuilder]::new()
-            $index++
-            while ($index -lt $Content.Length) {
-                $character = $Content[$index]
-                if ($character -eq '\\' -and $index + 1 -lt $Content.Length) {
-                    $index++
-                    [void]$value.Append($Content[$index])
-                    $index++
-                    continue
-                }
-                if ($character -eq '"') {
-                    $index++
-                    break
-                }
-                [void]$value.Append($character)
-                $index++
-            }
-            [void]$tokens.Add([pscustomobject]@{
-                Type = 'Quoted'
-                Value = $value.ToString()
-            })
-            continue
-        }
-
-        if ($character -eq '[') {
-            $bracketStart = ([regex]'\G\[(=*)\[').Match(
-                $Content, $index)
-            if ($bracketStart.Success) {
-                $bracketEnd = ']' + $bracketStart.Groups[1].Value + ']'
-                $valueStart = $index + $bracketStart.Length
-                $endIndex = $Content.IndexOf(
-                    $bracketEnd,
-                    $valueStart,
-                    [System.StringComparison]::Ordinal)
-                if ($endIndex -lt 0) {
-                    $value = $Content.Substring($valueStart)
-                    $index = $Content.Length
-                } else {
-                    $value = $Content.Substring(
-                        $valueStart, $endIndex - $valueStart)
-                    $index = $endIndex + $bracketEnd.Length
-                }
-                [void]$tokens.Add([pscustomobject]@{
-                    Type = 'Bracket'
-                    Value = $value
-                })
-                continue
-            }
-        }
-
-        if ($character -eq '(' -or $character -eq ')') {
-            [void]$tokens.Add([pscustomobject]@{
-                Type = if ($character -eq '(') { 'LeftParen' } else { 'RightParen' }
-                Value = [string]$character
-            })
-            $index++
-            continue
-        }
-
-        $start = $index
-        while ($index -lt $Content.Length) {
-            $character = $Content[$index]
-            if ([char]::IsWhiteSpace($character) -or
-                $character -eq '(' -or
-                $character -eq ')' -or
-                $character -eq '"' -or
-                $character -eq '#') {
-                break
-            }
-            $index++
-        }
-        if ($index -eq $start) {
-            $index++
-            continue
-        }
-        [void]$tokens.Add([pscustomobject]@{
-            Type = 'Word'
-            Value = $Content.Substring($start, $index - $start)
-        })
+function Get-CTestTestNames {
+    param(
+        [string]$CTestCommand,
+        [string]$BuildDirectory,
+        [string]$Configuration
+    )
+    $arguments = @('--show-only=json-v1', '--test-dir', $BuildDirectory)
+    if (-not [string]::IsNullOrWhiteSpace($Configuration)) {
+        $arguments += @('-C', $Configuration)
     }
-
-    return $tokens.ToArray()
-}
-
-function Get-CMakeTestNames {
-    param([string]$Content)
-
-    $tokens = @(Get-CMakeTokens $Content)
+    $outputLines = @(& $CTestCommand @arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+    $output = [string]::Join(
+        "`n",
+        @($outputLines | ForEach-Object { $_.ToString() }))
+    if ($exitCode -ne 0) {
+        throw "ctest show-only failed with exit code $exitCode`: $output"
+    }
+    try {
+        $registry = $output | ConvertFrom-Json
+    } catch {
+        throw "ctest show-only returned invalid JSON: $($_.Exception.Message)"
+    }
+    if ($registry.kind -cne 'ctestInfo' -or $null -eq $registry.tests) {
+        throw 'ctest show-only returned an unexpected schema'
+    }
     $names = [System.Collections.Generic.List[string]]::new()
-    $depth = 0
-    for ($index = 0; $index -lt $tokens.Count; $index++) {
-        $token = $tokens[$index]
-        if ($depth -eq 0 -and
-            $token.Type -eq 'Word' -and
-            $token.Value -ieq 'add_test' -and
-            $index + 3 -lt $tokens.Count -and
-            $tokens[$index + 1].Type -eq 'LeftParen' -and
-            $tokens[$index + 2].Type -eq 'Word' -and
-            $tokens[$index + 2].Value -ieq 'NAME' -and
-            $tokens[$index + 3].Type -in @('Word', 'Quoted', 'Bracket') -and
-            $tokens[$index + 3].Value -match '^[A-Za-z0-9_.-]+$') {
-            [void]$names.Add($tokens[$index + 3].Value)
+    foreach ($test in @($registry.tests)) {
+        $name = [string]$test.name
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            throw 'ctest show-only returned a test without a name'
         }
-
-        if ($token.Type -eq 'LeftParen') {
-            $depth++
-        } elseif ($token.Type -eq 'RightParen' -and $depth -gt 0) {
-            $depth--
-        }
+        $names.Add($name)
     }
-
-    return @($names | Sort-Object -Unique)
+    return $names.ToArray()
 }
 
 function Remove-MarkdownHiddenContent {
     param([string]$Content)
-
     $withoutHtmlComments = [regex]::Replace(
         $Content, '(?s)<!--.*?(?:-->|\z)', '')
     $visible = [System.Text.StringBuilder]::new()
     $inFence = $false
     $fenceCharacter = ''
     $fenceLength = 0
-
     foreach ($line in [regex]::Split($withoutHtmlComments, '(?<=\n)')) {
         if ($line.Length -eq 0) { continue }
         $lineText = $line -replace '\r?\n\z', ''
@@ -218,7 +108,6 @@ function Remove-MarkdownHiddenContent {
             [void]$visible.Append($line)
             continue
         }
-
         $fenceEndPattern = '^[ \t]{0,3}' +
             [regex]::Escape($fenceCharacter) +
             '{' + $fenceLength + ',}[ \t]*$'
@@ -226,13 +115,11 @@ function Remove-MarkdownHiddenContent {
             $inFence = $false
         }
     }
-
     return $visible.ToString()
 }
 
 function Get-ArchitectureTestNames {
     param([string]$Content)
-
     $visibleContent = Remove-MarkdownHiddenContent $Content
     $sectionHeader = ConvertFrom-Utf8Base64 'IyMg5b2T5YmN6Ieq5Yqo5YyW6L6555WM'
     $sectionMatch = [regex]::Match(
@@ -240,73 +127,140 @@ function Get-ArchitectureTestNames {
         '(?ms)^' + [regex]::Escape($sectionHeader) +
             '\r?\n(?<section>.*?)(?=^##\s|\z)')
     if (-not $sectionMatch.Success) { return @() }
-
     return @([regex]::Matches(
         $sectionMatch.Groups['section'].Value,
-        '(?m)^-\s+`([A-Za-z0-9_.-]+)`[^\r\n]*\r?$') |
-        ForEach-Object { $_.Groups[1].Value } |
-        Sort-Object -Unique)
+        '(?m)^-\s+`([^`\r\n]+)`[^\r\n]*\r?$') |
+        ForEach-Object { $_.Groups[1].Value })
+}
+
+function Get-OrdinalSortedStrings {
+    param([string[]]$Values)
+    [string[]]$sorted = @($Values)
+    [System.Array]::Sort($sorted, [System.StringComparer]::Ordinal)
+    return $sorted
 }
 
 function Test-TestRegistryContract {
     param(
-        [string]$CMakeContent,
+        [string[]]$RegisteredNames,
         [string]$ArchitectureContent
     )
-
-    $registered = @(Get-CMakeTestNames $CMakeContent)
-    $documented = @(Get-ArchitectureTestNames $ArchitectureContent)
+    $registered = @(Get-OrdinalSortedStrings $RegisteredNames)
+    $documented = @(Get-OrdinalSortedStrings @(
+        Get-ArchitectureTestNames $ArchitectureContent))
     return ($registered.Count -gt 0 -and
+        $registered.Count -eq $documented.Count -and
         ($registered -join "`n") -ceq ($documented -join "`n"))
+}
+
+function Test-MutationChanged {
+    param(
+        [string]$Original,
+        [string]$Mutated,
+        [string]$MutationName
+    )
+    if ($Original -ceq $Mutated) {
+        $failures.Add("$MutationName did not change its input")
+        return $false
+    }
+    return $true
+}
+
+function Test-RegistryMultiplicity {
+    param(
+        [string[]]$Names,
+        [string]$ExpectedName,
+        [int]$ExpectedCount,
+        [string]$MutationName
+    )
+    $actualCount = @($Names | Where-Object {
+        $_ -ceq $ExpectedName
+    }).Count
+    if ($actualCount -ne $ExpectedCount) {
+        $failures.Add(
+            "$MutationName expected $ExpectedCount '$ExpectedName' registrations, got $actualCount")
+        return $false
+    }
+    return $true
+}
+
+function Invoke-RegistryProbe {
+    param(
+        [string]$VariantName,
+        [string]$CaseName,
+        [string]$CMakeContent,
+        [hashtable]$AdditionalFiles = @{}
+    )
+    $probeRoot = Join-Path $BuildDirectory (
+        'governance-registry-probes\' + $VariantName + '\' + $CaseName)
+    $sourceDirectory = Join-Path $probeRoot 'source'
+    $probeBuildDirectory = Join-Path $probeRoot 'build'
+    [void][System.IO.Directory]::CreateDirectory($sourceDirectory)
+    [void][System.IO.Directory]::CreateDirectory($probeBuildDirectory)
+    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText(
+        (Join-Path $sourceDirectory 'CMakeLists.txt'),
+        $CMakeContent,
+        $utf8WithoutBom)
+    $sourcePrefix = [System.IO.Path]::GetFullPath($sourceDirectory).
+        TrimEnd('\') + '\'
+    foreach ($relativePath in $AdditionalFiles.Keys) {
+        $targetPath = [System.IO.Path]::GetFullPath(
+            (Join-Path $sourceDirectory $relativePath))
+        if (-not $targetPath.StartsWith(
+            $sourcePrefix,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "probe file escaped source directory: $relativePath"
+        }
+        [void][System.IO.Directory]::CreateDirectory(
+            [System.IO.Path]::GetDirectoryName($targetPath))
+        [System.IO.File]::WriteAllText(
+            $targetPath,
+            [string]$AdditionalFiles[$relativePath],
+            $utf8WithoutBom)
+    }
+    $writtenContent = [System.IO.File]::ReadAllText(
+        (Join-Path $sourceDirectory 'CMakeLists.txt'),
+        [System.Text.Encoding]::UTF8)
+    if ($writtenContent -cne $CMakeContent) {
+        $failures.Add("$VariantName $CaseName probe input changed while writing")
+        return @()
+    }
+    $configureArguments = @(
+        '-S', $sourceDirectory,
+        '-B', $probeBuildDirectory,
+        '-DBUILD_TESTING=ON'
+    )
+    $configureOutput = @(& $CMakeCommand @configureArguments 2>&1)
+    $configureExitCode = $LASTEXITCODE
+    if ($configureExitCode -ne 0) {
+        $failures.Add(
+            "$VariantName $CaseName probe configure failed: " +
+            [string]::Join(
+                "`n",
+                @($configureOutput | ForEach-Object { $_.ToString() })))
+        return @()
+    }
+    try {
+        return @(Get-CTestTestNames `
+            $CTestCommand `
+            $probeBuildDirectory `
+            $Configuration)
+    } catch {
+        $failures.Add(
+            "$VariantName $CaseName probe registry failed: $($_.Exception.Message)")
+        return @()
+    }
 }
 
 function Test-TestRegistryMutationGuards {
     param(
-        [string]$CMakeContent,
+        [string[]]$RegisteredNames,
         [string]$ArchitectureContent,
         [string]$LineEnding,
         [string]$VariantName
     )
-
     $checks = 0
-    $activeRegistration =
-        '    add_test(NAME app_state.unit COMMAND app_state_tests)'
-    if (-not $CMakeContent.Contains($activeRegistration)) {
-        $failures.Add("$VariantName mutation setup cannot find app_state.unit")
-        return $checks
-    }
-
-    $commentedOutMutation = $CMakeContent.Replace(
-        $activeRegistration,
-        '    # add_test(NAME app_state.unit COMMAND app_state_tests)')
-    $checks++
-    if (Test-TestRegistryContract $commentedOutMutation $ArchitectureContent) {
-        $failures.Add("$VariantName accepted a commented-out real CMake test")
-    }
-
-    $stringifiedMutation = $CMakeContent.Replace(
-        $activeRegistration,
-        '    set(app_state_registration "add_test(NAME app_state.unit COMMAND app_state_tests)")')
-    $checks++
-    if (Test-TestRegistryContract $stringifiedMutation $ArchitectureContent) {
-        $failures.Add("$VariantName accepted a stringified replacement test")
-    }
-
-    $lineCommentMutation = $CMakeContent + $LineEnding +
-        '# add_test(NAME mutation.extra COMMAND mutation_extra)'
-    $checks++
-    if (-not (Test-TestRegistryContract $lineCommentMutation $ArchitectureContent)) {
-        $failures.Add("$VariantName rejected a harmless CMake line comment")
-    }
-
-    $bracketCommentMutation = $CMakeContent + $LineEnding + '#[=[' +
-        $LineEnding + 'add_test(NAME mutation.extra COMMAND mutation_extra)' +
-        $LineEnding + ']=]'
-    $checks++
-    if (-not (Test-TestRegistryContract $bracketCommentMutation $ArchitectureContent)) {
-        $failures.Add("$VariantName rejected a harmless CMake bracket comment")
-    }
-
     $bulletMatch = [regex]::Match(
         $ArchitectureContent,
         '(?m)^-\s+`app_state\.unit`[^\r\n]*(?:\r?\n)?')
@@ -322,30 +276,182 @@ function Test-TestRegistryMutationGuards {
     $htmlCommentMutation = $beforeBullet + '<!--' + $LineEnding +
         $bullet + $LineEnding + '-->' + $LineEnding + $afterBullet
     $checks++
-    if (Test-TestRegistryContract $CMakeContent $htmlCommentMutation) {
-        $failures.Add("$VariantName accepted an HTML-commented test bullet")
+    if (Test-MutationChanged $ArchitectureContent $htmlCommentMutation `
+        "$VariantName HTML-hidden bullet") {
+        if (Test-TestRegistryContract $RegisteredNames $htmlCommentMutation) {
+            $failures.Add("$VariantName accepted an HTML-commented test bullet")
+        }
     }
 
-    $fencedMutation = $beforeBullet + '```text' + $LineEnding +
+    $backtickFenceMutation = $beforeBullet + '```text' + $LineEnding +
         $bullet + $LineEnding + '```' + $LineEnding + $afterBullet
     $checks++
-    if (Test-TestRegistryContract $CMakeContent $fencedMutation) {
-        $failures.Add("$VariantName accepted a fenced test bullet")
+    if (Test-MutationChanged $ArchitectureContent $backtickFenceMutation `
+        "$VariantName backtick-fenced bullet") {
+        if (Test-TestRegistryContract $RegisteredNames $backtickFenceMutation) {
+            $failures.Add("$VariantName accepted a backtick-fenced test bullet")
+        }
+    }
+
+    $tildeFenceMutation = $beforeBullet + '~~~text' + $LineEnding +
+        $bullet + $LineEnding + '~~~' + $LineEnding + $afterBullet
+    $checks++
+    if (Test-MutationChanged $ArchitectureContent $tildeFenceMutation `
+        "$VariantName tilde-fenced bullet") {
+        if (Test-TestRegistryContract $RegisteredNames $tildeFenceMutation) {
+            $failures.Add("$VariantName accepted a tilde-fenced test bullet")
+        }
     }
 
     $removedBulletMutation = $beforeBullet + $afterBullet
     $checks++
-    if (Test-TestRegistryContract $CMakeContent $removedBulletMutation) {
-        $failures.Add("$VariantName accepted a removed architecture test")
+    if (Test-MutationChanged $ArchitectureContent $removedBulletMutation `
+        "$VariantName removed bullet") {
+        if (Test-TestRegistryContract $RegisteredNames $removedBulletMutation) {
+            $failures.Add("$VariantName accepted a removed architecture test")
+        }
     }
 
-    $addedTestMutation = $CMakeContent + $LineEnding +
-        'add_test(NAME mutation.extra COMMAND mutation_extra)'
+    $addedBulletMutation = $beforeBullet + $bullet + $LineEnding +
+        '- `mutation.extra`: extra.' + $LineEnding + $afterBullet
     $checks++
-    if (Test-TestRegistryContract $addedTestMutation $ArchitectureContent) {
-        $failures.Add("$VariantName accepted an undocumented active CMake test")
+    if (Test-MutationChanged $ArchitectureContent $addedBulletMutation `
+        "$VariantName added bullet") {
+        if (Test-TestRegistryContract $RegisteredNames $addedBulletMutation) {
+            $failures.Add("$VariantName accepted an extra architecture test")
+        }
     }
 
+    $duplicateBulletMutation = $beforeBullet + $bullet + $LineEnding +
+        $bullet + $LineEnding + $afterBullet
+    $checks++
+    if (Test-MutationChanged $ArchitectureContent $duplicateBulletMutation `
+        "$VariantName duplicate architecture bullet") {
+        if (Test-TestRegistryContract $RegisteredNames $duplicateBulletMutation) {
+            $failures.Add("$VariantName accepted a duplicate architecture test")
+        }
+    }
+
+    $probeSectionHeader =
+        ConvertFrom-Utf8Base64 'IyMg5b2T5YmN6Ieq5Yqo5YyW6L6555WM'
+    $probeArchitecture = $probeSectionHeader + $LineEnding +
+        '- `probe.unit`: probe.' + $LineEnding
+    $baseCMake = @(
+        'cmake_minimum_required(VERSION 3.20)',
+        'project(GovernanceRegistryProbe NONE)',
+        'include(CTest)',
+        'add_test(NAME probe.unit COMMAND "${CMAKE_COMMAND}" -E echo probe)',
+        '# MUTATION_POINT'
+    ) -join $LineEnding
+    $baseCMake += $LineEnding
+
+    $escapeReplacement = @(
+        'set(quoted_escape "literal quote: \" and add_test(NAME quoted.decoy COMMAND false)")',
+        'set(unquoted_escape literal\(paren\)\ value\#hash)',
+        'add_test(NAME after.quoted.escape COMMAND "${CMAKE_COMMAND}" -E echo quoted)',
+        'add_test(NAME after.unquoted.escape COMMAND "${CMAKE_COMMAND}" -E echo unquoted)'
+    ) -join $LineEnding
+    $escapeMutation = $baseCMake.Replace(
+        '# MUTATION_POINT', $escapeReplacement)
+    $checks++
+    if (Test-MutationChanged $baseCMake $escapeMutation `
+        "$VariantName escape registry") {
+        $escapeNames = @(Invoke-RegistryProbe `
+            $VariantName 'escape' $escapeMutation)
+        [void](Test-RegistryMultiplicity $escapeNames `
+            'after.quoted.escape' 1 "$VariantName quoted escape")
+        [void](Test-RegistryMultiplicity $escapeNames `
+            'after.unquoted.escape' 1 "$VariantName unquoted escape")
+        [void](Test-RegistryMultiplicity $escapeNames `
+            'quoted.decoy' 0 "$VariantName quoted escape decoy")
+        if (Test-TestRegistryContract $escapeNames $probeArchitecture) {
+            $failures.Add("$VariantName accepted undocumented tests after escapes")
+        }
+    }
+
+    $quotedMutation = $baseCMake.Replace(
+        '# MUTATION_POINT',
+        'add_test(NAME "mutation hidden" COMMAND "${CMAKE_COMMAND}" -E echo quoted-name)')
+    $checks++
+    $quotedNames = @()
+    if (Test-MutationChanged $baseCMake $quotedMutation `
+        "$VariantName quoted test name") {
+        $quotedNames = @(Invoke-RegistryProbe `
+            $VariantName 'quoted-name' $quotedMutation)
+        [void](Test-RegistryMultiplicity $quotedNames `
+            'mutation hidden' 1 "$VariantName quoted test name")
+        if (Test-TestRegistryContract $quotedNames $probeArchitecture) {
+            $failures.Add("$VariantName ignored an undocumented quoted test name")
+        }
+    }
+
+    $quotedArchitecture = $probeArchitecture +
+        '- `mutation hidden`: quoted name.' + $LineEnding
+    $checks++
+    if (Test-MutationChanged $probeArchitecture $quotedArchitecture `
+        "$VariantName documented quoted test name") {
+        if (-not (Test-TestRegistryContract `
+            $quotedNames $quotedArchitecture)) {
+            $failures.Add("$VariantName rejected a documented quoted test name")
+        }
+    }
+
+    $bracketMutation = $baseCMake.Replace(
+        '# MUTATION_POINT',
+        'add_test(NAME [=[mutation bracket]=] COMMAND "${CMAKE_COMMAND}" -E echo bracket-name)')
+    $checks++
+    $bracketNames = @()
+    if (Test-MutationChanged $baseCMake $bracketMutation `
+        "$VariantName bracket test name") {
+        $bracketNames = @(Invoke-RegistryProbe `
+            $VariantName 'bracket-name' $bracketMutation)
+        [void](Test-RegistryMultiplicity $bracketNames `
+            'mutation bracket' 1 "$VariantName bracket test name")
+        if (Test-TestRegistryContract $bracketNames $probeArchitecture) {
+            $failures.Add("$VariantName ignored an undocumented bracket test name")
+        }
+    }
+
+    $bracketArchitecture = $probeArchitecture +
+        '- `mutation bracket`: bracket name.' + $LineEnding
+    $checks++
+    if (Test-MutationChanged $probeArchitecture $bracketArchitecture `
+        "$VariantName documented bracket test name") {
+        if (-not (Test-TestRegistryContract `
+            $bracketNames $bracketArchitecture)) {
+            $failures.Add("$VariantName rejected a documented bracket test name")
+        }
+    }
+
+    $duplicateReplacement = @(
+        'add_subdirectory(first)',
+        'add_subdirectory(second)'
+    ) -join $LineEnding
+    $duplicateMutation = $baseCMake.Replace(
+        '# MUTATION_POINT', $duplicateReplacement)
+    $duplicateArchitecture = $probeArchitecture +
+        '- `duplicate.cross`: duplicate probe.' + $LineEnding
+    $checks++
+    if ((Test-MutationChanged $baseCMake $duplicateMutation `
+            "$VariantName duplicate CMake registration") -and
+        (Test-MutationChanged $probeArchitecture $duplicateArchitecture `
+            "$VariantName duplicate probe architecture")) {
+        $subdirectoryContent =
+            'add_test(NAME duplicate.cross COMMAND ' +
+            '"${CMAKE_COMMAND}" -E echo duplicate)' +
+            $LineEnding
+        $duplicateNames = @(Invoke-RegistryProbe `
+            $VariantName 'duplicate' $duplicateMutation @{
+                'first\CMakeLists.txt' = $subdirectoryContent
+                'second\CMakeLists.txt' = $subdirectoryContent
+            })
+        [void](Test-RegistryMultiplicity $duplicateNames `
+            'duplicate.cross' 2 "$VariantName duplicate CMake registration")
+        if (Test-TestRegistryContract `
+            $duplicateNames $duplicateArchitecture) {
+            $failures.Add("$VariantName accepted duplicate CMake tests")
+        }
+    }
     return $checks
 }
 
@@ -356,9 +462,7 @@ function Test-NoLegacyMetadataLog {
 
 $areaPathLabelPrefix = "$([char]0x533a)$([char]0x57df)$([char]0x8def)$([char]0x5f84)$([char]0x6807)$([char]0x7b7e)$([char]0x7531)"
 $architecturePath = Join-Path $RepositoryRoot 'docs/ARCHITECTURE.md'
-$cmakePath = Join-Path $RepositoryRoot 'CMakeLists.txt'
 $architectureContent = Get-Content -Raw -Encoding UTF8 -LiteralPath $architecturePath
-$cmakeContent = Get-Content -Raw -Encoding UTF8 -LiteralPath $cmakePath
 
 Assert-Present (Join-Path $RepositoryRoot 'build.bat') '(?s)copy /Y .*?if errorlevel 1 exit /b 1\s+echo BUILD_OK' 'build.bat must stop before BUILD_OK when the candidate copy fails'
 Assert-Absent (Join-Path $RepositoryRoot '.github/labeler.yml') '(?m)^(documentation|ci|tests):' 'path labeler must not manage type labels'
@@ -375,47 +479,54 @@ if (-not (Test-NoLegacyMetadataLog $architectureContent)) {
 if (-not (Test-MetadataWorkerStructure $architectureContent)) {
     $failures.Add('architecture must preserve the complete positive metadata worker contract')
 }
-if (-not (Test-TestRegistryContract $cmakeContent $architectureContent)) {
-    $failures.Add('architecture test declarations must exactly match CMake add_test registrations')
+
+$registeredTests = @()
+try {
+    $registeredTests = @(Get-CTestTestNames `
+        $CTestCommand $BuildDirectory $Configuration)
+} catch {
+    $failures.Add("configured CTest registry read failed: $($_.Exception.Message)")
+}
+if (-not (Test-TestRegistryContract `
+    $registeredTests $architectureContent)) {
+    $failures.Add(
+        'architecture test declarations must exactly match the configured CTest registry')
 }
 
-# Mutation checks prove the predicates reject lexical decoys and registry drift.
-$lfCMakeContent = $cmakeContent -replace "`r`n", "`n"
+# Mutation checks exercise the production live-registry reader and contract.
 $lfArchitectureContent = $architectureContent -replace "`r`n", "`n"
 $registryVariants = @(
     [pscustomobject]@{
         Name = 'LF'
         LineEnding = "`n"
-        CMake = $lfCMakeContent
         Architecture = $lfArchitectureContent
     },
     [pscustomobject]@{
         Name = 'CRLF'
         LineEnding = "`r`n"
-        CMake = $lfCMakeContent -replace "`n", "`r`n"
         Architecture = $lfArchitectureContent -replace "`n", "`r`n"
     }
 )
 $registryMutationChecks = 0
 foreach ($variant in $registryVariants) {
-    if (-not (Test-TestRegistryContract $variant.CMake $variant.Architecture)) {
+    if (-not (Test-TestRegistryContract `
+        $registeredTests $variant.Architecture)) {
         $failures.Add("$($variant.Name) test registry contract must pass")
     }
     $registryMutationChecks += Test-TestRegistryMutationGuards `
-        $variant.CMake `
+        $registeredTests `
         $variant.Architecture `
         $variant.LineEnding `
         $variant.Name
 }
-if ($registryMutationChecks -ne 16) {
-    $failures.Add('test registry mutation suite must execute 16 checks')
+if ($registryMutationChecks -ne 24) {
+    $failures.Add('test registry mutation suite must execute 24 checks')
 }
 
 $negatedWorkerMutation = '- 1 metadata worker does not exist; UI parsing does not use mutex/condition variable, WM_METADATA_READY, or path expiry.'
 if (Test-MetadataWorkerStructure $negatedWorkerMutation) {
     $failures.Add('metadata worker mutation guard accepted a negated worker claim')
 }
-
 $legacyLogMutation = $architectureContent + "`r`nmeta_debug.log"
 if (Test-NoLegacyMetadataLog $legacyLogMutation) {
     $failures.Add('metadata log mutation guard accepted the legacy debug-log claim')
@@ -426,4 +537,7 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Output "governance tests passed ($($registryVariants.Count) registry variants, $registryMutationChecks registry mutations)"
+Write-Output (
+    "governance tests passed (live registry $($registeredTests.Count), " +
+    "$($registryVariants.Count) registry variants, " +
+    "$registryMutationChecks registry mutations)")
