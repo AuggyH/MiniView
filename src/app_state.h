@@ -5,6 +5,22 @@
 
 namespace mv {
 
+enum class GridRebuildReason {
+    None,
+    Structural,
+    BackgroundDimensions,
+};
+
+inline GridRebuildReason classify_grid_rebuild_reason(
+    bool layout_dirty, bool width_changed, bool item_count_changed,
+    bool dimension_generation_changed) {
+    if (layout_dirty || width_changed || item_count_changed)
+        return GridRebuildReason::Structural;
+    if (dimension_generation_changed)
+        return GridRebuildReason::BackgroundDimensions;
+    return GridRebuildReason::None;
+}
+
 inline bool is_image_zoomed(float scale, float fit_scale) {
     return fit_scale > 0.0f && scale > fit_scale * 1.02f;
 }
@@ -29,6 +45,16 @@ inline int ensure_grid_row_visible(
         adjusted = row_bottom - viewport_height;
     }
     return clamp_grid_scroll_position(adjusted, total_height, visible_height);
+}
+
+inline int reconcile_grid_scroll_after_rebuild(
+    GridRebuildReason reason, int scroll, bool has_selected_row,
+    int row_top, int row_bottom, int total_height, int visible_height) {
+    if (reason == GridRebuildReason::Structural && has_selected_row) {
+        return ensure_grid_row_visible(
+            scroll, row_top, row_bottom, total_height, visible_height);
+    }
+    return clamp_grid_scroll_position(scroll, total_height, visible_height);
 }
 
 inline bool can_delete_current_image(bool has_image, const std::wstring& current_path) {

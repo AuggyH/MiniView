@@ -2434,7 +2434,7 @@ void App::toggle_grid() {
         int scrollbar_zone = static_cast<int>(20 * dpi_scale);
         int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
             - visible_panel_width() - scrollbar_zone - m_thumb_pad);
-        rebuild_grid_layout(grid_width);
+        rebuild_grid_layout(grid_width, GridRebuildReason::Structural);
         // Smart scroll restoration
         if (m_current_idx == m_grid_saved_idx) {
             // User didn't navigate: restore original scroll
@@ -2597,7 +2597,7 @@ void App::grid_ensure_visible() {
     if (m_grid_layout_dirty || m_grid_layout_width != grid_width
         || m_grid_dims.size() != m_index.size()
         || m_grid_layout_generation != generation) {
-        rebuild_grid_layout(grid_width);
+        rebuild_grid_layout(grid_width, GridRebuildReason::Structural);
     }
 
     int row_index = m_grid_sel / m_grid_cols;
@@ -2913,14 +2913,17 @@ void App::delete_selected(bool permanent) {
     }
 }
 
-void App::rebuild_grid_layout(int grid_area_width) {
+void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
     int total = static_cast<int>(m_index.size());
     m_grid_dims.assign(static_cast<size_t>(total), {0, 0});
+    uint64_t applied_dimension_generation = 0;
     {
         std::lock_guard lock(m_thumb_mutex);
         int count = std::min(total, static_cast<int>(m_thumbs.size()));
         for (int i = 0; i < count; ++i)
             m_grid_dims[static_cast<size_t>(i)] = {m_thumbs[i].orig_w, m_thumbs[i].orig_h};
+        applied_dimension_generation =
+            m_thumb_dimension_generation.load(std::memory_order_relaxed);
     }
 
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
@@ -2995,20 +2998,25 @@ void App::rebuild_grid_layout(int grid_area_width) {
     const int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
     const int selected_row = m_grid_sel >= 0 && m_grid_cols > 0
         ? m_grid_sel / m_grid_cols : -1;
-    if (selected_row >= 0 && selected_row < static_cast<int>(m_grid_rows.size())) {
+    const bool has_selected_row =
+        selected_row >= 0 && selected_row < static_cast<int>(m_grid_rows.size());
+    if (has_selected_row) {
         const auto& row = m_grid_rows[static_cast<size_t>(selected_row)];
-        m_grid_scroll_y = ensure_grid_row_visible(
-            m_grid_scroll_y, row.row_y, row.row_y + row.row_h + row.label_extra,
+        m_grid_scroll_y = reconcile_grid_scroll_after_rebuild(
+            reason, m_grid_scroll_y, true, row.row_y,
+            row.row_y + row.row_h + row.label_extra,
             m_grid_total_h, visible_height);
     } else {
-        clamp_grid_scroll();
+        m_grid_scroll_y = reconcile_grid_scroll_after_rebuild(
+            reason, m_grid_scroll_y, false, 0, 0,
+            m_grid_total_h, visible_height);
     }
     m_row_heights.clear();
     m_row_heights.reserve(m_grid_rows.size());
     for (const auto& row : m_grid_rows)
         m_row_heights.push_back(row.row_h + m_thumb_gap_v + row.label_extra);
     m_grid_layout_width = grid_area_width;
-    m_grid_layout_generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
+    m_grid_layout_generation = applied_dimension_generation;
     m_grid_layout_dirty = false;
 }
 
@@ -3027,11 +3035,12 @@ void App::grid_render() {
     int grid_area_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
         - visible_panel_width() - scrollbar_zone - m_thumb_pad);
     uint64_t dimension_generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
-    if (m_grid_layout_dirty || m_grid_layout_width != grid_area_width
-        || m_grid_dims.size() != static_cast<size_t>(total)
-        || dimension_generation != m_grid_layout_generation) {
-        rebuild_grid_layout(grid_area_width);
-    }
+    const GridRebuildReason rebuild_reason = classify_grid_rebuild_reason(
+        m_grid_layout_dirty, m_grid_layout_width != grid_area_width,
+        m_grid_dims.size() != static_cast<size_t>(total),
+        dimension_generation != m_grid_layout_generation);
+    if (rebuild_reason != GridRebuildReason::None)
+        rebuild_grid_layout(grid_area_width, rebuild_reason);
 
     auto& rows = m_grid_rows;
     int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;

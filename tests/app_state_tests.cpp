@@ -48,6 +48,54 @@ int main() {
     expect(mv::ensure_grid_row_visible(900, 150, 250, 450, 500) == 0,
         "a shortened list should clamp before restoring selected-row visibility");
 
+    using mv::GridRebuildReason;
+    expect(mv::classify_grid_rebuild_reason(false, false, false, false)
+            == GridRebuildReason::None,
+        "an unchanged layout should not rebuild");
+    expect(mv::classify_grid_rebuild_reason(true, false, false, true)
+            == GridRebuildReason::Structural,
+        "a user structural reflow should take precedence over dimensions arriving");
+    expect(mv::classify_grid_rebuild_reason(false, true, false, false)
+            == GridRebuildReason::Structural,
+        "a resize or panel/full-screen width change should be structural");
+    expect(mv::classify_grid_rebuild_reason(false, false, true, false)
+            == GridRebuildReason::Structural,
+        "a first layout or changed index size should be structural");
+    expect(mv::classify_grid_rebuild_reason(false, false, false, true)
+            == GridRebuildReason::BackgroundDimensions,
+        "dimension generation alone should be a background rebuild");
+
+    int background_scroll = mv::reconcile_grid_scroll_after_rebuild(
+        GridRebuildReason::BackgroundDimensions, 900, true,
+        100, 220, 2000, 500);
+    expect(background_scroll == 900,
+        "a background dimension rebuild must not jump to an off-screen selection");
+    background_scroll = mv::reconcile_grid_scroll_after_rebuild(
+        GridRebuildReason::BackgroundDimensions, background_scroll, true,
+        1300, 1420, 2100, 500);
+    expect(background_scroll == 900,
+        "consecutive background dimension rebuilds must preserve user scroll");
+    expect(mv::reconcile_grid_scroll_after_rebuild(
+            GridRebuildReason::BackgroundDimensions, 1900, true,
+            100, 220, 2000, 500) == 1500,
+        "a background rebuild should still clamp scroll to the new content height");
+    expect(mv::reconcile_grid_scroll_after_rebuild(
+            GridRebuildReason::Structural, 900, true,
+            100, 220, 2000, 500) == 100,
+        "a structural rebuild should reveal a selected row above the viewport");
+    expect(mv::reconcile_grid_scroll_after_rebuild(
+            GridRebuildReason::Structural, 0, true,
+            100, 800, 1200, 500) == 300,
+        "a row taller than the viewport should keep the established bottom-alignment rule");
+    expect(mv::reconcile_grid_scroll_after_rebuild(
+            GridRebuildReason::Structural, 900, false,
+            0, 0, 2000, 500) == 900,
+        "a first layout without selection should preserve a valid scroll position");
+    expect(mv::reconcile_grid_scroll_after_rebuild(
+            GridRebuildReason::Structural, 100, true,
+            680, 820, 1400, 500) == 320,
+        "square and justified structural reflows should retain selection visibility");
+
     std::wstring current_path;
     int current_index = -1;
     bool has_image = false;

@@ -4,6 +4,7 @@
 #include "decoder.h"
 #include "indexer.h"
 #include "metadata.h"
+#include "app_state.h"
 #include <string>
 #include <thread>
 #include <mutex>
@@ -87,7 +88,7 @@ private:
     void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
     void    clamp_grid_scroll();
-    void    rebuild_grid_layout(int grid_area_width);
+    void    rebuild_grid_layout(int grid_area_width, GridRebuildReason reason);
     void    grid_render();
     void    handle_scrollbar_click(HWND hwnd, int mx, int my);
     void    select_item(int idx, bool shift, bool ctrl);
