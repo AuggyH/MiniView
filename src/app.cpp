@@ -21,6 +21,7 @@ extern std::wstring get_config_dir();
 namespace mv {
 
 constexpr UINT WM_THUMB_READY = WM_APP + 1;
+constexpr UINT WM_METADATA_READY = WM_APP + 2;
 
 // ── OLE Drag source helpers ──────────────────────────────────
 
@@ -293,6 +294,46 @@ static void BuildOwnerMenu(HMENU parent, HMENU sub, const std::wstring& label) {
     InsertMenuItemW(parent, GetMenuItemCount(parent), TRUE, &mii);
 }
 
+static void metadata_worker(
+    std::atomic<bool>& running,
+    std::mutex& mutex,
+    std::condition_variable& cv,
+    std::wstring& request_path,
+    bool& request_pending,
+    std::wstring& result_path,
+    ImageMeta& result,
+    bool& result_ready,
+    HWND notify_window)
+{
+    while (running) {
+        std::wstring path;
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return !running || request_pending; });
+            if (!running) break;
+            path = std::move(request_path);
+            request_path.clear();
+            request_pending = false;
+        }
+
+        ImageMeta metadata;
+        try {
+            metadata = extract_metadata(path);
+        } catch (...) {
+            metadata = {};
+        }
+
+        {
+            std::lock_guard lock(mutex);
+            if (!running) break;
+            result_path = std::move(path);
+            result = std::move(metadata);
+            result_ready = true;
+        }
+        PostMessageW(notify_window, WM_METADATA_READY, 0, 0);
+    }
+}
+
 static void FreeOwnerItemData(HMENU menu) {
     int count = GetMenuItemCount(menu);
     for (int i = 0; i < count; ++i) {
@@ -344,7 +385,7 @@ static void ApplyMenuTheme(HMENU menu, HBRUSH br) {
 // ── App lifecycle ────────────────────────────────────────────
 
 App::App()  = default;
-App::~App() { stop_preloader(); stop_thumb_loader(); }
+App::~App() { stop_metadata_loader(); stop_preloader(); stop_thumb_loader(); }
 
 int App::run(const std::wstring& initial_path) {
     // Scale window size by DPI
@@ -383,6 +424,7 @@ int App::run(const std::wstring& initial_path) {
     SetMenu(m_window.handle(), nullptr);
 
     start_preloader();
+    start_metadata_loader();
 
     if (!initial_path.empty()) {
         DWORD attr = GetFileAttributesW(initial_path.c_str());
@@ -394,6 +436,7 @@ int App::run(const std::wstring& initial_path) {
     }
 
     int ret = m_window.run();
+    stop_metadata_loader();
     stop_preloader();
     return ret;
 }
@@ -648,6 +691,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_THUMB_READY:
         if (m_grid_mode) m_window.invalidate();
+        return 0;
+
+    case WM_METADATA_READY:
+        apply_metadata_result();
         return 0;
 
     case WM_DPICHANGED: {
@@ -2569,7 +2616,65 @@ void App::update_panel_data(const std::wstring& path) {
         }
     }
 
-    ImageMeta meta = extract_metadata(path);
+    if (request_metadata(path))
+        m_panel_gen.push_back({L"", L"正在读取生成信息..."});
+    else
+        m_panel_gen.push_back({L"", L"无可用生成信息"});
+}
+
+void App::start_metadata_loader() {
+    if (m_metadata_running) return;
+    m_metadata_running = true;
+    try {
+        m_metadata_thread = std::thread(metadata_worker,
+            std::ref(m_metadata_running),
+            std::ref(m_metadata_mutex),
+            std::ref(m_metadata_cv),
+            std::ref(m_metadata_request_path),
+            std::ref(m_metadata_request_pending),
+            std::ref(m_metadata_result_path),
+            std::ref(m_metadata_result),
+            std::ref(m_metadata_result_ready),
+            m_window.handle());
+    } catch (...) {
+        m_metadata_running = false;
+    }
+}
+
+void App::stop_metadata_loader() {
+    m_metadata_running = false;
+    m_metadata_cv.notify_all();
+    if (m_metadata_thread.joinable()) m_metadata_thread.join();
+}
+
+bool App::request_metadata(const std::wstring& path) {
+    if (!m_metadata_running || path.empty()) return false;
+    {
+        std::lock_guard lock(m_metadata_mutex);
+        m_metadata_request_path = path;
+        m_metadata_request_pending = true;
+    }
+    m_metadata_cv.notify_one();
+    return true;
+}
+
+void App::apply_metadata_result() {
+    std::wstring path;
+    ImageMeta metadata;
+    {
+        std::lock_guard lock(m_metadata_mutex);
+        if (!m_metadata_result_ready) return;
+        path = std::move(m_metadata_result_path);
+        metadata = std::move(m_metadata_result);
+        m_metadata_result_ready = false;
+    }
+    if (path != m_panel_path) return;
+    apply_metadata(metadata);
+    m_window.invalidate();
+}
+
+void App::apply_metadata(const ImageMeta& meta) {
+    m_panel_gen.clear();
     if (meta.valid) {
         if (!meta.model.empty()) m_panel_gen.push_back({L"\u6A21\u578B", meta.model});
         if (!meta.vae.empty()) m_panel_gen.push_back({L"VAE", meta.vae});

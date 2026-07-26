@@ -4,6 +4,8 @@
 #include <vector>
 #include <regex>
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <unordered_map>
 #include <Windows.h>
 
@@ -49,19 +51,36 @@ struct PngChunk {
     std::vector<char> data;
 };
 
+constexpr uint64_t MAX_PNG_TEXT_CHUNK_BYTES = 4ull * 1024ull * 1024ull;
+constexpr uint64_t MAX_PNG_TEXT_TOTAL_BYTES = 8ull * 1024ull * 1024ull;
+constexpr size_t MAX_PNG_CHUNK_COUNT = 4096;
+
 // Read PNG chunks from file, return all tEXt chunk values keyed by keyword
 std::unordered_map<std::string, std::string> read_png_texts(const std::wstring& path) {
     std::unordered_map<std::string, std::string> result;
     std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) return result;
 
-    // Check PNG signature
-    char sig[8];
-    f.read(sig, 8);
-    if (f.gcount() != 8 || sig[0] != '\x89' || sig[1] != 'P' ||
-        sig[2] != 'N' || sig[3] != 'G') return result;
+    f.seekg(0, std::ios::end);
+    const std::streamoff file_size = f.tellg();
+    if (file_size < 8) return result;
+    f.seekg(0, std::ios::beg);
 
-    while (f.good()) {
+    constexpr std::array<unsigned char, 8> PNG_SIGNATURE = {
+        0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A
+    };
+    std::array<unsigned char, 8> signature = {};
+    f.read(reinterpret_cast<char*>(signature.data()),
+        static_cast<std::streamsize>(signature.size()));
+    if (f.gcount() != static_cast<std::streamsize>(signature.size())
+        || signature != PNG_SIGNATURE) return result;
+
+    uint64_t text_bytes = 0;
+    size_t chunk_count = 0;
+    while (f.good() && chunk_count++ < MAX_PNG_CHUNK_COUNT) {
+        const std::streamoff chunk_start = f.tellg();
+        if (chunk_start < 0 || file_size - chunk_start < 12) break;
+
         uint32_t len_be;
         f.read(reinterpret_cast<char*>(&len_be), 4);
         if (f.gcount() != 4) break;
@@ -71,16 +90,29 @@ std::unordered_map<std::string, std::string> read_png_texts(const std::wstring& 
         f.read(type, 4);
         if (f.gcount() != 4) break;
 
-        std::vector<char> data(len);
-        if (len > 0) {
-            f.read(data.data(), len);
-            if (f.gcount() != len) break;
+        const uint64_t bytes_after_header = static_cast<uint64_t>(len) + 4ull;
+        const std::streamoff payload_start = f.tellg();
+        if (payload_start < 0
+            || bytes_after_header > static_cast<uint64_t>(file_size - payload_start)) break;
+
+        const bool is_text = strcmp(type, "tEXt") == 0;
+        const bool within_text_budget = static_cast<uint64_t>(len) <= MAX_PNG_TEXT_CHUNK_BYTES
+            && text_bytes + static_cast<uint64_t>(len) <= MAX_PNG_TEXT_TOTAL_BYTES;
+        if (!is_text || len == 0 || !within_text_budget) {
+            f.seekg(static_cast<std::streamoff>(bytes_after_header), std::ios::cur);
+            if (strcmp(type, "IEND") == 0) break;
+            continue;
         }
 
-        // Skip CRC
-        f.seekg(4, std::ios::cur);
+        std::vector<char> data(len);
+        f.read(data.data(), static_cast<std::streamsize>(len));
+        if (f.gcount() != static_cast<std::streamsize>(len)) break;
+        text_bytes += len;
 
-        if (strcmp(type, "tEXt") == 0 && len > 0) {
+        f.seekg(4, std::ios::cur); // CRC
+        if (!f.good()) break;
+
+        if (is_text) {
             // Format: keyword\0value
             auto null_pos = std::find(data.begin(), data.end(), '\0');
             if (null_pos != data.end()) {
@@ -89,6 +121,8 @@ std::unordered_map<std::string, std::string> read_png_texts(const std::wstring& 
                 result[keyword] = value;
             }
         }
+
+        if (strcmp(type, "IEND") == 0) break;
     }
     return result;
 }
@@ -573,23 +607,6 @@ ImageMeta extract_metadata(const std::wstring& path) {
     // PNG: read tEXt chunks
     if (ext == L".png") {
         auto texts = read_png_texts(path);
-        
-        {
-            std::ofstream dbg("D:/Projects/minview-native/meta_debug.log", std::ios::app);
-            dbg << "=== [PNG] ===" << std::endl;
-            for (auto& [k, v] : texts) {
-                bool is_json = (!v.empty() && (v.front() == '{' || v.front() == '['));
-                dbg << "  tEXt[" << k << "]: " << (is_json ? "JSON" : "TEXT") 
-                    << " len=" << v.size() << std::endl;
-                if (is_json) {
-                    // Show first 300 chars
-                    dbg << "    " << v.substr(0, std::min(size_t(300), v.size())) << std::endl;
-                } else {
-                    dbg << "    " << v.substr(0, std::min(size_t(100), v.size())) << std::endl;
-                }
-            }
-            dbg << std::endl;
-        }
 
         // ComfyUI: "prompt" or "workflow" keywords
         auto it = texts.find("prompt");

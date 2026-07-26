@@ -70,6 +70,11 @@ private:
     int     visible_panel_width() const;
     void    update_content_viewport(bool refit);
     void    update_panel_data(const std::wstring& path);
+    void    start_metadata_loader();
+    void    stop_metadata_loader();
+    bool    request_metadata(const std::wstring& path);
+    void    apply_metadata_result();
+    void    apply_metadata(const ImageMeta& meta);
     void    draw_panel(const std::wstring& path, ID2D1Bitmap1* preview,
                 uint32_t preview_w, uint32_t preview_h, float top,
                 int fallback_count = -1);
@@ -126,6 +131,17 @@ private:
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IWICBitmapSource>> m_preload_cache;
     std::vector<std::wstring> m_preload_queue;
     std::atomic<bool> m_preload_running{false};
+
+    // Metadata extraction runs off the UI/render thread.
+    std::thread m_metadata_thread;
+    std::mutex m_metadata_mutex;
+    std::condition_variable m_metadata_cv;
+    std::wstring m_metadata_request_path;
+    std::wstring m_metadata_result_path;
+    ImageMeta m_metadata_result;
+    bool m_metadata_request_pending = false;
+    bool m_metadata_result_ready = false;
+    std::atomic<bool> m_metadata_running{false};
 
     // Grid state
     bool  m_grid_mode = false;

@@ -113,6 +113,21 @@ if(BUILD_TESTING)
     target_link_options(app_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME app_state.unit COMMAND app_state_tests)
 
+    add_executable(metadata_tests
+        tests/metadata_tests.cpp
+        src/metadata.cpp
+    )
+    target_include_directories(metadata_tests PRIVATE src)
+    target_compile_options(metadata_tests PRIVATE /W4 /utf-8)
+    if(MINVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(metadata_tests PRIVATE /WX)
+    endif()
+    target_compile_definitions(metadata_tests PRIVATE NOMINMAX)
+    target_link_libraries(metadata_tests PRIVATE shlwapi)
+    set_target_properties(metadata_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_options(metadata_tests PRIVATE /SUBSYSTEM:CONSOLE)
+    add_test(NAME metadata.unit COMMAND metadata_tests)
+
     add_executable(indexer_benchmark
         tools/indexer_benchmark.cpp
         src/indexer.cpp
