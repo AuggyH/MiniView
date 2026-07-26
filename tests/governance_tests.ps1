@@ -65,7 +65,7 @@ function Get-ArchitectureTestNames {
 
     return @([regex]::Matches(
         $sectionMatch.Groups['section'].Value,
-        '(?m)^-\s+`([A-Za-z0-9_.-]+)`[^\r\n]*$') |
+        '(?m)^-\s+`([A-Za-z0-9_.-]+)`[^\r\n]*\r?$') |
         ForEach-Object { $_.Groups[1].Value } |
         Sort-Object -Unique)
 }
@@ -113,6 +113,11 @@ if (-not (Test-TestRegistryContract $cmakeContent $architectureContent)) {
 }
 
 # Mutation checks prove the predicates reject keyword-preserving denials and drift.
+$crlfArchitectureMutation = $architectureContent -replace '(?<!\r)\n', "`r`n"
+if (-not (Test-TestRegistryContract $cmakeContent $crlfArchitectureMutation)) {
+    $failures.Add('test registry contract must accept PowerShell 5.1 CRLF checkouts')
+}
+
 $negatedWorkerMutation = '- 1 metadata worker does not exist; UI parsing does not use mutex/condition variable, WM_METADATA_READY, or path expiry.'
 if (Test-MetadataWorkerStructure $negatedWorkerMutation) {
     $failures.Add('metadata worker mutation guard accepted a negated worker claim')
