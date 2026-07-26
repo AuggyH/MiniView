@@ -1,6 +1,7 @@
 #include "indexer.h"
 #include <filesystem>
 #include <algorithm>
+#include <cwchar>
 
 namespace mv {
 namespace fs = std::filesystem;
@@ -26,10 +27,7 @@ void ImageIndex::clear() {
 void ImageIndex::sort_by_name() {
     std::sort(m_files.begin(), m_files.end(),
         [](const ImageEntry& a, const ImageEntry& b) {
-            auto na = a.name, nb = b.name;
-            for (auto& c : na) c = towlower(c);
-            for (auto& c : nb) c = towlower(c);
-            return na < nb;
+            return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0;
         });
     rebuild_map();
 }
@@ -37,10 +35,7 @@ void ImageIndex::sort_by_name() {
 void ImageIndex::sort_by_path() {
     std::sort(m_files.begin(), m_files.end(),
         [](const ImageEntry& a, const ImageEntry& b) {
-            auto pa = a.path, pb = b.path;
-            for (auto& c : pa) c = towlower(c);
-            for (auto& c : pb) c = towlower(c);
-            return pa < pb;
+            return _wcsicmp(a.path.c_str(), b.path.c_str()) < 0;
         });
     rebuild_map();
 }
@@ -78,6 +73,7 @@ void ImageIndex::sort_by(SortMode mode) {
 
 void ImageIndex::rebuild_map() {
     m_path_to_idx.clear();
+    m_path_to_idx.reserve(m_files.size());
     for (int i = 0; i < static_cast<int>(m_files.size()); ++i) {
         m_path_to_idx[m_files[i].path] = i;
     }
@@ -123,30 +119,51 @@ int ImageIndex::scan(const std::wstring& directory, bool recursive) {
     m_path_to_idx.clear();
     m_root_dir = directory;
 
-    try {
-        auto scan_dir = [&](const auto& it) {
-            for (auto& entry : it) {
-                if (!entry.is_regular_file()) continue;
-                auto ext = entry.path().extension().wstring();
-                for (auto& c : ext) c = towlower(c);
-                if (!is_image_ext(ext)) continue;
-
-                ImageEntry ie;
-                ie.path  = entry.path().wstring();
-                ie.name  = entry.path().filename().wstring();
-                ie.size  = entry.file_size();
-                ie.mtime = entry.last_write_time().time_since_epoch().count();
-                m_files.push_back(std::move(ie));
-            }
-        };
-
-        if (recursive) {
-            scan_dir(fs::recursive_directory_iterator(directory));
-        } else {
-            scan_dir(fs::directory_iterator(directory));
-        }
-    } catch (...) {
+    std::error_code error;
+    if (!fs::is_directory(directory, error) || error) {
         return -1;
+    }
+
+    auto add_entry = [&](const fs::directory_entry& entry) {
+        std::error_code entry_error;
+        if (!entry.is_regular_file(entry_error) || entry_error) return;
+
+        auto ext = entry.path().extension().wstring();
+        for (auto& c : ext) c = static_cast<wchar_t>(towlower(c));
+        if (!is_image_ext(ext)) return;
+
+        ImageEntry image;
+        image.path = entry.path().wstring();
+        image.name = entry.path().filename().wstring();
+        image.size = entry.file_size(entry_error);
+        if (entry_error) {
+            entry_error.clear();
+            image.size = 0;
+        }
+        image.mtime = entry.last_write_time(entry_error).time_since_epoch().count();
+        if (entry_error) image.mtime = 0;
+        m_files.push_back(std::move(image));
+    };
+
+    const auto options = fs::directory_options::skip_permission_denied;
+    if (recursive) {
+        fs::recursive_directory_iterator it(directory, options, error);
+        const fs::recursive_directory_iterator end;
+        if (error) return -1;
+        while (it != end) {
+            add_entry(*it);
+            it.increment(error);
+            if (error) error.clear();
+        }
+    } else {
+        fs::directory_iterator it(directory, options, error);
+        const fs::directory_iterator end;
+        if (error) return -1;
+        while (it != end) {
+            add_entry(*it);
+            it.increment(error);
+            if (error) error.clear();
+        }
     }
 
     // Apply current sort mode (Name by default, or by-path for recursive)

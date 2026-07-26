@@ -32,6 +32,7 @@ public:
 private:
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     void    open_image(const std::wstring& path);
+    void    open_directory(const std::wstring& path);
     void    navigate_to(int idx);
     void    fit_to_window();
     void    zoom_at_center(float factor);
@@ -46,8 +47,11 @@ private:
     void    delete_selected(bool permanent);
     void    open_in_explorer();
     void    show_toolbar_menu(HWND hwnd, int idx, int x, int y);
-    void    copy_to_clipboard();
-    void    copy_selected();
+    std::vector<std::wstring> selected_paths() const;
+    std::wstring primary_path() const;
+    void    copy_image_data();
+    void    copy_file_paths();
+    void    create_file_copies();
     void    show_context_menu(HWND hwnd, int x, int y);
 
     // Preloader
@@ -62,18 +66,27 @@ private:
     void    set_sort_mode(SortMode mode);
     void    toggle_thumb_square();
     void    toggle_info();
+    bool    toolbar_visible() const;
+    int     visible_panel_width() const;
+    void    update_content_viewport(bool refit);
+    void    update_panel_data(const std::wstring& path);
+    void    draw_panel(const std::wstring& path, ID2D1Bitmap1* preview,
+                uint32_t preview_w, uint32_t preview_h, float top,
+                int fallback_count = -1);
     bool    has_selection() const;
     void    clear_selection();
     void    select_range(int start, int end);
     bool    grid_click(int x, int y, bool shift, bool ctrl);
     void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
+    void    rebuild_grid_layout(int grid_area_width);
     void    grid_render();
     void    handle_scrollbar_click(HWND hwnd, int mx, int my);
     void    select_item(int idx, bool shift, bool ctrl);
     void    start_thumb_loader();
     void    stop_thumb_loader();
     void    request_thumb(int idx);
+    void    trim_thumb_cache(int visible_start, int visible_end);
 
     int m_thumb_size = 160;   // decode resolution (WIC)
     int m_thumb_cell  = 160;  // display cell size for column calc
@@ -101,6 +114,7 @@ private:
     bool  m_drag_pending = false;
     int   m_drag_start_x = 0;
     int   m_drag_start_y = 0;
+    std::vector<std::wstring> m_drag_paths;
 
     // Preloader state
     std::thread m_preload_thread;
@@ -120,10 +134,9 @@ private:
     std::vector<int> m_row_heights;
     bool  m_thumb_square = false;
     bool  m_show_labels = true;
-    bool  m_show_info = false;
-    bool  m_using_thumb_preview = false;
-    bool  m_from_grid = false;  // entered image/fullscreen from grid → Esc returns
-    bool  m_temp_preview = false;  // Space quick preview (no title bar)
+    bool  m_panel_expanded = true;
+    bool  m_from_grid = false;  // current image has a grid context → Space/Esc returns
+    bool  m_toolbar_revealed = false;
 
     // Transition animation
     bool  m_animating = false;
@@ -149,9 +162,25 @@ private:
     int   m_scrollbar_drag_y = 0;        // mouse y when drag started
     int   m_scrollbar_drag_pos = 0;      // scroll position when drag started
     int   m_grid_total_h = 0;            // cached total grid content height
+    struct GridRow {
+        int start_idx = 0;
+        int end_idx = 0;
+        int row_h = 0;
+        int row_y = 0;
+        int label_extra = 0;
+    };
+    std::vector<GridRow> m_grid_rows;
+    std::vector<std::pair<uint32_t, uint32_t>> m_grid_dims;
+    std::vector<float> m_grid_item_x;
+    std::vector<float> m_grid_item_w;
+    int m_grid_layout_width = -1;
+    bool m_grid_layout_dirty = true;
+    uint64_t m_grid_layout_generation = 0;
     int   m_grid_scroll_saved = 0;
     int   m_grid_saved_idx = 0;
-    ImageMeta m_info_meta;
+    std::wstring m_panel_path;
+    std::vector<std::pair<std::wstring, std::wstring>> m_panel_info;
+    std::vector<std::pair<std::wstring, std::wstring>> m_panel_gen;
     std::vector<mv::PanelRegion> m_panel_clickable;
     int m_panel_sel = -1;           // selected clickable index (brief highlight)
     float m_panel_scroll_y = 0;     // side panel scroll offset
@@ -174,6 +203,8 @@ private:
 
     // D2D bitmap cache (main-thread only, populated during render)
     std::unordered_map<int, Microsoft::WRL::ComPtr<ID2D1Bitmap1>> m_thumb_d2d;
+    std::unordered_map<int, uint64_t> m_thumb_d2d_use;
+    uint64_t m_thumb_use_clock = 0;
 
     // Thumb loader threads
     std::vector<std::thread> m_thumb_threads;
@@ -181,6 +212,7 @@ private:
     std::condition_variable m_thumb_cv;
     std::vector<int> m_thumb_queue;
     std::atomic<bool> m_thumb_running{false};
+    std::atomic<uint64_t> m_thumb_dimension_generation{0};
 };
 
 } // namespace mv

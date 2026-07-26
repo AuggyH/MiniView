@@ -75,13 +75,16 @@ public:
 
     void  set_scale(float s);
     void  set_offset(float x, float y);
-    void  set_content_top(float top) { m_content_top = top; }
+    void  set_content_viewport(float top, float right);
     void  set_scroll_y(float y);
     float scale()    const { return m_scale; }
     float fit_scale() const { return m_fit_scale; }
     float offset_x() const { return m_offset_x; }
     float offset_y() const { return m_offset_y; }
     float scroll_y() const { return m_scroll_y; }
+    float content_top() const { return m_content_top; }
+    float content_width() const;
+    ID2D1Bitmap1* image_bitmap() const { return m_image_bitmap.Get(); }
 
     bool is_valid() const { return m_d2d_context != nullptr; }
 
@@ -89,6 +92,7 @@ private:
     bool create_device_resources();
     bool create_text_resources();
     void discard_device_resources();
+    void update_fit_scale();
 
     HWND m_hwnd = nullptr;
 
@@ -113,6 +117,7 @@ private:
     float       m_offset_y = 0.0f;
     float       m_scroll_y = 0.0f;
     float       m_content_top = 0.0f;  // title bar height, for centering below
+    float       m_content_right = 0.0f;  // side panel width reserved from image viewport
     float       m_dpi_x = 96.0f;
     float       m_dpi_y = 96.0f;
 };

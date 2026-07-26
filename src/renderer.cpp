@@ -151,12 +151,7 @@ void Renderer::resize(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) return;
     m_target_size = {width, height};
 
-    // Recalculate fit scale if we have an image loaded
-    if (m_img_width > 0 && m_img_height > 0) {
-        float sx = static_cast<float>(width)  / m_img_width;
-        float sy = static_cast<float>(height) / m_img_height;
-        m_fit_scale = std::min(sx, sy);
-    }
+    update_fit_scale();
 
     if (m_swap_chain && m_d2d_context) {
         m_d2d_context->SetTarget(nullptr);
@@ -192,10 +187,8 @@ void Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
         wic_bitmap, nullptr, &m_image_bitmap);
     if (FAILED(hr)) return;
 
-    float sx = static_cast<float>(m_target_size.width)  / w;
-    float sy = static_cast<float>(m_target_size.height - m_content_top) / h;
-    m_scale = std::min(sx, sy);
-    m_fit_scale = m_scale;
+    update_fit_scale();
+    m_scale = m_fit_scale;
     m_offset_x = 0;
     m_offset_y = 0;
     m_scroll_y = 0;
@@ -235,7 +228,7 @@ void Renderer::draw_image() {
 
     float scaled_w = m_img_width  * m_scale;
     float scaled_h = m_img_height * m_scale;
-    float x = (m_target_size.width  - scaled_w) / 2.0f + m_offset_x;
+    float x = (content_width() - scaled_w) / 2.0f + m_offset_x;
     float y = m_content_top + (m_target_size.height - m_content_top - scaled_h) / 2.0f + m_offset_y + m_scroll_y;
 
     D2D1_RECT_F dest = {x, y, x + scaled_w, y + scaled_h};
@@ -386,6 +379,26 @@ void Renderer::set_offset(float x, float y) {
     m_offset_y = y;
 }
 
+void Renderer::set_content_viewport(float top, float right) {
+    m_content_top = std::max(0.0f, top);
+    m_content_right = std::max(0.0f, right);
+    update_fit_scale();
+}
+
+float Renderer::content_width() const {
+    return std::max(1.0f, static_cast<float>(m_target_size.width) - m_content_right);
+}
+
+void Renderer::update_fit_scale() {
+    if (m_img_width == 0 || m_img_height == 0) return;
+    float sx = content_width() / static_cast<float>(m_img_width);
+    float content_height = std::max(1.0f,
+        static_cast<float>(m_target_size.height) - m_content_top);
+    float sy = content_height / static_cast<float>(m_img_height);
+    m_fit_scale = std::min(sx, sy);
+    if (m_scale < m_fit_scale) m_scale = m_fit_scale;
+}
+
 void Renderer::set_scroll_y(float y) {
     m_scroll_y = y;
 }
@@ -393,7 +406,10 @@ void Renderer::set_scroll_y(float y) {
 void Renderer::set_dpi(float dpi_x, float dpi_y) {
     if (dpi_x > 0) m_dpi_x = dpi_x;
     if (dpi_y > 0) m_dpi_y = dpi_y;
-    if (m_d2d_context) m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
+    if (m_d2d_context) {
+        m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
+        create_text_resources();
+    }
 }
 
 // ── Grid drawing ─────────────────────────────────────────────
@@ -405,6 +421,11 @@ HRESULT Renderer::create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** o
 
 void Renderer::draw_grid_placeholder(float x, float y, float w, float h, D2D1_COLOR_F color) {
     if (!m_d2d_context) return;
+
+    // Keep an unloaded or very dark thumbnail visibly distinct from the
+    // #1A1A1A canvas so a fast scroll never looks like an empty grid.
+    if (std::max({color.r, color.g, color.b}) < 0.18f)
+        color = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
 
     float radius = 4.0f * m_dpi_y / 96.0f;
     D2D1_RECT_F rc = {x, y, x + w, y + h};
@@ -625,6 +646,11 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
             y = ty + title_pad;
         }
         for (auto& [label, value] : gen_info) {
+            if (label.empty()) {
+                y = draw_text_line(x + pad, y, content_w, value, value_br.Get(), 10.0f)
+                    + gap - 4.0f * dpi_s;
+                continue;
+            }
 
             int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
             float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
