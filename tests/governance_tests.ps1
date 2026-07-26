@@ -376,13 +376,21 @@ function Get-BoundedProcessFailureDiagnostic {
         } else {
             'owned process-tree termination failed'
         }
-        return ("{0} timed out after {1} ms (duration {2} ms); {3}; {4}; " +
-            "stdout: {5}; stderr: {6}" -f
+        $terminationDetail = if ([string]::IsNullOrWhiteSpace(
+                $Result.TerminationDiagnostic)) {
+            'no additional termination detail'
+        } else {
+            $Result.TerminationDiagnostic
+        }
+        $template =
+            "{0} timed out after {1} ms (duration {2} ms); {3}; {4}; " +
+            "stdout: {5}; stderr: {6}"
+        return ($template -f
             $Result.Operation,
             $Result.TimeoutMilliseconds,
             $Result.DurationMilliseconds,
             $terminationState,
-            $Result.TerminationDiagnostic,
+            $terminationDetail,
             (Get-ProcessOutputExcerpt $Result.Stdout),
             (Get-ProcessOutputExcerpt $Result.Stderr))
     }
@@ -1145,6 +1153,25 @@ function Test-BoundedProcessGuards {
         }
         $checks++
         $hangDiagnostic = Get-BoundedProcessFailureDiagnostic $hangResult
+        $expectedTerminationState = if ($hangResult.TerminationSucceeded) {
+            'owned process tree terminated'
+        } else {
+            'owned process-tree termination failed'
+        }
+        $expectedTerminationDetail = if ([string]::IsNullOrWhiteSpace(
+                $hangResult.TerminationDiagnostic)) {
+            'no additional termination detail'
+        } else {
+            $hangResult.TerminationDiagnostic
+        }
+        $expectedHangPrefix =
+            'bounded hang regression timed out after ' +
+            "$($script:HangRegressionTimeoutMilliseconds) ms " +
+            "(duration $($hangResult.DurationMilliseconds) ms); " +
+            "$expectedTerminationState; $expectedTerminationDetail; "
+        $expectedHangStreams =
+            'stdout: ' + (Get-ProcessOutputExcerpt $hangResult.Stdout) +
+            '; stderr: ' + (Get-ProcessOutputExcerpt $hangResult.Stderr)
         if (-not $hangResult.Started -or
             -not $hangResult.TimedOut -or
             -not $hangResult.TerminationAttempted -or
@@ -1152,7 +1179,13 @@ function Test-BoundedProcessGuards {
             -not $hangResult.OutputDrainSucceeded -or
             $hangResult.Stdout.Length -lt $script:LargeOutputLength -or
             $hangResult.Stderr.Length -lt $script:LargeOutputLength -or
-            $hangDiagnostic -notmatch 'timed out after') {
+            -not $hangDiagnostic.StartsWith(
+                $expectedHangPrefix,
+                [System.StringComparison]::Ordinal) -or
+            -not $hangDiagnostic.EndsWith(
+                $expectedHangStreams,
+                [System.StringComparison]::Ordinal) -or
+            $hangDiagnostic -match '\{[0-6]\}') {
             $failures.Add(
                 "bounded hang regression failed: $hangDiagnostic")
         }
