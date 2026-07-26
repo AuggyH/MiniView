@@ -37,6 +37,17 @@ int main() {
     expect(mv::clamp_grid_scroll_position(100, 300, 400) == 0,
         "content shorter than the viewport should reset scrolling");
 
+    expect(mv::ensure_grid_row_visible(400, 450, 550, 1200, 500) == 400,
+        "a selected row that remains visible should preserve scroll");
+    expect(mv::ensure_grid_row_visible(400, 250, 350, 1200, 500) == 250,
+        "a resize that moves the selected row above the viewport should reveal it");
+    expect(mv::ensure_grid_row_visible(100, 680, 820, 1400, 500) == 320,
+        "column or panel width changes should reveal the selected row below the viewport");
+    expect(mv::ensure_grid_row_visible(200, 650, 900, 1500, 500) == 400,
+        "zoom, labels, and square/justified row-height changes should share the contract");
+    expect(mv::ensure_grid_row_visible(900, 150, 250, 450, 500) == 0,
+        "a shortened list should clamp before restoring selected-row visibility");
+
     std::wstring current_path;
     int current_index = -1;
     bool has_image = false;

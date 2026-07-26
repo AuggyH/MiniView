@@ -19,6 +19,18 @@ inline int clamp_grid_scroll_position(int scroll, int total_height, int visible_
     return std::clamp(scroll, 0, max_scroll);
 }
 
+inline int ensure_grid_row_visible(
+    int scroll, int row_top, int row_bottom, int total_height, int visible_height) {
+    int adjusted = clamp_grid_scroll_position(scroll, total_height, visible_height);
+    const int viewport_height = std::max(0, visible_height);
+    if (row_top < adjusted) {
+        adjusted = row_top;
+    } else if (row_bottom > adjusted + viewport_height) {
+        adjusted = row_bottom - viewport_height;
+    }
+    return clamp_grid_scroll_position(adjusted, total_height, visible_height);
+}
+
 inline bool can_delete_current_image(bool has_image, const std::wstring& current_path) {
     return has_image && !current_path.empty();
 }

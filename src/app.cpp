@@ -2992,7 +2992,17 @@ void App::rebuild_grid_layout(int grid_area_width) {
 
     m_grid_total_rows = static_cast<int>(m_grid_rows.size());
     m_grid_total_h = current_y;
-    clamp_grid_scroll();
+    const int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    const int selected_row = m_grid_sel >= 0 && m_grid_cols > 0
+        ? m_grid_sel / m_grid_cols : -1;
+    if (selected_row >= 0 && selected_row < static_cast<int>(m_grid_rows.size())) {
+        const auto& row = m_grid_rows[static_cast<size_t>(selected_row)];
+        m_grid_scroll_y = ensure_grid_row_visible(
+            m_grid_scroll_y, row.row_y, row.row_y + row.row_h + row.label_extra,
+            m_grid_total_h, visible_height);
+    } else {
+        clamp_grid_scroll();
+    }
     m_row_heights.clear();
     m_row_heights.reserve(m_grid_rows.size());
     for (const auto& row : m_grid_rows)
