@@ -22,8 +22,8 @@ public:
     ~Renderer();
 
     bool init(HWND hwnd);
-    void resize(uint32_t width, uint32_t height);
-    bool upload_image(IWICBitmapSource* wic_bitmap);
+    bool resize(uint32_t width, uint32_t height);
+    bool upload_image(IWICBitmapSource* wic_bitmap, bool reset_view = true);
 
     bool begin_frame();
     bool end_frame();
@@ -87,6 +87,7 @@ public:
     ID2D1Bitmap1* image_bitmap() const { return m_image_bitmap.Get(); }
 
     bool is_valid() const { return m_d2d_context != nullptr; }
+    uint64_t device_generation() const { return m_device_generation; }
 
 private:
     bool create_device_resources();
@@ -120,6 +121,7 @@ private:
     float       m_content_right = 0.0f;  // side panel width reserved from image viewport
     float       m_dpi_x = 96.0f;
     float       m_dpi_y = 96.0f;
+    uint64_t    m_device_generation = 0;
 };
 
 } // namespace mv

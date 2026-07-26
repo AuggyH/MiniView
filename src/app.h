@@ -41,6 +41,7 @@ private:
     void    begin_animation(HWND hwnd);
     void    toggle_recursive();
     void    render_frame();
+    bool    synchronize_renderer_generation();
     void    update_title();
 
     void    delete_current_file(bool permanent);
@@ -109,6 +110,7 @@ private:
     ImageIndex m_index;
 
     std::wstring m_current_path;
+    Microsoft::WRL::ComPtr<IWICBitmapSource> m_current_wic;
     int          m_current_idx = -1;
     bool         m_has_image = false;
     bool         m_fullscreen = false;
@@ -224,6 +226,7 @@ private:
     std::unordered_map<int, Microsoft::WRL::ComPtr<ID2D1Bitmap1>> m_thumb_d2d;
     std::unordered_map<int, uint64_t> m_thumb_d2d_use;
     uint64_t m_thumb_use_clock = 0;
+    uint64_t m_renderer_generation = 0;
 
     // Thumb loader threads
     std::vector<std::thread> m_thumb_threads;

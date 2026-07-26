@@ -1,5 +1,6 @@
 #include "app.h"
 #include "app_state.h"
+#include "renderer_state.h"
 #include <stdexcept>
 #include <Windows.h>
 #include <filesystem>
@@ -22,6 +23,7 @@ namespace mv {
 
 constexpr UINT WM_THUMB_READY = WM_APP + 1;
 constexpr UINT WM_METADATA_READY = WM_APP + 2;
+constexpr UINT WM_RENDER_RETRY = WM_APP + 3;
 
 // ── OLE Drag source helpers ──────────────────────────────────
 
@@ -407,6 +409,7 @@ int App::run(const std::wstring& initial_path) {
 
     if (!m_renderer.init(m_window.handle()))
         throw std::runtime_error("Failed to init Direct2D renderer");
+    m_renderer_generation = m_renderer.device_generation();
 
     // Scale thumbnail sizes by DPI
     float scale = dpi / 96.0f;
@@ -537,7 +540,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE: {
         uint32_t w = LOWORD(lp), h = HIWORD(lp);
         if (w > 0 && h > 0) {
-            m_renderer.resize(w, h);
+            if (!m_renderer.resize(w, h)) m_window.invalidate();
             m_grid_layout_dirty = true;
         }
         return 0;
@@ -695,6 +698,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_METADATA_READY:
         apply_metadata_result();
+        return 0;
+
+    case WM_RENDER_RETRY:
+        m_window.invalidate();
         return 0;
 
     case WM_DPICHANGED: {
@@ -1257,6 +1264,7 @@ void App::open_directory(const std::wstring& path) {
     m_from_grid = false;
     m_has_image = false;
     m_current_path.clear();
+    m_current_wic.Reset();
     m_current_idx = -1;
     m_grid_sel = -1;
     m_grid_saved_idx = -1;
@@ -1311,6 +1319,7 @@ void App::open_image(const std::wstring& path) {
 
         auto bitmap = get_preloaded(path);
         if (!bitmap) bitmap = m_decoder.decode(path);
+        bitmap = m_decoder.materialize(bitmap.Get());
         if (!m_renderer.upload_image(bitmap.Get())) return;
 
         // Exit grid mode if active (file dialog, drag-drop, IPC)
@@ -1325,6 +1334,7 @@ void App::open_image(const std::wstring& path) {
         update_content_viewport(false);
         fit_to_window();
         m_current_path = path;
+        m_current_wic = bitmap;
         m_has_image = true;
 
         namespace fs = std::filesystem;
@@ -2908,6 +2918,11 @@ void App::rebuild_grid_layout(int grid_area_width) {
 
 void App::grid_render() {
     if (!m_renderer.begin_frame()) return;
+    if (!synchronize_renderer_generation()) {
+        m_renderer.end_frame();
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
+        return;
+    }
     m_renderer.clear();
 
     int total = static_cast<int>(m_index.size());
@@ -3093,7 +3108,8 @@ void App::grid_render() {
     }
     m_renderer.draw_title_bar(target_width, m_title_btn_hover, m_title_btn_press,
         m_toolbar_items, m_toolbar_active);
-    m_renderer.end_frame();
+    if (!m_renderer.end_frame())
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
 }
 
 void App::render_frame() {
@@ -3119,6 +3135,11 @@ void App::render_frame() {
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             EndPaint(m_window.handle(), &ps);
         }
+        return;
+    }
+    if (!synchronize_renderer_generation()) {
+        m_renderer.end_frame();
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
         return;
     }
     m_renderer.clear();
@@ -3164,7 +3185,29 @@ void App::render_frame() {
         m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
             m_toolbar_items, m_toolbar_active);
     }
-    m_renderer.end_frame();
+    if (!m_renderer.end_frame())
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
+}
+
+bool App::synchronize_renderer_generation() {
+    const uint64_t current_generation = m_renderer.device_generation();
+    if (!renderer_generation_changed(m_renderer_generation, current_generation)) return true;
+
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_anim_thumb.Reset();
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        for (auto& thumb : m_thumbs) {
+            if (!thumb.wic) thumb.loaded = false;
+        }
+    }
+
+    if (m_has_image && m_current_wic
+        && !m_renderer.upload_image(m_current_wic.Get(), false)) return false;
+
+    m_renderer_generation = current_generation;
+    return true;
 }
 
 } // namespace mv

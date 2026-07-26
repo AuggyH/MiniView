@@ -28,6 +28,7 @@ set(SOURCES
 set(HEADERS
     src/window.h
     src/renderer.h
+    src/renderer_state.h
     src/decoder.h
     src/viewer.h
     src/app.h
@@ -127,6 +128,19 @@ if(BUILD_TESTING)
     set_target_properties(metadata_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(metadata_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME metadata.unit COMMAND metadata_tests)
+
+    add_executable(renderer_state_tests
+        tests/renderer_state_tests.cpp
+    )
+    target_include_directories(renderer_state_tests PRIVATE src)
+    target_compile_options(renderer_state_tests PRIVATE /W4 /utf-8)
+    if(MINVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(renderer_state_tests PRIVATE /WX)
+    endif()
+    target_compile_definitions(renderer_state_tests PRIVATE NOMINMAX)
+    set_target_properties(renderer_state_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_options(renderer_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
+    add_test(NAME renderer_state.unit COMMAND renderer_state_tests)
 
     add_executable(indexer_benchmark
         tools/indexer_benchmark.cpp
