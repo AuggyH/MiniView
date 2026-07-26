@@ -174,24 +174,28 @@ void Renderer::resize(uint32_t width, uint32_t height) {
     }
 }
 
-void Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
-    if (!m_d2d_context) return;
+bool Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
+    if (!m_d2d_context || !wic_bitmap) return false;
 
     uint32_t w, h;
-    wic_bitmap->GetSize(&w, &h);
+    HRESULT hr = wic_bitmap->GetSize(&w, &h);
+    if (FAILED(hr) || w == 0 || h == 0) return false;
+
+    ComPtr<ID2D1Bitmap1> image_bitmap;
+    hr = m_d2d_context->CreateBitmapFromWicBitmap(
+        wic_bitmap, nullptr, &image_bitmap);
+    if (FAILED(hr) || !image_bitmap) return false;
+
+    m_image_bitmap = image_bitmap;
     m_img_width = w;
     m_img_height = h;
-
-    m_image_bitmap.Reset();
-    HRESULT hr = m_d2d_context->CreateBitmapFromWicBitmap(
-        wic_bitmap, nullptr, &m_image_bitmap);
-    if (FAILED(hr)) return;
 
     update_fit_scale();
     m_scale = m_fit_scale;
     m_offset_x = 0;
     m_offset_y = 0;
     m_scroll_y = 0;
+    return true;
 }
 
 bool Renderer::begin_frame() {

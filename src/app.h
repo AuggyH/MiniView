@@ -76,9 +76,11 @@ private:
     bool    has_selection() const;
     void    clear_selection();
     void    select_range(int start, int end);
+    int     grid_hit_test(int x, int y) const;
     bool    grid_click(int x, int y, bool shift, bool ctrl);
     void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
+    void    clamp_grid_scroll();
     void    rebuild_grid_layout(int grid_area_width);
     void    grid_render();
     void    handle_scrollbar_click(HWND hwnd, int mx, int my);
@@ -115,6 +117,7 @@ private:
     int   m_drag_start_x = 0;
     int   m_drag_start_y = 0;
     std::vector<std::wstring> m_drag_paths;
+    int   m_drag_deferred_select = -1;
 
     // Preloader state
     std::thread m_preload_thread;

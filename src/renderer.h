@@ -23,7 +23,7 @@ public:
 
     bool init(HWND hwnd);
     void resize(uint32_t width, uint32_t height);
-    void upload_image(IWICBitmapSource* wic_bitmap);
+    bool upload_image(IWICBitmapSource* wic_bitmap);
 
     bool begin_frame();
     bool end_frame();

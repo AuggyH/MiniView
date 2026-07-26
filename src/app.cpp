@@ -1,4 +1,5 @@
 #include "app.h"
+#include "app_state.h"
 #include <stdexcept>
 #include <Windows.h>
 #include <filesystem>
@@ -705,8 +706,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_window.invalidate();
             return 0;
         }
-        if (!m_grid_mode) fit_to_window();
-
         if (m_grid_mode) {
             bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
@@ -760,7 +759,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (iw == 0 || ih == 0) return 0;
             float cur_scale = m_renderer.scale();
             float fit = m_renderer.fit_scale();
-            bool zoomed = (cur_scale > fit * 1.02f);
+            bool zoomed = is_image_zoomed(cur_scale, fit);
 
             if (zoomed) {
                 // Zoomed in: scroll vertically, clamped to image bounds
@@ -874,7 +873,20 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode) {
             bool sd = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             bool cd = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            if (!grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), sd, cd)) return 0;
+            int clicked = grid_hit_test(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            if (clicked < 0) return 0;
+            bool clicked_selected = clicked < static_cast<int>(m_selected.size())
+                && m_selected[static_cast<size_t>(clicked)];
+            if (should_preserve_selection_for_drag(clicked_selected, sd, cd)) {
+                m_grid_sel = clicked;
+                m_drag_deferred_select = clicked;
+                m_window.invalidate();
+            } else {
+                select_item(clicked, sd, cd);
+                m_drag_deferred_select = -1;
+            }
+        } else {
+            m_drag_deferred_select = -1;
         }
         m_drag_paths = selected_paths();
         if (m_drag_paths.empty()) return -1;
@@ -966,6 +978,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     data->Release();
                     src->Release();
                     m_drag_paths.clear();
+                    m_drag_deferred_select = -1;
                     SetCursor(LoadCursor(nullptr, IDC_ARROW));
                 }
                 return 0;
@@ -1014,7 +1027,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_drag_pending = false;
             m_drag_paths.clear();
             ReleaseCapture();
+            if (m_drag_deferred_select >= 0)
+                select_item(m_drag_deferred_select, false, false);
         }
+        m_drag_deferred_select = -1;
         return 0;
 
     case WM_LBUTTONDBLCLK:
@@ -1246,6 +1262,10 @@ void App::open_image(const std::wstring& path) {
         // that root index intact when opening one of its existing entries.
         int indexed_position = m_index.index_of(path);
 
+        auto bitmap = get_preloaded(path);
+        if (!bitmap) bitmap = m_decoder.decode(path);
+        if (!m_renderer.upload_image(bitmap.Get())) return;
+
         // Exit grid mode if active (file dialog, drag-drop, IPC)
         if (m_grid_mode) {
             m_grid_scroll_saved = m_grid_scroll_y;
@@ -1256,15 +1276,7 @@ void App::open_image(const std::wstring& path) {
             stop_thumb_loader();
         }
         update_content_viewport(false);
-
-        // Try preload cache first
-        auto cached = get_preloaded(path);
-        if (cached) {
-            m_renderer.upload_image(cached.Get());
-        } else {
-            auto bitmap = m_decoder.decode(path);
-            m_renderer.upload_image(bitmap.Get());
-        }
+        fit_to_window();
         m_current_path = path;
         m_has_image = true;
 
@@ -2333,6 +2345,7 @@ void App::toggle_grid() {
             // User didn't navigate: restore original scroll
             m_grid_scroll_y = m_grid_scroll_saved;
             m_grid_sel = m_grid_saved_idx;
+            clamp_grid_scroll();
         } else {
             // User navigated: center on current image
             m_grid_sel = m_current_idx;
@@ -2371,9 +2384,9 @@ void App::toggle_grid() {
     m_window.invalidate();
 }
 
-bool App::grid_click(int x, int y, bool shift, bool ctrl) {
+int App::grid_hit_test(int x, int y) const {
     int total = static_cast<int>(m_index.size());
-    if (m_grid_cols <= 0 || total == 0 || m_grid_rows.empty()) return false;
+    if (m_grid_cols <= 0 || total == 0 || m_grid_rows.empty()) return -1;
 
     int content_y = y - m_toolbar_h + m_grid_scroll_y;
     auto row_it = std::lower_bound(m_grid_rows.begin(), m_grid_rows.end(), content_y,
@@ -2382,19 +2395,22 @@ bool App::grid_click(int x, int y, bool shift, bool ctrl) {
         });
     if (row_it == m_grid_rows.end() || content_y < row_it->row_y
         || content_y > row_it->row_y + row_it->row_h + row_it->label_extra) {
-        return false;
+        return -1;
     }
 
     float content_x = static_cast<float>(x - m_thumb_pad);
     for (int index = row_it->start_idx; index < row_it->end_idx; ++index) {
         float left = m_grid_item_x[static_cast<size_t>(index)];
         float right = left + m_grid_item_w[static_cast<size_t>(index)];
-        if (content_x >= left && content_x < right) {
-            select_item(index, shift, ctrl);
-            return true;
-        }
+        if (content_x >= left && content_x < right) return index;
     }
-    return false;
+    return -1;
+}
+bool App::grid_click(int x, int y, bool shift, bool ctrl) {
+    int index = grid_hit_test(x, y);
+    if (index < 0) return false;
+    select_item(index, shift, ctrl);
+    return true;
 }
 void App::select_item(int idx, bool shift, bool ctrl) {
     int total = static_cast<int>(m_index.size());
@@ -2496,6 +2512,12 @@ void App::grid_ensure_visible() {
     m_grid_scroll_y = row.row_y + row.row_h / 2 - visible_height / 2;
     int max_scroll = std::max(0, m_grid_total_h - visible_height);
     m_grid_scroll_y = std::clamp(m_grid_scroll_y, 0, max_scroll);
+}
+
+void App::clamp_grid_scroll() {
+    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    m_grid_scroll_y = clamp_grid_scroll_position(
+        m_grid_scroll_y, m_grid_total_h, visible_height);
 }
 bool App::toolbar_visible() const {
     return !m_fullscreen || m_grid_mode || m_toolbar_revealed;
@@ -2769,6 +2791,7 @@ void App::rebuild_grid_layout(int grid_area_width) {
 
     m_grid_total_rows = static_cast<int>(m_grid_rows.size());
     m_grid_total_h = current_y;
+    clamp_grid_scroll();
     m_row_heights.clear();
     m_row_heights.reserve(m_grid_rows.size());
     for (const auto& row : m_grid_rows)
