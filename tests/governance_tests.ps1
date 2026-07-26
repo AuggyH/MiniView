@@ -43,22 +43,200 @@ function Test-MetadataWorkerStructure {
         $Content, '(?m)^' + [regex]::Escape($expectedLine) + '\r?$')
 }
 
+function Get-CMakeTokens {
+    param([string]$Content)
+
+    $tokens = [System.Collections.Generic.List[object]]::new()
+    $index = 0
+    while ($index -lt $Content.Length) {
+        $character = $Content[$index]
+        if ([char]::IsWhiteSpace($character)) {
+            $index++
+            continue
+        }
+
+        if ($character -eq '#') {
+            $commentStart = ([regex]'\G#\[(=*)\[').Match(
+                $Content, $index)
+            if ($commentStart.Success) {
+                $commentEnd = ']' + $commentStart.Groups[1].Value + ']'
+                $endIndex = $Content.IndexOf(
+                    $commentEnd,
+                    $index + $commentStart.Length,
+                    [System.StringComparison]::Ordinal)
+                if ($endIndex -lt 0) { break }
+                $index = $endIndex + $commentEnd.Length
+                continue
+            }
+
+            while ($index -lt $Content.Length -and
+                $Content[$index] -ne "`r" -and
+                $Content[$index] -ne "`n") {
+                $index++
+            }
+            continue
+        }
+
+        if ($character -eq '"') {
+            $value = [System.Text.StringBuilder]::new()
+            $index++
+            while ($index -lt $Content.Length) {
+                $character = $Content[$index]
+                if ($character -eq '\\' -and $index + 1 -lt $Content.Length) {
+                    $index++
+                    [void]$value.Append($Content[$index])
+                    $index++
+                    continue
+                }
+                if ($character -eq '"') {
+                    $index++
+                    break
+                }
+                [void]$value.Append($character)
+                $index++
+            }
+            [void]$tokens.Add([pscustomobject]@{
+                Type = 'Quoted'
+                Value = $value.ToString()
+            })
+            continue
+        }
+
+        if ($character -eq '[') {
+            $bracketStart = ([regex]'\G\[(=*)\[').Match(
+                $Content, $index)
+            if ($bracketStart.Success) {
+                $bracketEnd = ']' + $bracketStart.Groups[1].Value + ']'
+                $valueStart = $index + $bracketStart.Length
+                $endIndex = $Content.IndexOf(
+                    $bracketEnd,
+                    $valueStart,
+                    [System.StringComparison]::Ordinal)
+                if ($endIndex -lt 0) {
+                    $value = $Content.Substring($valueStart)
+                    $index = $Content.Length
+                } else {
+                    $value = $Content.Substring(
+                        $valueStart, $endIndex - $valueStart)
+                    $index = $endIndex + $bracketEnd.Length
+                }
+                [void]$tokens.Add([pscustomobject]@{
+                    Type = 'Bracket'
+                    Value = $value
+                })
+                continue
+            }
+        }
+
+        if ($character -eq '(' -or $character -eq ')') {
+            [void]$tokens.Add([pscustomobject]@{
+                Type = if ($character -eq '(') { 'LeftParen' } else { 'RightParen' }
+                Value = [string]$character
+            })
+            $index++
+            continue
+        }
+
+        $start = $index
+        while ($index -lt $Content.Length) {
+            $character = $Content[$index]
+            if ([char]::IsWhiteSpace($character) -or
+                $character -eq '(' -or
+                $character -eq ')' -or
+                $character -eq '"' -or
+                $character -eq '#') {
+                break
+            }
+            $index++
+        }
+        if ($index -eq $start) {
+            $index++
+            continue
+        }
+        [void]$tokens.Add([pscustomobject]@{
+            Type = 'Word'
+            Value = $Content.Substring($start, $index - $start)
+        })
+    }
+
+    return $tokens.ToArray()
+}
+
 function Get-CMakeTestNames {
     param([string]$Content)
 
-    return @([regex]::Matches(
-        $Content,
-        '(?is)add_test\s*\(\s*NAME\s+"?([A-Za-z0-9_.-]+)"?(?=\s|\))') |
-        ForEach-Object { $_.Groups[1].Value } |
-        Sort-Object -Unique)
+    $tokens = @(Get-CMakeTokens $Content)
+    $names = [System.Collections.Generic.List[string]]::new()
+    $depth = 0
+    for ($index = 0; $index -lt $tokens.Count; $index++) {
+        $token = $tokens[$index]
+        if ($depth -eq 0 -and
+            $token.Type -eq 'Word' -and
+            $token.Value -ieq 'add_test' -and
+            $index + 3 -lt $tokens.Count -and
+            $tokens[$index + 1].Type -eq 'LeftParen' -and
+            $tokens[$index + 2].Type -eq 'Word' -and
+            $tokens[$index + 2].Value -ieq 'NAME' -and
+            $tokens[$index + 3].Type -in @('Word', 'Quoted', 'Bracket') -and
+            $tokens[$index + 3].Value -match '^[A-Za-z0-9_.-]+$') {
+            [void]$names.Add($tokens[$index + 3].Value)
+        }
+
+        if ($token.Type -eq 'LeftParen') {
+            $depth++
+        } elseif ($token.Type -eq 'RightParen' -and $depth -gt 0) {
+            $depth--
+        }
+    }
+
+    return @($names | Sort-Object -Unique)
+}
+
+function Remove-MarkdownHiddenContent {
+    param([string]$Content)
+
+    $withoutHtmlComments = [regex]::Replace(
+        $Content, '(?s)<!--.*?(?:-->|\z)', '')
+    $visible = [System.Text.StringBuilder]::new()
+    $inFence = $false
+    $fenceCharacter = ''
+    $fenceLength = 0
+
+    foreach ($line in [regex]::Split($withoutHtmlComments, '(?<=\n)')) {
+        if ($line.Length -eq 0) { continue }
+        $lineText = $line -replace '\r?\n\z', ''
+        if (-not $inFence) {
+            $fenceStart = [regex]::Match(
+                $lineText, '^[ \t]{0,3}(?<fence>`{3,}|~{3,})')
+            if ($fenceStart.Success) {
+                $marker = $fenceStart.Groups['fence'].Value
+                $fenceCharacter = $marker.Substring(0, 1)
+                $fenceLength = $marker.Length
+                $inFence = $true
+                continue
+            }
+            [void]$visible.Append($line)
+            continue
+        }
+
+        $fenceEndPattern = '^[ \t]{0,3}' +
+            [regex]::Escape($fenceCharacter) +
+            '{' + $fenceLength + ',}[ \t]*$'
+        if ([regex]::IsMatch($lineText, $fenceEndPattern)) {
+            $inFence = $false
+        }
+    }
+
+    return $visible.ToString()
 }
 
 function Get-ArchitectureTestNames {
     param([string]$Content)
 
+    $visibleContent = Remove-MarkdownHiddenContent $Content
     $sectionHeader = ConvertFrom-Utf8Base64 'IyMg5b2T5YmN6Ieq5Yqo5YyW6L6555WM'
     $sectionMatch = [regex]::Match(
-        $Content,
+        $visibleContent,
         '(?ms)^' + [regex]::Escape($sectionHeader) +
             '\r?\n(?<section>.*?)(?=^##\s|\z)')
     if (-not $sectionMatch.Success) { return @() }
@@ -80,6 +258,95 @@ function Test-TestRegistryContract {
     $documented = @(Get-ArchitectureTestNames $ArchitectureContent)
     return ($registered.Count -gt 0 -and
         ($registered -join "`n") -ceq ($documented -join "`n"))
+}
+
+function Test-TestRegistryMutationGuards {
+    param(
+        [string]$CMakeContent,
+        [string]$ArchitectureContent,
+        [string]$LineEnding,
+        [string]$VariantName
+    )
+
+    $checks = 0
+    $activeRegistration =
+        '    add_test(NAME app_state.unit COMMAND app_state_tests)'
+    if (-not $CMakeContent.Contains($activeRegistration)) {
+        $failures.Add("$VariantName mutation setup cannot find app_state.unit")
+        return $checks
+    }
+
+    $commentedOutMutation = $CMakeContent.Replace(
+        $activeRegistration,
+        '    # add_test(NAME app_state.unit COMMAND app_state_tests)')
+    $checks++
+    if (Test-TestRegistryContract $commentedOutMutation $ArchitectureContent) {
+        $failures.Add("$VariantName accepted a commented-out real CMake test")
+    }
+
+    $stringifiedMutation = $CMakeContent.Replace(
+        $activeRegistration,
+        '    set(app_state_registration "add_test(NAME app_state.unit COMMAND app_state_tests)")')
+    $checks++
+    if (Test-TestRegistryContract $stringifiedMutation $ArchitectureContent) {
+        $failures.Add("$VariantName accepted a stringified replacement test")
+    }
+
+    $lineCommentMutation = $CMakeContent + $LineEnding +
+        '# add_test(NAME mutation.extra COMMAND mutation_extra)'
+    $checks++
+    if (-not (Test-TestRegistryContract $lineCommentMutation $ArchitectureContent)) {
+        $failures.Add("$VariantName rejected a harmless CMake line comment")
+    }
+
+    $bracketCommentMutation = $CMakeContent + $LineEnding + '#[=[' +
+        $LineEnding + 'add_test(NAME mutation.extra COMMAND mutation_extra)' +
+        $LineEnding + ']=]'
+    $checks++
+    if (-not (Test-TestRegistryContract $bracketCommentMutation $ArchitectureContent)) {
+        $failures.Add("$VariantName rejected a harmless CMake bracket comment")
+    }
+
+    $bulletMatch = [regex]::Match(
+        $ArchitectureContent,
+        '(?m)^-\s+`app_state\.unit`[^\r\n]*(?:\r?\n)?')
+    if (-not $bulletMatch.Success) {
+        $failures.Add("$VariantName mutation setup cannot find app_state.unit bullet")
+        return $checks
+    }
+    $bullet = $bulletMatch.Value -replace '\r?\n\z', ''
+    $beforeBullet = $ArchitectureContent.Substring(0, $bulletMatch.Index)
+    $afterBullet = $ArchitectureContent.Substring(
+        $bulletMatch.Index + $bulletMatch.Length)
+
+    $htmlCommentMutation = $beforeBullet + '<!--' + $LineEnding +
+        $bullet + $LineEnding + '-->' + $LineEnding + $afterBullet
+    $checks++
+    if (Test-TestRegistryContract $CMakeContent $htmlCommentMutation) {
+        $failures.Add("$VariantName accepted an HTML-commented test bullet")
+    }
+
+    $fencedMutation = $beforeBullet + '```text' + $LineEnding +
+        $bullet + $LineEnding + '```' + $LineEnding + $afterBullet
+    $checks++
+    if (Test-TestRegistryContract $CMakeContent $fencedMutation) {
+        $failures.Add("$VariantName accepted a fenced test bullet")
+    }
+
+    $removedBulletMutation = $beforeBullet + $afterBullet
+    $checks++
+    if (Test-TestRegistryContract $CMakeContent $removedBulletMutation) {
+        $failures.Add("$VariantName accepted a removed architecture test")
+    }
+
+    $addedTestMutation = $CMakeContent + $LineEnding +
+        'add_test(NAME mutation.extra COMMAND mutation_extra)'
+    $checks++
+    if (Test-TestRegistryContract $addedTestMutation $ArchitectureContent) {
+        $failures.Add("$VariantName accepted an undocumented active CMake test")
+    }
+
+    return $checks
 }
 
 function Test-NoLegacyMetadataLog {
@@ -112,32 +379,41 @@ if (-not (Test-TestRegistryContract $cmakeContent $architectureContent)) {
     $failures.Add('architecture test declarations must exactly match CMake add_test registrations')
 }
 
-# Mutation checks prove the predicates reject keyword-preserving denials and drift.
-$crlfArchitectureMutation = $architectureContent -replace '(?<!\r)\n', "`r`n"
-if (-not (Test-TestRegistryContract $cmakeContent $crlfArchitectureMutation)) {
-    $failures.Add('test registry contract must accept PowerShell 5.1 CRLF checkouts')
+# Mutation checks prove the predicates reject lexical decoys and registry drift.
+$lfCMakeContent = $cmakeContent -replace "`r`n", "`n"
+$lfArchitectureContent = $architectureContent -replace "`r`n", "`n"
+$registryVariants = @(
+    [pscustomobject]@{
+        Name = 'LF'
+        LineEnding = "`n"
+        CMake = $lfCMakeContent
+        Architecture = $lfArchitectureContent
+    },
+    [pscustomobject]@{
+        Name = 'CRLF'
+        LineEnding = "`r`n"
+        CMake = $lfCMakeContent -replace "`n", "`r`n"
+        Architecture = $lfArchitectureContent -replace "`n", "`r`n"
+    }
+)
+$registryMutationChecks = 0
+foreach ($variant in $registryVariants) {
+    if (-not (Test-TestRegistryContract $variant.CMake $variant.Architecture)) {
+        $failures.Add("$($variant.Name) test registry contract must pass")
+    }
+    $registryMutationChecks += Test-TestRegistryMutationGuards `
+        $variant.CMake `
+        $variant.Architecture `
+        $variant.LineEnding `
+        $variant.Name
+}
+if ($registryMutationChecks -ne 16) {
+    $failures.Add('test registry mutation suite must execute 16 checks')
 }
 
 $negatedWorkerMutation = '- 1 metadata worker does not exist; UI parsing does not use mutex/condition variable, WM_METADATA_READY, or path expiry.'
 if (Test-MetadataWorkerStructure $negatedWorkerMutation) {
     $failures.Add('metadata worker mutation guard accepted a negated worker claim')
-}
-
-$registeredTests = @(Get-CMakeTestNames $cmakeContent)
-if ($registeredTests.Count -gt 0) {
-    $removedTestPattern = '(?m)^-\s+`' +
-        [regex]::Escape($registeredTests[0]) + '`[^\r\n]*(?:\r?\n)?'
-    $removedTestMutation = [regex]::Replace(
-        $architectureContent, $removedTestPattern, '', 1)
-    if (Test-TestRegistryContract $cmakeContent $removedTestMutation) {
-        $failures.Add('test registry mutation guard accepted a removed architecture test')
-    }
-}
-
-$addedTestMutation = $cmakeContent +
-    "`r`nadd_test(NAME mutation.extra COMMAND mutation_extra)"
-if (Test-TestRegistryContract $addedTestMutation $architectureContent) {
-    $failures.Add('test registry mutation guard accepted an undocumented CMake test')
 }
 
 $legacyLogMutation = $architectureContent + "`r`nmeta_debug.log"
@@ -150,4 +426,4 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
-Write-Output 'governance tests passed'
+Write-Output "governance tests passed ($($registryVariants.Count) registry variants, $registryMutationChecks registry mutations)"
