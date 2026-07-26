@@ -33,6 +33,7 @@ set(HEADERS
     src/viewer.h
     src/app.h
     src/app_state.h
+    src/file_operation.h
     src/indexer.h
     src/metadata.h
 )
@@ -141,6 +142,19 @@ if(BUILD_TESTING)
     set_target_properties(renderer_state_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(renderer_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME renderer_state.unit COMMAND renderer_state_tests)
+
+    add_executable(file_operation_tests
+        tests/file_operation_tests.cpp
+    )
+    target_include_directories(file_operation_tests PRIVATE src)
+    target_compile_options(file_operation_tests PRIVATE /W4 /utf-8)
+    if(MINVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(file_operation_tests PRIVATE /WX)
+    endif()
+    target_compile_definitions(file_operation_tests PRIVATE NOMINMAX)
+    set_target_properties(file_operation_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_options(file_operation_tests PRIVATE /SUBSYSTEM:CONSOLE)
+    add_test(NAME file_operation.unit COMMAND file_operation_tests)
 
     add_executable(indexer_benchmark
         tools/indexer_benchmark.cpp

@@ -1,5 +1,6 @@
 #include "app.h"
 #include "app_state.h"
+#include "file_operation.h"
 #include "renderer_state.h"
 #include <stdexcept>
 #include <Windows.h>
@@ -1540,6 +1541,9 @@ void App::preload_neighbors() {
 void App::delete_current_file(bool permanent) {
     if (!m_has_image || m_current_path.empty()) return;
 
+    const bool loader_was_running = m_thumb_running;
+    if (loader_was_running) stop_thumb_loader();
+
     std::wstring from = m_current_path;
     from.push_back(L'\0'); from.push_back(L'\0');
 
@@ -1549,16 +1553,39 @@ void App::delete_current_file(bool permanent) {
     fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
     if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
 
-    if (SHFileOperationW(&fos) != 0) return;
+    const int shell_result = SHFileOperationW(&fos);
+    const bool removed = path_is_confirmed_missing(m_current_path);
+    const bool complete = delete_fully_completed(
+        shell_result, fos.fAnyOperationsAborted != FALSE, 1, removed ? 1 : 0);
+    if (!removed) {
+        if (loader_was_running) start_thumb_loader();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除未完成，文件仍保留在列表中。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
+        return;
+    }
 
-    m_index.remove(m_current_idx);
+    m_index.remove_many({m_current_idx});
+    m_thumbs.clear();
+    m_thumbs.resize(m_index.size());
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_grid_layout_dirty = true;
 
     if (m_index.empty()) {
         m_has_image = false;
         m_current_path.clear();
+        m_current_wic.Reset();
         m_current_idx = -1;
         update_title();
         m_window.invalidate();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
         return;
     }
 
@@ -1566,6 +1593,12 @@ void App::delete_current_file(bool permanent) {
         m_current_idx = static_cast<int>(m_index.size()) - 1;
 
     open_image(m_index.path_at(m_current_idx));
+    if (loader_was_running) start_thumb_loader();
+    if (!complete) {
+        MessageBoxW(m_window.handle(),
+            L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+            MB_OK | MB_ICONWARNING);
+    }
 }
 
 // ── Context menu ─────────────────────────────────────────────
@@ -2775,9 +2808,17 @@ void App::delete_selected(bool permanent) {
         if (m_selected[i]) to_delete.push_back(i);
     if (to_delete.empty()) return;
 
+    const int previous_grid_sel = m_grid_sel;
+    std::wstring focused_path;
+    if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
+        focused_path = m_index.path_at(m_grid_sel);
+    std::vector<std::wstring> requested_paths;
+    requested_paths.reserve(to_delete.size());
+
     std::wstring from;
-    for (auto rit = to_delete.rbegin(); rit != to_delete.rend(); ++rit) {
-        from += m_index.path_at(*rit);
+    for (int index : to_delete) {
+        requested_paths.push_back(m_index.path_at(index));
+        from += requested_paths.back();
         from.push_back(L'\0');
     }
     from.push_back(L'\0');
@@ -2789,26 +2830,56 @@ void App::delete_selected(bool permanent) {
     fos.pFrom  = from.c_str();
     fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
     if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
-    if (SHFileOperationW(&fos) != 0) {
+    const int shell_result = SHFileOperationW(&fos);
+
+    std::vector<int> removed_indices;
+    std::vector<std::wstring> remaining_selected;
+    removed_indices.reserve(to_delete.size());
+    remaining_selected.reserve(to_delete.size());
+    for (size_t i = 0; i < to_delete.size(); ++i) {
+        if (path_is_confirmed_missing(requested_paths[i]))
+            removed_indices.push_back(to_delete[i]);
+        else
+            remaining_selected.push_back(requested_paths[i]);
+    }
+    const bool complete = delete_fully_completed(shell_result,
+        fos.fAnyOperationsAborted != FALSE, to_delete.size(), removed_indices.size());
+
+    if (removed_indices.empty()) {
         start_thumb_loader();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除未完成，文件仍保留在列表中。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
         return;
     }
 
-    std::sort(to_delete.begin(), to_delete.end(), std::greater<int>());
-    for (int idx : to_delete) m_index.remove(idx);
-    clear_selection();
+    m_index.remove_many(removed_indices);
 
     if (m_index.empty()) {
-        m_has_image = false; m_current_path.clear(); m_current_idx = -1;
+        m_has_image = false; m_current_path.clear(); m_current_wic.Reset(); m_current_idx = -1;
         m_grid_mode = false; stop_thumb_loader();
         m_thumbs.clear(); m_thumb_d2d.clear(); m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
         update_title();
-        m_window.invalidate(); return;
+        m_window.invalidate();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
+        return;
     }
-    m_grid_sel = std::min(m_grid_sel, static_cast<int>(m_index.size()) - 1);
+
+    m_grid_sel = focused_path.empty() ? -1 : m_index.index_of(focused_path);
+    if (m_grid_sel < 0 && !remaining_selected.empty())
+        m_grid_sel = m_index.index_of(remaining_selected.front());
+    if (m_grid_sel < 0)
+        m_grid_sel = std::min(previous_grid_sel, static_cast<int>(m_index.size()) - 1);
     m_current_idx = m_current_path.empty() ? -1 : m_index.index_of(m_current_path);
     if (m_current_idx < 0 && m_grid_sel >= 0) {
+        m_current_wic.Reset();
         m_current_idx = m_grid_sel;
         m_current_path = m_index.path_at(m_grid_sel);
         m_has_image = true;
@@ -2820,11 +2891,21 @@ void App::delete_selected(bool permanent) {
     m_grid_layout_dirty = true;
     m_last_cached_sel = -1;
     m_selected.assign(m_index.size(), false);
-    if (m_grid_sel >= 0) m_selected[static_cast<size_t>(m_grid_sel)] = true;
+    for (const auto& path : remaining_selected) {
+        int index = m_index.index_of(path);
+        if (index >= 0) m_selected[static_cast<size_t>(index)] = true;
+    }
+    if (!has_selection() && m_grid_sel >= 0)
+        m_selected[static_cast<size_t>(m_grid_sel)] = true;
     m_sel_anchor = m_grid_sel;
     start_thumb_loader();
     grid_ensure_visible();
     m_window.invalidate();
+    if (!complete) {
+        MessageBoxW(m_window.handle(),
+            L"删除操作未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+            MB_OK | MB_ICONWARNING);
+    }
 }
 
 void App::rebuild_grid_layout(int grid_area_width) {

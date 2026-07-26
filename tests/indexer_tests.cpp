@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <cwctype>
 
 namespace fs = std::filesystem;
 
@@ -73,6 +74,13 @@ int main() {
         "name sort should be case-insensitive");
     expect(index.index_of(alpha.wstring()) == 0,
         "index lookup should match a scanned path");
+    std::wstring alternate_alpha = alpha.wstring();
+    for (auto& ch : alternate_alpha) {
+        if (ch == L'\\') ch = L'/';
+        ch = static_cast<wchar_t>(towupper(ch));
+    }
+    expect(index.index_of(alternate_alpha) == 0,
+        "Windows path lookup should ignore case and slash direction");
 
     expect(index.scan(root.wstring(), true) == 3,
         "recursive scan should include nested image files");
@@ -95,6 +103,16 @@ int main() {
     expect(index.size() == 2 && index.index_of(beta.wstring()) == -1,
         "remove should rebuild the path lookup");
     expect(!index.remove(-1), "remove should reject an invalid index");
+
+    expect(index.scan(root.wstring(), true) == 3,
+        "batch removal fixture should restore all indexed files");
+    const int alpha_index = index.index_of(alpha.wstring());
+    const int nested_batch_index = index.index_of(nested.wstring());
+    expect(index.remove_many({alpha_index, nested_batch_index, alpha_index, -1, 99}) == 2,
+        "batch remove should ignore duplicates and invalid indices");
+    expect(index.size() == 1 && index.index_of(alpha.wstring()) == -1
+            && index.index_of(nested.wstring()) == -1,
+        "batch remove should compact entries and rebuild the path map once");
 
     expect(index.scan((root / L"missing").wstring(), true) == -1,
         "scan should report an inaccessible directory");

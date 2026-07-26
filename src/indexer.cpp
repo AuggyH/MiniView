@@ -4,6 +4,18 @@
 #include <cwchar>
 
 namespace mv {
+
+namespace {
+
+std::wstring normalize_path_key(std::wstring path) {
+    for (auto& ch : path) {
+        if (ch == L'/') ch = L'\\';
+        ch = static_cast<wchar_t>(towlower(ch));
+    }
+    return path;
+}
+
+} // namespace
 namespace fs = std::filesystem;
 
 namespace {
@@ -75,17 +87,38 @@ void ImageIndex::rebuild_map() {
     m_path_to_idx.clear();
     m_path_to_idx.reserve(m_files.size());
     for (int i = 0; i < static_cast<int>(m_files.size()); ++i) {
-        m_path_to_idx[m_files[i].path] = i;
+        m_path_to_idx[normalize_path_key(m_files[i].path)] = i;
     }
 }
 
 // ── Query ────────────────────────────────────────────────────
 
 bool ImageIndex::remove(int idx) {
-    if (idx < 0 || idx >= static_cast<int>(m_files.size())) return false;
-    m_files.erase(m_files.begin() + idx);
+    return remove_many({idx}) == 1;
+}
+
+size_t ImageIndex::remove_many(const std::vector<int>& indices) {
+    if (indices.empty() || m_files.empty()) return 0;
+
+    std::vector<bool> remove_flags(m_files.size(), false);
+    size_t remove_count = 0;
+    for (int index : indices) {
+        if (index < 0 || index >= static_cast<int>(m_files.size())) continue;
+        if (!remove_flags[static_cast<size_t>(index)]) {
+            remove_flags[static_cast<size_t>(index)] = true;
+            ++remove_count;
+        }
+    }
+    if (remove_count == 0) return 0;
+
+    std::vector<ImageEntry> remaining;
+    remaining.reserve(m_files.size() - remove_count);
+    for (size_t index = 0; index < m_files.size(); ++index) {
+        if (!remove_flags[index]) remaining.push_back(std::move(m_files[index]));
+    }
+    m_files = std::move(remaining);
     rebuild_map();
-    return true;
+    return remove_count;
 }
 
 const std::wstring& ImageIndex::path_at(size_t idx) const {
@@ -108,7 +141,7 @@ std::wstring ImageIndex::relpath_at(size_t idx) const {
 }
 
 int ImageIndex::index_of(const std::wstring& path) const {
-    auto it = m_path_to_idx.find(path);
+    auto it = m_path_to_idx.find(normalize_path_key(path));
     return (it != m_path_to_idx.end()) ? it->second : -1;
 }
 
