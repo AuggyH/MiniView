@@ -29,6 +29,7 @@ function Assert-Absent {
 }
 
 $areaPathLabelPrefix = "$([char]0x533a)$([char]0x57df)$([char]0x8def)$([char]0x5f84)$([char]0x6807)$([char]0x7b7e)$([char]0x7531)"
+$architecturePath = Join-Path $RepositoryRoot 'docs/ARCHITECTURE.md'
 
 Assert-Present (Join-Path $RepositoryRoot 'build.bat') '(?s)copy /Y .*?if errorlevel 1 exit /b 1\s+echo BUILD_OK' 'build.bat must stop before BUILD_OK when the candidate copy fails'
 Assert-Absent (Join-Path $RepositoryRoot '.github/labeler.yml') '(?m)^(documentation|ci|tests):' 'path labeler must not manage type labels'
@@ -37,8 +38,20 @@ Assert-Present (Join-Path $RepositoryRoot 'docs/MULTI_FORMAT_RESEARCH.md') 'Prod
 Assert-Present (Join-Path $RepositoryRoot 'docs/MULTI_FORMAT_RESEARCH.md') 'Issue #4' 'format research must preserve the Issue #4 implementation gate'
 Assert-Present (Join-Path $RepositoryRoot 'README.md') '#1A1A1A' 'README must use the authoritative background color'
 Assert-Absent (Join-Path $RepositoryRoot 'README.md') '#1A1A1E|`F2`' 'README must not advertise stale color or F2 behavior'
-Assert-Present (Join-Path $RepositoryRoot 'docs/ARCHITECTURE.md') '3[^\r\n]*WIC' 'architecture must match the three-entry preload cache'
-Assert-Absent (Join-Path $RepositoryRoot 'docs/ARCHITECTURE.md') '6[^\r\n]*WIC' 'architecture must not advertise a six-entry preload cache'
+Assert-Present $architecturePath '3[^\r\n]*WIC' 'architecture must match the three-entry preload cache'
+Assert-Absent $architecturePath '6[^\r\n]*WIC' 'architecture must not advertise a six-entry preload cache'
+Assert-Absent $architecturePath 'meta_debug\.log' 'architecture must not retain the removed metadata debug-log claim'
+Assert-Present $architecturePath 'metadata worker' 'architecture must describe the off-UI metadata worker'
+foreach ($testName in @(
+    'indexer.unit',
+    'app_state.unit',
+    'metadata.unit',
+    'renderer_state.unit',
+    'file_operation.unit',
+    'governance.unit'
+)) {
+    Assert-Present $architecturePath ([regex]::Escape($testName)) "architecture must document $testName"
+}
 
 if ($failures.Count -gt 0) {
     foreach ($failure in $failures) { Write-Output "FAIL: $failure" }
