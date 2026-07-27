@@ -12,7 +12,7 @@
 - **AIGC 元数据** — 解析 ComfyUI PNG 内嵌 prompt/workflow 并展示
 - **右键菜单** — 打开文件、复制图片、删除、打开所在文件夹
 - **键盘快捷键** — 全键盘操作，传统图片浏览器快捷键布局
-- **暗色主题** — 全局 #1A1A1E 深色背景，清晰易读
+- **暗色主题** — 全局 #1A1A1A 深色背景，清晰易读
 
 ## 技术栈
 
@@ -48,18 +48,19 @@ build.bat
 
 | 键 | 网格模式 | 大图模式 |
 |---|---|---|
-| `Space` | 进入预览 | 退回网格 |
+| `Space` | 进入大图 | 退回网格 |
 | `Esc` | — | 退回网格 / 退出全屏 |
-| `F11` | 全屏 | 全屏 |
+| `Enter` / `F11` | 全屏 | 全屏 |
 | `←` `→` | 上下选图 | 上一张/下一张 |
 | `Ctrl+O` | 打开文件 | 打开文件 |
 | `Ctrl+0` | — | 适应窗口 |
 | `Ctrl++/-` | — | 缩放 |
-| `F2` | 重命名 | — |
 | `Del` | 删除 | 删除 |
 | `Ctrl+C` | 复制 | 复制 |
-| `I` | — | 查看 AIGC 信息 |
-| `R` | 递归浏览子文件夹 | — |
+| `I` | 展开/收起右侧面板 | 展开/收起右侧面板 |
+| `Ctrl+R` | 递归浏览子文件夹 | — |
+
+`G` 已移除，不用于网格与大图切换。完整交互定义见 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md)。
 
 ## 架构
 
@@ -78,6 +79,10 @@ minview-native/
 ├── CHANGELOG.md
 └── README.md
 ```
+
+## 开发与质量
+
+`build.bat` 会在当前 checkout/worktree 中执行 x64 Release 构建、`/W4 /WX` 警告门禁和 CTest。提交代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，产品交互、性能预算、源码风险边界与手工回归范围分别见 [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md)、[docs/PERFORMANCE_BUDGET.md](docs/PERFORMANCE_BUDGET.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 和 [docs/QA_CHECKLIST.md](docs/QA_CHECKLIST.md)。
 
 ## 灵感
 

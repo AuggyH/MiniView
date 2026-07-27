@@ -36,6 +36,9 @@ public:
     /// Remove entry at sorted index. Returns true if removed.
     bool remove(int idx);
 
+    /// Remove all valid sorted indices with one compaction and map rebuild.
+    size_t remove_many(const std::vector<int>& indices);
+
     /// Re-sort existing entries by the given mode.
     void sort_by(SortMode mode);
 

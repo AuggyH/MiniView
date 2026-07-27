@@ -1,4 +1,7 @@
 #include "app.h"
+#include "app_state.h"
+#include "file_operation.h"
+#include "renderer_state.h"
 #include <stdexcept>
 #include <Windows.h>
 #include <filesystem>
@@ -12,29 +15,44 @@
 #include <commdlg.h>
 #include <ole2.h>
 #include <ocidl.h>
+#include <limits>
 
 extern void save_last_dir(const std::wstring& dir);
 extern std::wstring get_config_dir();
 
 namespace mv {
 
+constexpr UINT WM_THUMB_READY = WM_APP + 1;
+constexpr UINT WM_METADATA_READY = WM_APP + 2;
+constexpr UINT WM_RENDER_RETRY = WM_APP + 3;
+
 // ── OLE Drag source helpers ──────────────────────────────────
 
-// Simple IDataObject that holds a single file path as CF_HDROP
+// Simple IDataObject that holds one or more file paths as CF_HDROP.
 class FileDataObject : public IDataObject {
 public:
-    FileDataObject(const std::wstring& path) : m_ref(1) {
-        // Build DROPFILES + path
-        int offset = sizeof(DROPFILES);
-        int path_bytes = static_cast<int>((path.size() + 1) * sizeof(wchar_t));
-        m_data_size = offset + path_bytes;
+    explicit FileDataObject(const std::vector<std::wstring>& paths) : m_ref(1) {
+        SIZE_T path_bytes = sizeof(wchar_t);
+        for (const auto& path : paths) path_bytes += (path.size() + 1) * sizeof(wchar_t);
+        m_data_size = sizeof(DROPFILES) + path_bytes;
         m_data = GlobalAlloc(GMEM_MOVEABLE, m_data_size);
         if (m_data) {
             auto* df = static_cast<DROPFILES*>(GlobalLock(m_data));
-            df->pFiles = offset;
+            if (!df) {
+                GlobalFree(m_data);
+                m_data = nullptr;
+                m_data_size = 0;
+                return;
+            }
+            ZeroMemory(df, sizeof(*df));
+            df->pFiles = sizeof(DROPFILES);
             df->fWide  = TRUE;
-            auto* dst = reinterpret_cast<wchar_t*>(reinterpret_cast<char*>(df) + offset);
-            wcscpy_s(dst, path.size() + 1, path.c_str());
+            auto* dst = reinterpret_cast<wchar_t*>(reinterpret_cast<char*>(df) + sizeof(DROPFILES));
+            for (const auto& path : paths) {
+                wmemcpy(dst, path.c_str(), path.size() + 1);
+                dst += path.size() + 1;
+            }
+            *dst = L'\0';
             GlobalUnlock(m_data);
         }
     }
@@ -59,11 +77,20 @@ public:
     STDMETHODIMP GetData(FORMATETC* fe, STGMEDIUM* sm) override {
         if (!fe || !sm) return E_INVALIDARG;
         if (fe->cfFormat != CF_HDROP || !(fe->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
+        if (!m_data || m_data_size == 0) return E_OUTOFMEMORY;
+        ZeroMemory(sm, sizeof(*sm));
         sm->tymed = TYMED_HGLOBAL;
         sm->hGlobal = GlobalAlloc(GMEM_MOVEABLE, m_data_size);
         if (!sm->hGlobal) return E_OUTOFMEMORY;
         void* src = GlobalLock(m_data);
         void* dst = GlobalLock(sm->hGlobal);
+        if (!src || !dst) {
+            if (dst) GlobalUnlock(sm->hGlobal);
+            if (src) GlobalUnlock(m_data);
+            GlobalFree(sm->hGlobal);
+            ZeroMemory(sm, sizeof(*sm));
+            return STG_E_READFAULT;
+        }
         memcpy(dst, src, m_data_size);
         GlobalUnlock(sm->hGlobal);
         GlobalUnlock(m_data);
@@ -124,7 +151,6 @@ enum {
     IDM_OPEN_FILE    = 1001,
     IDM_OPEN_FOLDER  = 1002,
     IDM_EXIT         = 1003,
-    IDM_GRID         = 1010,
     IDM_FULLSCREEN   = 1011,
     IDM_RECURSIVE    = 1012,
     IDM_THUMB_SQUARE = 1013,
@@ -133,7 +159,9 @@ enum {
     IDM_SORT_DATE    = 1021,
     IDM_SORT_SIZE    = 1022,
     IDM_SORT_RANDOM  = 1023,
-    IDM_COPY         = 1030,
+    IDM_COPY_IMAGE   = 1030,
+    IDM_COPY_PATH    = 1034,
+    IDM_CREATE_COPY  = 1035,
     IDM_DELETE       = 1031,
     IDM_DELETE_PERM  = 1032,
     IDM_EXPLORER     = 1033,
@@ -151,7 +179,6 @@ HMENU build_menu_bar() {
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu), L"\u6587\u4EF6(&F)");
 
     HMENU view_menu = CreatePopupMenu();
-    AppendMenuW(view_menu, MF_STRING, IDM_GRID,        L"\u7F29\u7565\u56FE\u7F51\u683C	G");
     AppendMenuW(view_menu, MF_STRING, IDM_FULLSCREEN,  L"\u5168\u5C4F	F11");
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
 
@@ -166,11 +193,13 @@ HMENU build_menu_bar() {
     AppendMenuW(view_menu, MF_STRING, IDM_RECURSIVE,    L"\u9012\u5F52\u6D4F\u89C8	Ctrl+R");
     AppendMenuW(view_menu, MF_STRING, IDM_THUMB_SQUARE, L"\u65B9\u5F62\u7F29\u7565\u56FE	A");
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(view_menu, MF_STRING, IDM_INFO,         L"\u751F\u6210\u4FE1\u606F	I");
+    AppendMenuW(view_menu, MF_STRING, IDM_INFO,         L"\u4FE1\u606F\u9762\u677F	I");
     AppendMenuW(bar, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu), L"\u67E5\u770B(&V)");
 
     HMENU edit_menu = CreatePopupMenu();
-    AppendMenuW(edit_menu, MF_STRING, IDM_COPY,        L"\u590D\u5236	Ctrl+C");
+    AppendMenuW(edit_menu, MF_STRING, IDM_COPY_IMAGE,  L"\u590D\u5236	Ctrl+C");
+    AppendMenuW(edit_menu, MF_STRING, IDM_COPY_PATH,   L"\u590D\u5236\u6587\u4EF6\u8DEF\u5F84");
+    AppendMenuW(edit_menu, MF_STRING, IDM_CREATE_COPY, L"\u521B\u5EFA\u526F\u672C");
     AppendMenuW(edit_menu, MF_STRING, IDM_DELETE,      L"\u5220\u9664	Del");
     AppendMenuW(edit_menu, MF_STRING, IDM_DELETE_PERM, L"\u6C38\u4E45\u5220\u9664	Shift+Del");
     AppendMenuW(edit_menu, MF_SEPARATOR, 0, nullptr);
@@ -211,7 +240,7 @@ static void preload_worker(
             try {
                 auto bitmap = decoder.decode(path);
                 std::lock_guard lock(mtx);
-                if (cache.size() >= 6) cache.clear();
+                if (cache.size() >= 3) cache.clear();
                 cache[std::move(path)] = bitmap;
             } catch (...) {
                 // decode failed — skip
@@ -268,6 +297,60 @@ static void BuildOwnerMenu(HMENU parent, HMENU sub, const std::wstring& label) {
     InsertMenuItemW(parent, GetMenuItemCount(parent), TRUE, &mii);
 }
 
+static void metadata_worker(
+    std::atomic<bool>& running,
+    std::mutex& mutex,
+    std::condition_variable& cv,
+    std::wstring& request_path,
+    bool& request_pending,
+    std::wstring& result_path,
+    ImageMeta& result,
+    bool& result_ready,
+    HWND notify_window)
+{
+    while (running) {
+        std::wstring path;
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return !running || request_pending; });
+            if (!running) break;
+            path = std::move(request_path);
+            request_path.clear();
+            request_pending = false;
+        }
+
+        ImageMeta metadata;
+        try {
+            metadata = extract_metadata(path);
+        } catch (...) {
+            metadata = {};
+        }
+
+        {
+            std::lock_guard lock(mutex);
+            if (!running) break;
+            result_path = std::move(path);
+            result = std::move(metadata);
+            result_ready = true;
+        }
+        PostMessageW(notify_window, WM_METADATA_READY, 0, 0);
+    }
+}
+
+static void FreeOwnerItemData(HMENU menu) {
+    int count = GetMenuItemCount(menu);
+    for (int i = 0; i < count; ++i) {
+        HMENU sub = GetSubMenu(menu, i);
+        if (sub) FreeOwnerItemData(sub);
+
+        MENUITEMINFOW mii = { sizeof(mii) };
+        mii.fMask = MIIM_DATA;
+        if (GetMenuItemInfoW(menu, i, TRUE, &mii) && mii.dwItemData != 0) {
+            delete reinterpret_cast<OwnerItemData*>(mii.dwItemData);
+        }
+    }
+}
+
 // Subclass proc for popup menu windows: fill background dark
 static LRESULT CALLBACK MenuSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_ERASEBKGND) {
@@ -276,15 +359,6 @@ static LRESULT CALLBACK MenuSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         HBRUSH bg = reinterpret_cast<HBRUSH>(GetPropW(hwnd, L"MV_BG"));
         if (bg) FillRect(hdc, &rc, bg);
         return 1;
-    }
-    if (msg == WM_PAINT) {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc; GetClientRect(hwnd, &rc);
-        HBRUSH bg = reinterpret_cast<HBRUSH>(GetPropW(hwnd, L"MV_BG"));
-        if (bg) FillRect(hdc, &rc, bg);
-        EndPaint(hwnd, &ps);
-        return 0;
     }
     if (msg == WM_NCPAINT) {
         return 0;
@@ -314,15 +388,17 @@ static void ApplyMenuTheme(HMENU menu, HBRUSH br) {
 // ── App lifecycle ────────────────────────────────────────────
 
 App::App()  = default;
-App::~App() { stop_preloader(); stop_thumb_loader(); }
+App::~App() { stop_metadata_loader(); stop_preloader(); stop_thumb_loader(); }
 
 int App::run(const std::wstring& initial_path) {
     // Scale window size by DPI
-    float dpi = static_cast<float>(GetDpiForWindow(GetDesktopWindow()));
+    float dpi = static_cast<float>(GetDpiForSystem());
     int ww = static_cast<int>(1400 * dpi / 96.0f);
     int wh = static_cast<int>(900 * dpi / 96.0f);
     if (!m_window.create(L"MinView", ww, wh))
         throw std::runtime_error("Failed to create window");
+
+    dpi = static_cast<float>(GetDpiForWindow(m_window.handle()));
 
     m_window.set_message_callback(
         [this](HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
@@ -334,6 +410,7 @@ int App::run(const std::wstring& initial_path) {
 
     if (!m_renderer.init(m_window.handle()))
         throw std::runtime_error("Failed to init Direct2D renderer");
+    m_renderer_generation = m_renderer.device_generation();
 
     // Scale thumbnail sizes by DPI
     float scale = dpi / 96.0f;
@@ -345,31 +422,25 @@ int App::run(const std::wstring& initial_path) {
     m_cell_size   = m_thumb_cell + m_thumb_gap_h;
     m_panel_width = static_cast<int>(280 * scale);
     m_toolbar_h  = static_cast<int>(m_title_h * scale);
-    m_renderer.set_content_top(static_cast<float>(m_toolbar_h));
+    update_content_viewport(false);
 
     // No native menu bar — custom toolbar drawn via D2D
     SetMenu(m_window.handle(), nullptr);
 
     start_preloader();
+    start_metadata_loader();
 
     if (!initial_path.empty()) {
         DWORD attr = GetFileAttributesW(initial_path.c_str());
         if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
-            // Directory: scan and enter grid mode
-            m_index.scan(initial_path, m_recursive);
-            save_last_dir(initial_path);
-            if (!m_index.empty()) {
-                m_current_idx = 0;
-                m_current_path = m_index.path_at(0);
-                m_has_image = true;
-                toggle_grid();
-            }
+            open_directory(initial_path);
         } else {
             open_image(initial_path);
         }
     }
 
     int ret = m_window.run();
+    stop_metadata_loader();
     stop_preloader();
     return ret;
 }
@@ -389,7 +460,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         float dpi_s = m_renderer.is_valid()
             ? static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f : 1.0f;
         int th = static_cast<int>(m_title_h * dpi_s);
-        if (pt.y >= 0 && pt.y < th) {
+        if (toolbar_visible() && pt.y >= 0 && pt.y < th) {
             float tw = static_cast<float>(m_renderer.target_size().width);
             float btn_w = 46.0f * dpi_s;
             float cx = tw - btn_w;
@@ -431,32 +502,32 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
             if (pidl) {
                 wchar_t dir[MAX_PATH];
-                if (SHGetPathFromIDListW(pidl, dir)) open_image(dir);
+                if (SHGetPathFromIDListW(pidl, dir)) open_directory(dir);
                 CoTaskMemFree(pidl);
             }
             return 0;
         }
         case IDM_EXIT: DestroyWindow(hwnd); return 0;
-        case IDM_GRID: if (!m_index.empty()) toggle_grid(); return 0;
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); return 0;
-        case IDM_RECURSIVE: toggle_recursive(); return 0;
+        case IDM_RECURSIVE:
+            if (m_grid_mode || (!m_has_image && !m_index.directory().empty())) toggle_recursive();
+            return 0;
         case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
         case IDM_INFO:         toggle_info(); return 0;
-        case IDM_SORT_NAME:   set_sort_mode(SortMode::Name);   return 0;
-        case IDM_SORT_DATE:   set_sort_mode(SortMode::Date);   return 0;
-        case IDM_SORT_SIZE:   set_sort_mode(SortMode::Size);   return 0;
-        case IDM_SORT_RANDOM: set_sort_mode(SortMode::Random); return 0;
-        case IDM_COPY:
-            if (m_grid_mode && has_selection()) copy_selected();
-            else copy_to_clipboard();
-            return 0;
+        case IDM_SORT_NAME:   if (m_grid_mode) set_sort_mode(SortMode::Name);   return 0;
+        case IDM_SORT_DATE:   if (m_grid_mode) set_sort_mode(SortMode::Date);   return 0;
+        case IDM_SORT_SIZE:   if (m_grid_mode) set_sort_mode(SortMode::Size);   return 0;
+        case IDM_SORT_RANDOM: if (m_grid_mode) set_sort_mode(SortMode::Random); return 0;
+        case IDM_COPY_IMAGE:  copy_image_data(); return 0;
+        case IDM_COPY_PATH:   copy_file_paths(); return 0;
+        case IDM_CREATE_COPY: create_file_copies(); return 0;
         case IDM_DELETE:
             if (m_grid_mode && has_selection()) delete_selected(false);
-            else delete_current_file(false);
+            else if (!m_grid_mode) delete_current_file(false);
             return 0;
         case IDM_DELETE_PERM:
             if (m_grid_mode && has_selection()) delete_selected(true);
-            else delete_current_file(true);
+            else if (!m_grid_mode) delete_current_file(true);
             return 0;
         case IDM_EXPLORER: open_in_explorer(); return 0;
         case IDM_ABOUT:
@@ -469,7 +540,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_SIZE: {
         uint32_t w = LOWORD(lp), h = HIWORD(lp);
-        if (w > 0 && h > 0) m_renderer.resize(w, h);
+        if (w > 0 && h > 0) {
+            if (!m_renderer.resize(w, h)) m_window.invalidate();
+            m_grid_layout_dirty = true;
+        }
         return 0;
     }
     case WM_PAINT:
@@ -518,9 +592,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int mid_y = (rc.top + rc.bottom) / 2;
             COLORREF sep_c = RGB(60, 60, 65);
             HPEN pen = CreatePen(PS_SOLID, 1, sep_c);
-            SelectObject(hdc, pen);
+            HGDIOBJ old_pen = SelectObject(hdc, pen);
             MoveToEx(hdc, rc.left + static_cast<int>(28 * dpi), mid_y, nullptr);
             LineTo(hdc, rc.right - 4, mid_y);
+            SelectObject(hdc, old_pen);
             DeleteObject(pen);
             return TRUE;
         }
@@ -546,9 +621,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             HFONT f = CreateFontW(-MulDiv(12, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH, L"Segoe UI");
-            SelectObject(hdc, f);
+            HGDIOBJ old_font = SelectObject(hdc, f);
             SetBkMode(hdc, TRANSPARENT);
             DrawTextW(hdc, L"\x2713", 1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, old_font);
             DeleteObject(f);
         }
 
@@ -560,20 +636,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         HFONT f2 = CreateFontW(-MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH, L"Microsoft YaHei");
-        SelectObject(hdc, f2);
+        HGDIOBJ old_font = SelectObject(hdc, f2);
         SetBkMode(hdc, TRANSPARENT);
         DrawTextW(hdc, d->text.c_str(), -1, &text_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         // Shortcut
         if (!d->shortcut.empty()) {
             SetTextColor(hdc, disabled ? RGB(80,80,85) : RGB(160,160,168));
-            HFONT f3 = CreateFontW(-MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH, L"Microsoft YaHei");
-            SelectObject(hdc, f3);
             DrawTextW(hdc, d->shortcut.c_str(), -1, &text_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            DeleteObject(f3);
         }
+        SelectObject(hdc, old_font);
         DeleteObject(f2);
         return TRUE;
     }
@@ -581,6 +653,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
             m_scroll_active = false;
+            KillTimer(hwnd, 1);
+            m_grid_timer = 0;
             m_window.invalidate();
         }
         if (wp == 2) {
@@ -619,9 +693,32 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
 
+    case WM_THUMB_READY:
+        if (m_grid_mode) m_window.invalidate();
+        return 0;
+
+    case WM_METADATA_READY:
+        apply_metadata_result();
+        return 0;
+
+    case WM_RENDER_RETRY:
+        m_window.invalidate();
+        return 0;
+
     case WM_DPICHANGED: {
         float dpi = static_cast<float>(LOWORD(wp));
         m_renderer.set_dpi(dpi, dpi);
+        float scale = dpi / 96.0f;
+        m_thumb_cell  = static_cast<int>(200 * scale);
+        m_thumb_size  = static_cast<int>(400 * scale);
+        m_thumb_gap_h = static_cast<int>(8 * scale);
+        m_thumb_gap_v = static_cast<int>(16 * scale);
+        m_thumb_pad   = static_cast<int>(8 * scale);
+        m_cell_size   = m_thumb_cell + m_thumb_gap_h;
+        m_panel_width = static_cast<int>(280 * scale);
+        m_toolbar_h   = static_cast<int>(m_title_h * scale);
+        m_grid_layout_dirty = true;
+        update_content_viewport(false);
         // Resize to suggested rect
         RECT* rc = reinterpret_cast<RECT*>(lp);
         if (rc) {
@@ -649,27 +746,28 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_MOUSEWHEEL: {
+        float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
+        POINT wheel_pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        ScreenToClient(hwnd, &wheel_pt);
+        int panel_w = visible_panel_width();
+        int panel_x = static_cast<int>(m_renderer.target_size().width) - panel_w;
+        if (panel_w > 0 && wheel_pt.x >= panel_x) {
+            m_panel_scroll_y -= delta * 40.0f;
+            if (m_panel_scroll_y < 0) m_panel_scroll_y = 0;
+            float panel_top = m_renderer.content_top();
+            float max_scroll = std::max(0.0f,
+                m_panel_total_h - (m_renderer.target_size().height - panel_top));
+            if (m_panel_scroll_y > max_scroll) m_panel_scroll_y = max_scroll;
+            m_window.invalidate();
+            return 0;
+        }
         if (m_grid_mode) {
-            float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
             bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-
-            // Check if mouse is over side panel
-            POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-            ScreenToClient(hwnd, &pt);
-            int ww = static_cast<int>(m_renderer.target_size().width);
-            int px = ww - static_cast<int>(m_panel_width);
-            if (pt.x >= px && m_panel_width > 0) {
-                m_panel_scroll_y -= delta * 40.0f;
-                if (m_panel_scroll_y < 0) m_panel_scroll_y = 0;
-                float max_scroll = std::max(0.0f, m_panel_total_h - (m_renderer.target_size().height - (float)m_toolbar_h));
-                if (m_panel_scroll_y > max_scroll) m_panel_scroll_y = max_scroll;
-                m_window.invalidate();
-                return 0;
-            }
 
             if (ctrl) {
                 // Ctrl+Wheel = zoom thumbnail size
                 m_thumb_zoom = std::clamp(m_thumb_zoom + delta * 0.1f, 0.4f, 3.0f);
+                m_grid_layout_dirty = true;
                 m_window.invalidate();
                 return 0;
             }
@@ -679,49 +777,55 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int max_scroll = std::max(0, m_grid_total_h - (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h));
             if (m_grid_scroll_y > max_scroll) m_grid_scroll_y = max_scroll;
             m_scroll_active = true;
+            if (m_grid_timer) KillTimer(hwnd, m_grid_timer);
+            m_grid_timer = SetTimer(hwnd, 1, 80, nullptr);
             m_window.invalidate();
             return 0;
         }
         if (!m_has_image) return 0;
-        float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
 
         if (ctrl) {
             // Ctrl+Wheel = zoom (cursor-centered)
             float factor = (delta > 0) ? 1.15f : 1.0f / 1.15f;
-            POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-            ScreenToClient(hwnd, &pt);
             uint32_t iw, ih; m_renderer.image_size(iw, ih);
             if (iw == 0 || ih == 0) return 0;
             float old_scale = m_renderer.scale();
             float new_scale = std::clamp(old_scale * factor, m_renderer.fit_scale(), 100.0f);
             if (new_scale == old_scale) return 0;
             D2D1_SIZE_U ts = m_renderer.target_size();
-            float img_x = (ts.width  - iw * old_scale) / 2.0f;
-            float img_y = (ts.height - ih * old_scale) / 2.0f + m_renderer.scroll_y();
-            float img_cx = (pt.x - img_x) / old_scale;
-            float img_cy = (pt.y - img_y) / old_scale;
-            float new_img_x = pt.x - img_cx * new_scale;
-            float new_img_y = pt.y - img_cy * new_scale;
+            float view_w = m_renderer.content_width();
+            float view_top = m_renderer.content_top();
+            float view_h = static_cast<float>(ts.height) - view_top;
+            float img_x = (view_w - iw * old_scale) / 2.0f + m_renderer.offset_x();
+            float img_y = view_top + (view_h - ih * old_scale) / 2.0f
+                + m_renderer.offset_y() + m_renderer.scroll_y();
+            float img_cx = (wheel_pt.x - img_x) / old_scale;
+            float img_cy = (wheel_pt.y - img_y) / old_scale;
+            float new_img_x = wheel_pt.x - img_cx * new_scale;
+            float new_img_y = wheel_pt.y - img_cy * new_scale;
             m_renderer.set_scale(new_scale);
             m_renderer.set_offset(
-                new_img_x - (ts.width  - iw * new_scale) / 2.0f,
-                new_img_y - (ts.height - ih * new_scale) / 2.0f);
+                new_img_x - (view_w - iw * new_scale) / 2.0f,
+                new_img_y - view_top - (view_h - ih * new_scale) / 2.0f
+                    - m_renderer.scroll_y());
         } else {
             uint32_t iw, ih; m_renderer.image_size(iw, ih);
             if (iw == 0 || ih == 0) return 0;
             float cur_scale = m_renderer.scale();
             float fit = m_renderer.fit_scale();
-            bool zoomed = (cur_scale > fit * 1.02f);
+            bool zoomed = is_image_zoomed(cur_scale, fit);
 
             if (zoomed) {
                 // Zoomed in: scroll vertically, clamped to image bounds
                 float scaled_h = ih * cur_scale;
                 float win_h = static_cast<float>(m_renderer.target_size().height);
-                float center_y = (win_h - scaled_h) / 2.0f + m_renderer.offset_y();
+                float view_top = m_renderer.content_top();
+                float center_y = view_top + (win_h - view_top - scaled_h) / 2.0f
+                    + m_renderer.offset_y();
                 float sy = m_renderer.scroll_y() - delta * 50.0f;
-                // Clamp: image top <= window top, image bottom >= window bottom
-                float max_scroll = -center_y;           // image top at window top
+                // Clamp to the image viewport below the toolbar.
+                float max_scroll = view_top - center_y;
                 float min_scroll = win_h - scaled_h - center_y; // image bottom at window bottom
                 if (sy > max_scroll) sy = max_scroll;
                 if (sy < min_scroll) sy = min_scroll;
@@ -742,7 +846,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int ty2 = GET_Y_LPARAM(lp);
             float ts = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
             int th = static_cast<int>(m_title_h * ts);
-            if (ty2 < th) {
+            if (toolbar_visible() && ty2 < th) {
                 int tx2 = GET_X_LPARAM(lp);
                 float tw2 = static_cast<float>(m_renderer.target_size().width);
                 float bw = 46.0f * ts;
@@ -773,11 +877,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         // Below title bar: panel, grid clicks
         int ty = GET_Y_LPARAM(lp);
-        if (ty < m_toolbar_h) {
+        if (toolbar_visible() && ty < m_toolbar_h) {
             return 0;  // title bar area already handled above
         }
         // Panel value click → copy + brief highlight + toast
-        if (m_grid_mode && !m_panel_clickable.empty()) {
+        if (m_panel_expanded && !m_panel_clickable.empty()) {
             int tx = GET_X_LPARAM(lp);
             for (int i = 0; i < static_cast<int>(m_panel_clickable.size()); ++i) {
                 auto& pc = m_panel_clickable[i];
@@ -812,7 +916,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Scrollbar click in grid mode?
         if (m_grid_mode) {
             int sb_zone2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
-            int sb_x = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone2;
+            int sb_x = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone2;
             int sx = GET_X_LPARAM(lp);
             if (sx >= sb_x && sx < sb_x + sb_zone2 && ty >= m_toolbar_h &&
                 ty < static_cast<int>(m_renderer.target_size().height)) {
@@ -824,9 +928,23 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode) {
             bool sd = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             bool cd = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), sd, cd)) return 0;
+            int clicked = grid_hit_test(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            if (clicked < 0) return 0;
+            bool clicked_selected = clicked < static_cast<int>(m_selected.size())
+                && m_selected[static_cast<size_t>(clicked)];
+            if (should_preserve_selection_for_drag(clicked_selected, sd, cd)) {
+                m_grid_sel = clicked;
+                m_drag_deferred_select = clicked;
+                m_window.invalidate();
+            } else {
+                select_item(clicked, sd, cd);
+                m_drag_deferred_select = -1;
+            }
+        } else {
+            m_drag_deferred_select = -1;
         }
-        if (!m_has_image) return -1;
+        m_drag_paths = selected_paths();
+        if (m_drag_paths.empty()) return -1;
         m_drag_start_x = GET_X_LPARAM(lp);
         m_drag_start_y = GET_Y_LPARAM(lp);
         m_drag_pending = true;
@@ -842,6 +960,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_MOUSEMOVE:
+        if (m_fullscreen && !m_grid_mode) {
+            int mouse_y = GET_Y_LPARAM(lp);
+            bool reveal = m_toolbar_revealed;
+            if (!reveal && mouse_y <= 2) reveal = true;
+            else if (reveal && mouse_y > m_toolbar_h + 8) reveal = false;
+            if (reveal != m_toolbar_revealed) {
+                m_toolbar_revealed = reveal;
+                m_window.invalidate();
+            }
+        }
         // Scrollbar drag
         if (m_scrollbar_dragging) {
             int dy = GET_Y_LPARAM(lp) - m_scrollbar_drag_y;
@@ -861,7 +989,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_grid_mode) {
             int ty2 = GET_Y_LPARAM(lp);
             int sb_zone2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
-            int sb_x2 = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone2;
+            int sb_x2 = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone2;
             int tx2 = GET_X_LPARAM(lp);
             bool in_sb = (tx2 >= sb_x2 && tx2 < sb_x2 + sb_zone2 && ty2 >= m_toolbar_h &&
                           ty2 < static_cast<int>(m_renderer.target_size().height));
@@ -875,7 +1003,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int ty = GET_Y_LPARAM(lp);
             int prev = m_toolbar_active;
             m_toolbar_active = -1;
-            if (ty >= 0 && ty < m_toolbar_h) {
+            if (toolbar_visible() && ty >= 0 && ty < m_toolbar_h) {
                 float dpi_m = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
                 int tx = GET_X_LPARAM(lp);
                 // Menu items start after "MinView" title
@@ -896,14 +1024,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int dy = GET_Y_LPARAM(lp) - m_drag_start_y;
             if (dx*dx + dy*dy >= 16) {
                 m_drag_pending = false;
-                if (!m_current_path.empty()) {
+                if (!m_drag_paths.empty()) {
                     ReleaseCapture();
-                    FileDataObject* data = new FileDataObject(m_current_path);
+                    FileDataObject* data = new FileDataObject(m_drag_paths);
                     SimpleDropSource* src = new SimpleDropSource();
                     DWORD effect;
                     DoDragDrop(data, src, DROPEFFECT_COPY, &effect);
                     data->Release();
                     src->Release();
+                    m_drag_paths.clear();
+                    m_drag_deferred_select = -1;
                     SetCursor(LoadCursor(nullptr, IDC_ARROW));
                 }
                 return 0;
@@ -917,7 +1047,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int th2 = static_cast<int>(m_title_h * ts2);
             int prev_btn = m_title_btn_hover;
             m_title_btn_hover = -1;
-            if (ty3 >= 0 && ty3 < th2) {
+            if (toolbar_visible() && ty3 >= 0 && ty3 < th2) {
                 int tx3 = GET_X_LPARAM(lp);
                 float tw3 = static_cast<float>(m_renderer.target_size().width);
                 float bw2 = 46.0f * ts2;
@@ -950,8 +1080,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (m_drag_pending) {
             m_drag_pending = false;
+            m_drag_paths.clear();
             ReleaseCapture();
+            if (m_drag_deferred_select >= 0)
+                select_item(m_drag_deferred_select, false, false);
         }
+        m_drag_deferred_select = -1;
         return 0;
 
     case WM_LBUTTONDBLCLK:
@@ -965,7 +1099,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        if (m_has_image) { start_transition(hwnd, false); begin_animation(hwnd); toggle_grid(); m_anim_action = ACT_NONE; return 0; }
+        if (m_has_image) {
+            m_from_grid = false;
+            start_transition(hwnd, false);
+            begin_animation(hwnd);
+            toggle_grid();
+            m_anim_action = ACT_NONE;
+            return 0;
+        }
         return 0;
 
     case WM_KEYDOWN: {
@@ -989,10 +1130,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             case 'C':
-                if (m_grid_mode && has_selection()) copy_selected();
-                else copy_to_clipboard();
+                copy_image_data();
                 return 0;
-            case 'R': toggle_recursive(); return 0;
+            case 'R':
+                if (m_grid_mode || (!m_has_image && !m_index.directory().empty())) toggle_recursive();
+                return 0;
             }
             return -1;
         }
@@ -1002,7 +1144,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_animating) return 0;  // TODO: re-enable interrupt
             if (m_from_grid) {
                 m_from_grid = false;
-                m_temp_preview = false;
                 start_transition(hwnd, false);
                 begin_animation(hwnd);
                 toggle_grid();
@@ -1016,7 +1157,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_animating) return 0;  // TODO: re-enable interrupt
             if (m_from_grid) {
                 m_from_grid = false;
-                m_temp_preview = false;
                 start_transition(hwnd, false);
                 begin_animation(hwnd);
                 toggle_grid();
@@ -1040,21 +1180,21 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_mode) { toggle_thumb_square(); return 0; }
             return -1;
         case 'L':
-            if (m_grid_mode) { m_show_labels = !m_show_labels; m_window.invalidate(); return 0; }
+            if (m_grid_mode) { m_show_labels = !m_show_labels; m_grid_layout_dirty = true; m_window.invalidate(); return 0; }
             return -1;
         case 'I':
             toggle_info(); return 0;
         case 'N':
-            if (!ctrl) { set_sort_mode(SortMode::Name); return 0; }
+            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Name); return 0; }
             return -1;
         case 'D':
-            if (!ctrl) { set_sort_mode(SortMode::Date); return 0; }
+            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Date); return 0; }
             return -1;
         case 'S':
-            if (!ctrl) { set_sort_mode(SortMode::Size); return 0; }
+            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Size); return 0; }
             return -1;
         case 'R':
-            if (!ctrl) { set_sort_mode(SortMode::Random); return 0; }
+            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Random); return 0; }
             return -1;
         case VK_LEFT:
             if (m_grid_mode) { grid_navigate(-1, shift); return 0; }
@@ -1069,15 +1209,15 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_mode) { grid_navigate(m_grid_cols, shift); return 0; }
             return -1;
         case VK_HOME:
-            if (m_grid_mode) { m_grid_sel = 0; grid_ensure_visible(); m_window.invalidate(); return 0; }
+            if (m_grid_mode) { select_item(0, shift, false); grid_ensure_visible(); return 0; }
             navigate_to(0); return 0;
         case VK_END:
-            if (m_grid_mode) { m_grid_sel = static_cast<int>(m_index.size()) - 1; grid_ensure_visible(); m_window.invalidate(); return 0; }
+            if (m_grid_mode) { select_item(static_cast<int>(m_index.size()) - 1, shift, false); grid_ensure_visible(); return 0; }
             navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
         case VK_DELETE:
             if (m_grid_mode && has_selection()) {
                 delete_selected(shift);
-            } else {
+            } else if (!m_grid_mode) {
                 delete_current_file(shift);
             }
             return 0;
@@ -1113,9 +1253,75 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 // ── Image loading ────────────────────────────────────────────
 
-void App::open_image(const std::wstring& path) {
+void App::open_directory(const std::wstring& path) {
+    if (path.empty()) return;
+    if (m_thumb_running) stop_thumb_loader();
+    if (m_grid_timer) {
+        KillTimer(m_window.handle(), m_grid_timer);
+        m_grid_timer = 0;
+    }
+
+    m_grid_mode = false;
+    m_from_grid = false;
+    m_has_image = false;
+    m_current_path.clear();
+    m_current_wic.Reset();
+    m_current_idx = -1;
+    m_grid_sel = -1;
+    m_grid_saved_idx = -1;
+    m_grid_scroll_y = 0;
+    m_grid_scroll_saved = 0;
+    m_selected.clear();
+    m_sel_anchor = -1;
+    m_thumbs.clear();
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_panel_path.clear();
+    m_grid_layout_dirty = true;
+
+    bool recursive_empty_root = false;
+    if (m_recursive) {
+        ImageIndex direct_index;
+        int direct_result = direct_index.scan(path, false);
+        recursive_empty_root = direct_result == 0;
+    }
+
+    int result = m_index.scan(path, m_recursive);
+    if (result < 0) {
+        update_content_viewport(true);
+        m_window.invalidate();
+        return;
+    }
+    save_last_dir(path);
+    if (!m_index.empty()) {
+        if (!recursive_empty_root) {
+            m_current_idx = 0;
+            m_current_path = m_index.path_at(0);
+            m_has_image = true;
+        }
+        toggle_grid();
+    } else {
+        update_content_viewport(true);
+        update_title();
+        m_window.invalidate();
+    }
+}
+
+bool App::open_image(const std::wstring& path) {
+    DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        open_directory(path);
+        return true;
+    }
     try {
-        m_using_thumb_preview = false;
+        // A recursive grid can contain files from many child directories.  Keep
+        // that root index intact when opening one of its existing entries.
+        int indexed_position = m_index.index_of(path);
+
+        auto bitmap = get_preloaded(path);
+        if (!bitmap) bitmap = m_decoder.decode(path);
+        bitmap = m_decoder.materialize(bitmap.Get());
+        if (!m_renderer.upload_image(bitmap.Get())) return false;
 
         // Exit grid mode if active (file dialog, drag-drop, IPC)
         if (m_grid_mode) {
@@ -1126,28 +1332,24 @@ void App::open_image(const std::wstring& path) {
             if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
             stop_thumb_loader();
         }
-
-        // Try preload cache first
-        auto cached = get_preloaded(path);
-        if (cached) {
-            m_renderer.upload_image(cached.Get());
-        } else {
-            auto bitmap = m_decoder.decode(path);
-            m_renderer.upload_image(bitmap.Get());
-        }
-        m_current_path = path;
-        m_has_image = true;
+        update_content_viewport(false);
+        fit_to_window();
+        m_current_wic = bitmap;
 
         namespace fs = std::filesystem;
         fs::path p(path);
         std::wstring dir = p.parent_path().wstring();
         if (dir.empty()) dir = L".";
 
-        if (m_index.directory() != dir) {
+        if (indexed_position < 0) {
+            if (m_thumb_running) stop_thumb_loader();
             m_index.scan(dir, m_recursive);
             save_last_dir(dir);
+            indexed_position = m_index.index_of(path);
         }
-        m_current_idx = m_index.index_of(path);
+        commit_current_image_identity(path, indexed_position,
+            m_current_path, m_current_idx, m_has_image);
+        m_from_grid = m_current_idx >= 0;
 
         update_title();
 
@@ -1155,8 +1357,10 @@ void App::open_image(const std::wstring& path) {
         preload_neighbors();
 
         m_window.invalidate();
+        return true;
     } catch (const std::exception&) {
         update_title();
+        return false;
     }
 }
 
@@ -1169,7 +1373,6 @@ void App::navigate_to(int idx) {
     if (idx < 0 || idx >= static_cast<int>(m_index.size())) return;
     const auto& path = m_index.path_at(idx);
     if (path.empty()) return;
-    m_show_info = false;
     open_image(path);
 }
 
@@ -1185,7 +1388,16 @@ void App::toggle_recursive() {
     }
     if (dir.empty()) return;
 
-    m_index.scan(dir, m_recursive);
+    std::wstring selected_path;
+    if (m_grid_mode && m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
+        selected_path = m_index.path_at(m_grid_sel);
+    std::vector<std::wstring> selected_before;
+    if (m_grid_mode) selected_before = selected_paths();
+
+    const bool was_grid = m_grid_mode;
+    if (was_grid) stop_thumb_loader();
+
+    int scan_result = m_index.scan(dir, m_recursive);
     save_last_dir(dir);
 
     // Re-locate current image in new index
@@ -1194,20 +1406,31 @@ void App::toggle_recursive() {
     }
 
     // Reset grid thumbnails for new file list
-    if (m_grid_mode) {
-        stop_thumb_loader();
+    if (was_grid) {
         m_thumbs.clear();
         m_thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
+        m_thumb_d2d_use.clear();
+        m_grid_layout_dirty = true;
         m_last_cached_sel = -1;
-        m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
-        clear_selection();
-        m_selected.resize(m_index.size(), false);
-        if (m_grid_sel < static_cast<int>(m_index.size()))
-            m_selected[m_grid_sel] = true;
+        m_grid_sel = selected_path.empty() ? -1 : m_index.index_of(selected_path);
+        m_selected.assign(m_index.size(), false);
+        for (const auto& path : selected_before) {
+            int index = m_index.index_of(path);
+            if (index >= 0) m_selected[static_cast<size_t>(index)] = true;
+        }
         m_sel_anchor = m_grid_sel;
         start_thumb_loader();
-        grid_ensure_visible();
+        if (m_grid_sel >= 0) grid_ensure_visible();
+    } else if (scan_result > 0 && !m_has_image) {
+        // An empty root can become browsable only after recursive scanning.
+        // Enter the grid without manufacturing a default selection.
+        m_current_idx = -1;
+        m_current_path.clear();
+        m_grid_saved_idx = -1;
+        m_grid_sel = -1;
+        m_has_image = false;
+        toggle_grid();
     }
 
     update_title();
@@ -1219,6 +1442,13 @@ void App::toggle_recursive() {
 void App::set_sort_mode(SortMode mode) {
     if (m_index.empty()) return;
     std::wstring current = m_current_path;
+    std::wstring selected_path;
+    if (m_grid_mode && m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
+        selected_path = m_index.path_at(m_grid_sel);
+    std::vector<std::wstring> selected_before;
+    if (m_grid_mode) selected_before = selected_paths();
+
+    if (m_grid_mode) stop_thumb_loader();
     m_index.sort_by(mode);
 
     // Re-locate current image
@@ -1228,19 +1458,21 @@ void App::set_sort_mode(SortMode mode) {
 
     // Reset grid if in grid mode (thumbnails need reload)
     if (m_grid_mode) {
-        stop_thumb_loader();
         m_thumbs.clear();
         m_thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
+        m_thumb_d2d_use.clear();
+        m_grid_layout_dirty = true;
         m_last_cached_sel = -1;
-        m_grid_sel = m_current_idx >= 0 ? m_current_idx : 0;
-        clear_selection();
-        m_selected.resize(m_index.size(), false);
-        if (m_grid_sel < static_cast<int>(m_index.size()))
-            m_selected[m_grid_sel] = true;
+        m_grid_sel = selected_path.empty() ? -1 : m_index.index_of(selected_path);
+        m_selected.assign(m_index.size(), false);
+        for (const auto& path : selected_before) {
+            int index = m_index.index_of(path);
+            if (index >= 0) m_selected[static_cast<size_t>(index)] = true;
+        }
         m_sel_anchor = m_grid_sel;
         start_thumb_loader();
-        grid_ensure_visible();
+        if (m_grid_sel >= 0) grid_ensure_visible();
     }
 
     update_title();
@@ -1308,9 +1540,13 @@ void App::preload_neighbors() {
 // ── Delete ───────────────────────────────────────────────────
 
 void App::delete_current_file(bool permanent) {
-    if (!m_has_image || m_current_path.empty()) return;
+    if (!can_delete_current_image(m_has_image, m_current_path)) return;
 
-    std::wstring from = m_current_path;
+    const bool loader_was_running = m_thumb_running;
+    if (loader_was_running) stop_thumb_loader();
+
+    const std::wstring deleted_path = m_current_path;
+    std::wstring from = deleted_path;
     from.push_back(L'\0'); from.push_back(L'\0');
 
     SHFILEOPSTRUCTW fos = {};
@@ -1319,23 +1555,56 @@ void App::delete_current_file(bool permanent) {
     fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
     if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
 
-    if (SHFileOperationW(&fos) != 0) return;
-
-    m_index.remove(m_current_idx);
-
-    if (m_index.empty()) {
-        m_has_image = false;
-        m_current_path.clear();
-        m_current_idx = -1;
-        update_title();
-        m_window.invalidate();
+    const int shell_result = SHFileOperationW(&fos);
+    const bool removed = path_is_confirmed_missing(deleted_path);
+    const bool complete = delete_fully_completed(
+        shell_result, fos.fAnyOperationsAborted != FALSE, 1, removed ? 1 : 0);
+    if (!removed) {
+        if (loader_was_running) start_thumb_loader();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除未完成，文件仍保留在列表中。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
         return;
     }
 
-    if (m_current_idx >= static_cast<int>(m_index.size()))
-        m_current_idx = static_cast<int>(m_index.size()) - 1;
+    const int removed_index = m_index.index_of(deleted_path);
+    if (removed_index >= 0) m_index.remove_many({removed_index});
+    m_thumbs.clear();
+    m_thumbs.resize(m_index.size());
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_grid_layout_dirty = true;
 
-    open_image(m_index.path_at(m_current_idx));
+    m_current_wic.Reset();
+    const PostDeleteTransitionResult transition = run_post_delete_transition(
+        deleted_path, removed_index, static_cast<int>(m_index.size()),
+        [this](int index) { return m_index.path_at(index); },
+        [this](const std::wstring& path, int) { return open_image(path); },
+        m_current_path, m_current_idx, m_has_image);
+
+    if (!transition.successor_attempted) {
+        update_title();
+        m_window.invalidate();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
+        return;
+    }
+
+    if (!transition.successor_opened) {
+        update_title();
+        m_window.invalidate();
+    }
+    if (loader_was_running) start_thumb_loader();
+    if (!complete) {
+        MessageBoxW(m_window.handle(),
+            L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+            MB_OK | MB_ICONWARNING);
+    }
 }
 
 // ── Context menu ─────────────────────────────────────────────
@@ -1344,29 +1613,36 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
 
-    if (m_has_image) {
+    auto paths = selected_paths();
+    if (!paths.empty()) {
+        UINT copy_flags = MF_STRING | (paths.size() == 1 ? 0 : MF_GRAYED);
         AppendMenuW(menu, MF_STRING, 1, L"\u5728\u8D44\u6E90\u7BA1\u7406\u5668\u4E2D\u6253\u5F00");
-        AppendMenuW(menu, MF_STRING, 2, L"\u590D\u5236\u56FE\u7247	Ctrl+C");
+        AppendMenuW(menu, copy_flags, 2, L"\u590D\u5236	Ctrl+C");
+        AppendMenuW(menu, MF_STRING, 8, L"\u590D\u5236\u6587\u4EF6\u8DEF\u5F84");
+        AppendMenuW(menu, MF_STRING, 9, L"\u521B\u5EFA\u526F\u672C");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
-        // Sort submenu
-        HMENU sort_menu = CreatePopupMenu();
-        auto sm = m_index.sort_mode();
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Name   ? MF_CHECKED : 0), 10, L"\u6309\u540D\u79F0	N");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Date   ? MF_CHECKED : 0), 11, L"\u6309\u65E5\u671F	D");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Size   ? MF_CHECKED : 0), 12, L"\u6309\u5927\u5C0F	S");
-        AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Random ? MF_CHECKED : 0), 13, L"\u968F\u673A\u6253\u4E71	R");
-        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"\u6392\u5E8F\u65B9\u5F0F");
+        if (m_grid_mode) {
+            HMENU sort_menu = CreatePopupMenu();
+            auto sm = m_index.sort_mode();
+            AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Name   ? MF_CHECKED : 0), 10, L"\u6309\u540D\u79F0	N");
+            AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Date   ? MF_CHECKED : 0), 11, L"\u6309\u65E5\u671F	D");
+            AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Size   ? MF_CHECKED : 0), 12, L"\u6309\u5927\u5C0F	S");
+            AppendMenuW(sort_menu, MF_STRING | (sm == SortMode::Random ? MF_CHECKED : 0), 13, L"\u968F\u673A\u6253\u4E71	R");
+            AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sort_menu), L"\u6392\u5E8F\u65B9\u5F0F");
+        }
 
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, 3, L"\u5220\u9664	Del");
         AppendMenuW(menu, MF_STRING, 4, L"\u6C38\u4E45\u5220\u9664	Shift+Del");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(menu, MF_STRING, 7, L"\u67E5\u770B\u751F\u6210\u4FE1\u606F	I");
+        AppendMenuW(menu, MF_STRING, 7, L"\u5C55\u5F00/\u6536\u8D77\u4FE1\u606F\u9762\u677F	I");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        UINT flags = MF_STRING;
-        if (m_recursive) flags |= MF_CHECKED;
-        AppendMenuW(menu, flags, 6, L"\u9012\u5F52\u6D4F\u89C8	Ctrl+R");
+        if (m_grid_mode) {
+            UINT flags = MF_STRING;
+            if (m_recursive) flags |= MF_CHECKED;
+            AppendMenuW(menu, flags, 6, L"\u9012\u5F52\u6D4F\u89C8	Ctrl+R");
+        }
     } else {
         AppendMenuW(menu, MF_STRING, 5, L"\u6253\u5F00\u6587\u4EF6...");
     }
@@ -1384,16 +1660,18 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
 
     switch (cmd) {
     case 1: open_in_explorer();         break;
-    case 2: copy_to_clipboard();        break;
-    case 3: delete_current_file(false); break;
-    case 4: delete_current_file(true);  break;
+    case 2: copy_image_data();          break;
+    case 8: copy_file_paths();          break;
+    case 9: create_file_copies();       break;
+    case 3: if (m_grid_mode) delete_selected(false); else delete_current_file(false); break;
+    case 4: if (m_grid_mode) delete_selected(true); else delete_current_file(true); break;
     case 5: {
         // Open File dialog
         OPENFILENAMEW ofn = {};
         wchar_t file[MAX_PATH] = {};
         ofn.lStructSize = sizeof(ofn);
         ofn.hwndOwner = hwnd;
-        ofn.lpstrFilter = L"Images\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tiff;*.tif\0All Files\0*.*\0";
+        ofn.lpstrFilter = L"\u56FE\u7247\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tiff;*.tif\0\u6240\u6709\u6587\u4EF6\0*.*\0";
         ofn.lpstrFile = file;
         ofn.nMaxFile  = MAX_PATH;
         ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
@@ -1402,12 +1680,12 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         }
         break;
     }
-    case 6: toggle_recursive(); break;
+    case 6: if (m_grid_mode) toggle_recursive(); break;
     case 7: toggle_info(); break;
-    case 10: set_sort_mode(SortMode::Name);   break;
-    case 11: set_sort_mode(SortMode::Date);   break;
-    case 12: set_sort_mode(SortMode::Size);   break;
-    case 13: set_sort_mode(SortMode::Random); break;
+    case 10: if (m_grid_mode) set_sort_mode(SortMode::Name);   break;
+    case 11: if (m_grid_mode) set_sort_mode(SortMode::Date);   break;
+    case 12: if (m_grid_mode) set_sort_mode(SortMode::Size);   break;
+    case 13: if (m_grid_mode) set_sort_mode(SortMode::Random); break;
     }
 
     DestroyMenu(menu);
@@ -1430,9 +1708,10 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     switch (idx) {
     case 0: // 文件
         AddOwnerItem(popup, IDM_OPEN_FILE, L"打开文件...	Ctrl+O");
+        AddOwnerItem(popup, IDM_OPEN_FOLDER, L"打开文件夹...");
         AddOwnerSeparator(popup);
         {
-            bool has_sel = !m_grid_mode || m_grid_sel >= 0;
+            bool has_sel = !primary_path().empty();
             AddOwnerItem(popup, IDM_EXPLORER, L"在资源管理器中打开", has_sel ? false : true);
         }
         break;
@@ -1442,22 +1721,27 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         {
             HMENU sort_menu = CreatePopupMenu();
             SortMode cur = m_index.sort_mode();
-            AddOwnerItem(sort_menu, IDM_SORT_NAME,   L"按名称排序	N", false, cur == SortMode::Name);
-            AddOwnerItem(sort_menu, IDM_SORT_DATE,   L"按日期排序	D", false, cur == SortMode::Date);
-            AddOwnerItem(sort_menu, IDM_SORT_SIZE,   L"按大小排序	S", false, cur == SortMode::Size);
-            AddOwnerItem(sort_menu, IDM_SORT_RANDOM, L"随机排序	R", false, cur == SortMode::Random);
+            AddOwnerItem(sort_menu, IDM_SORT_NAME,   L"按名称排序	N", !m_grid_mode, cur == SortMode::Name);
+            AddOwnerItem(sort_menu, IDM_SORT_DATE,   L"按日期排序	D", !m_grid_mode, cur == SortMode::Date);
+            AddOwnerItem(sort_menu, IDM_SORT_SIZE,   L"按大小排序	S", !m_grid_mode, cur == SortMode::Size);
+            AddOwnerItem(sort_menu, IDM_SORT_RANDOM, L"随机排序	R", !m_grid_mode, cur == SortMode::Random);
             BuildOwnerMenu(popup, sort_menu, L"排序方式");
         }
         AddOwnerSeparator(popup);
-        AddOwnerItem(popup, IDM_RECURSIVE, L"递归浏览子文件夹	Ctrl+R", false, m_recursive);
+        AddOwnerItem(popup, IDM_RECURSIVE, L"递归浏览子文件夹	Ctrl+R",
+            !m_grid_mode && (m_has_image || m_index.directory().empty()), m_recursive);
         AddOwnerItem(popup, IDM_THUMB_SQUARE,
-            m_thumb_square ? L"原始比例网格	A" : L"方形缩略图	A");
+            m_thumb_square ? L"原始比例网格	A" : L"方形缩略图	A", !m_grid_mode);
         AddOwnerSeparator(popup);
-        AddOwnerItem(popup, IDM_INFO, L"查看生成信息	I");
+        AddOwnerItem(popup, IDM_INFO, L"展开/收起信息面板	I", false, m_panel_expanded);
         break;
     case 2: // 编辑
-        AddOwnerItem(popup, IDM_COPY, L"复制文件	Ctrl+C");
-        AddOwnerItem(popup, IDM_COPY, L"复制图片数据");
+        {
+            size_t selected_count = selected_paths().size();
+            AddOwnerItem(popup, IDM_COPY_IMAGE, L"复制	Ctrl+C", selected_count != 1);
+            AddOwnerItem(popup, IDM_COPY_PATH, L"复制文件路径", selected_count == 0);
+            AddOwnerItem(popup, IDM_CREATE_COPY, L"创建副本", selected_count == 0);
+        }
         AddOwnerSeparator(popup);
         AddOwnerItem(popup, IDM_DELETE, L"移动到回收站	Del");
         AddOwnerItem(popup, IDM_DELETE_PERM, L"永久删除	Shift+Del");
@@ -1543,6 +1827,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     if (hook) UnhookWindowsHookEx(hook);
     if (cbt_hook) UnhookWindowsHookEx(cbt_hook);
+    FreeOwnerItemData(popup);
     DestroyMenu(popup);
     DeleteObject(menu_br);
 
@@ -1568,46 +1853,176 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     // Handle commands
     switch (cmd) {
-    case IDM_OPEN_FILE: case IDM_FULLSCREEN: case IDM_RECURSIVE:
+    case IDM_OPEN_FILE: case IDM_OPEN_FOLDER: case IDM_FULLSCREEN: case IDM_RECURSIVE:
     case IDM_THUMB_SQUARE: case IDM_INFO:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
     case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
-    case IDM_COPY: case IDM_DELETE: case IDM_DELETE_PERM:
+    case IDM_COPY_IMAGE: case IDM_COPY_PATH: case IDM_CREATE_COPY:
+    case IDM_DELETE: case IDM_DELETE_PERM:
     case IDM_EXPLORER: case IDM_ABOUT:
         SendMessageW(hwnd, WM_COMMAND, cmd, 0); break;
     }
 }
 
 void App::open_in_explorer() {
-    if (m_current_path.empty()) return;
-    std::wstring path = m_current_path;
+    std::wstring path = primary_path();
+    if (path.empty()) return;
     // Convert forward slashes to backslashes
     for (auto& c : path) if (c == L'/') c = L'\\';
     std::wstring args = L"/select,\"" + path + L"\"";
     ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOW);
 }
 
-void App::copy_to_clipboard() {
-    if (m_current_path.empty()) return;
-    if (!OpenClipboard(m_window.handle())) return;
+std::vector<std::wstring> App::selected_paths() const {
+    std::vector<std::wstring> paths;
+    if (m_grid_mode) {
+        for (int i = 0; i < static_cast<int>(m_selected.size()); ++i) {
+            if (m_selected[static_cast<size_t>(i)]) paths.push_back(m_index.path_at(i));
+        }
+    } else if (!m_current_path.empty()) {
+        paths.push_back(m_current_path);
+    }
+    return paths;
+}
+
+std::wstring App::primary_path() const {
+    if (m_grid_mode) {
+        if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size())
+            && m_grid_sel < static_cast<int>(m_selected.size())
+            && m_selected[static_cast<size_t>(m_grid_sel)])
+            return m_index.path_at(m_grid_sel);
+        for (int i = 0; i < static_cast<int>(m_selected.size()); ++i) {
+            if (m_selected[static_cast<size_t>(i)]) return m_index.path_at(i);
+        }
+        return L"";
+    }
+    return m_current_path;
+}
+
+void App::copy_image_data() {
+    if (selected_paths().size() != 1) return;
+    std::wstring path = primary_path();
+    if (path.empty()) return;
+
+    try {
+        auto bitmap = m_decoder.decode(path);
+        uint32_t width = 0, height = 0;
+        bitmap->GetSize(&width, &height);
+        size_t stride = static_cast<size_t>(width) * 4;
+        size_t pixel_bytes = stride * height;
+        if (width == 0 || height == 0 || stride > std::numeric_limits<UINT>::max()
+            || pixel_bytes > std::numeric_limits<UINT>::max()
+            || pixel_bytes > std::numeric_limits<SIZE_T>::max() - sizeof(BITMAPV5HEADER)) return;
+
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPV5HEADER) + pixel_bytes);
+        if (!memory) return;
+        auto* header = static_cast<BITMAPV5HEADER*>(GlobalLock(memory));
+        if (!header) { GlobalFree(memory); return; }
+        ZeroMemory(header, sizeof(*header));
+        header->bV5Size = sizeof(*header);
+        header->bV5Width = static_cast<LONG>(width);
+        header->bV5Height = -static_cast<LONG>(height);
+        header->bV5Planes = 1;
+        header->bV5BitCount = 32;
+        header->bV5Compression = BI_BITFIELDS;
+        header->bV5SizeImage = static_cast<DWORD>(pixel_bytes);
+        header->bV5RedMask = 0x00FF0000;
+        header->bV5GreenMask = 0x0000FF00;
+        header->bV5BlueMask = 0x000000FF;
+        header->bV5AlphaMask = 0xFF000000;
+        header->bV5CSType = LCS_sRGB;
+        header->bV5Intent = LCS_GM_IMAGES;
+
+        auto* pixels = reinterpret_cast<BYTE*>(header + 1);
+        HRESULT hr = bitmap->CopyPixels(nullptr, static_cast<UINT>(stride),
+            static_cast<UINT>(pixel_bytes), pixels);
+        GlobalUnlock(memory);
+        if (FAILED(hr)) { GlobalFree(memory); return; }
+
+        if (!OpenClipboard(m_window.handle())) { GlobalFree(memory); return; }
+        EmptyClipboard();
+        if (!SetClipboardData(CF_DIBV5, memory)) GlobalFree(memory);
+        CloseClipboard();
+    } catch (const std::exception&) {
+        MessageBoxW(m_window.handle(), L"\u65E0\u6CD5\u590D\u5236\u5F53\u524D\u56FE\u7247\u6570\u636E\u3002",
+            L"MinView", MB_OK | MB_ICONWARNING);
+    }
+}
+
+void App::copy_file_paths() {
+    auto paths = selected_paths();
+    if (paths.empty()) return;
+    std::wstring text;
+    for (size_t i = 0; i < paths.size(); ++i) {
+        if (i > 0) text += L"\r\n";
+        text += paths[i];
+    }
+    SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!memory) return;
+    auto* dst = static_cast<wchar_t*>(GlobalLock(memory));
+    if (!dst) { GlobalFree(memory); return; }
+    wmemcpy(dst, text.c_str(), text.size() + 1);
+    GlobalUnlock(memory);
+    if (!OpenClipboard(m_window.handle())) { GlobalFree(memory); return; }
     EmptyClipboard();
-
-    int offset = sizeof(DROPFILES);
-    int path_bytes = static_cast<int>((m_current_path.size() + 1) * sizeof(wchar_t));
-    int total = offset + path_bytes;
-
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, total);
-    if (!hMem) { CloseClipboard(); return; }
-
-    auto* df = static_cast<DROPFILES*>(GlobalLock(hMem));
-    df->pFiles = offset;
-    df->fWide  = TRUE;
-    auto* dst = reinterpret_cast<wchar_t*>(reinterpret_cast<char*>(df) + offset);
-    wcscpy_s(dst, m_current_path.size() + 1, m_current_path.c_str());
-    GlobalUnlock(hMem);
-
-    SetClipboardData(CF_HDROP, hMem);
+    if (!SetClipboardData(CF_UNICODETEXT, memory)) GlobalFree(memory);
     CloseClipboard();
+}
+
+void App::create_file_copies() {
+    namespace fs = std::filesystem;
+    auto sources = selected_paths();
+    if (sources.empty()) return;
+
+    std::vector<std::wstring> created;
+    for (const auto& source : sources) {
+        fs::path src(source);
+        fs::path dir = src.parent_path();
+        std::wstring base = src.stem().wstring() + L" - \u526F\u672C";
+        fs::path destination = dir / (base + src.extension().wstring());
+        std::error_code error;
+        for (int suffix = 2; fs::exists(destination, error) && !error; ++suffix) {
+            destination = dir / (base + L" (" + std::to_wstring(suffix) + L")" + src.extension().wstring());
+        }
+        if (error) continue;
+        if (CopyFileW(source.c_str(), destination.c_str(), TRUE))
+            created.push_back(destination.wstring());
+    }
+
+    if (created.empty()) {
+        MessageBoxW(m_window.handle(), L"\u521B\u5EFA\u526F\u672C\u5931\u8D25\u3002", L"MinView",
+            MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    bool loader_was_running = m_thumb_running;
+    if (loader_was_running) stop_thumb_loader();
+    std::wstring dir = m_index.directory();
+    if (!dir.empty() && m_index.scan(dir, m_recursive) >= 0) {
+        m_current_idx = m_current_path.empty() ? -1 : m_index.index_of(m_current_path);
+        m_thumbs.clear();
+        m_thumbs.resize(m_index.size());
+        m_thumb_d2d.clear();
+        m_thumb_d2d_use.clear();
+        m_grid_layout_dirty = true;
+        m_selected.assign(m_index.size(), false);
+        m_grid_sel = -1;
+        for (const auto& path : created) {
+            int idx = m_index.index_of(path);
+            if (idx >= 0) {
+                if (m_grid_sel < 0) m_grid_sel = idx;
+                m_selected[static_cast<size_t>(idx)] = true;
+            }
+        }
+        m_sel_anchor = m_grid_sel;
+        m_panel_path.clear();
+        if (loader_was_running || m_grid_mode) start_thumb_loader();
+        if (m_grid_mode) grid_ensure_visible();
+    } else if (loader_was_running) {
+        start_thumb_loader();
+    }
+    m_window.invalidate();
 }
 
 // ── Fullscreen ───────────────────────────────────────────────
@@ -1635,6 +2050,7 @@ void App::start_transition(HWND /*hwnd*/, bool forward) {
 
     // Pre-store target image size from thumbnail metadata (avoids stale image_size())
     if (forward && thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
+        std::lock_guard lock(m_thumb_mutex);
         m_anim_iw = static_cast<float>(m_thumbs[thumb_idx].orig_w);
         m_anim_ih = static_cast<float>(m_thumbs[thumb_idx].orig_h);
         if (m_anim_iw < 1) m_anim_iw = 1;
@@ -1658,11 +2074,12 @@ void App::begin_animation(HWND hwnd) {
     m_animating = true;
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
-    m_anim_timer = SetTimer(hwnd, 4, 1, nullptr);  // 1ms max freq
+    m_anim_timer = SetTimer(hwnd, 4, 16, nullptr);
 }
 
 void App::toggle_fullscreen(HWND hwnd) {
     m_fullscreen = !m_fullscreen;
+    m_toolbar_revealed = false;
 
     if (m_fullscreen) {
         GetWindowPlacement(hwnd, &m_saved_placement);
@@ -1686,7 +2103,7 @@ void App::toggle_fullscreen(HWND hwnd) {
             mi.rcMonitor.right  - mi.rcMonitor.left,
             mi.rcMonitor.bottom - mi.rcMonitor.top,
             SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-        fit_to_window();
+        update_content_viewport(true);
     } else {
         SetWindowLongW(hwnd, GWL_STYLE,   m_saved_style);
         SetWindowLongW(hwnd, GWL_EXSTYLE, m_saved_exstyle);
@@ -1694,7 +2111,11 @@ void App::toggle_fullscreen(HWND hwnd) {
         SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
             SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-        fit_to_window();
+        update_content_viewport(true);
+    }
+
+    if (m_grid_mode && m_grid_sel >= 0) {
+        grid_ensure_visible();
     }
 }
 
@@ -1704,10 +2125,10 @@ void App::fit_to_window() {
     uint32_t iw, ih; m_renderer.image_size(iw, ih);
     if (iw == 0 || ih == 0) return;
     RECT rc; GetClientRect(m_window.handle(), &rc);
-    float cw = static_cast<float>(rc.right - rc.left);
-    float ch = static_cast<float>(rc.bottom - rc.top);
+    float cw = m_renderer.content_width();
+    float ch = static_cast<float>(rc.bottom - rc.top) - m_renderer.content_top();
     if (cw <= 0 || ch <= 0) return;
-    m_renderer.set_scale(std::min(cw / iw, (ch - m_toolbar_h) / ih));
+    m_renderer.set_scale(std::min(cw / iw, ch / ih));
     m_renderer.set_offset(0, 0);
     m_renderer.set_scroll_y(0);
 }
@@ -1720,16 +2141,19 @@ void App::zoom_at_center(float factor) {
     if (new_scale == old_scale) return;
 
     D2D1_SIZE_U ts = m_renderer.target_size();
-    float cx = ts.width / 2.0f, cy = ts.height / 2.0f;
-    float img_x = (ts.width  - iw * old_scale) / 2.0f;
-    float img_y = (ts.height - ih * old_scale) / 2.0f;
+    float view_w = m_renderer.content_width();
+    float view_top = m_renderer.content_top();
+    float view_h = static_cast<float>(ts.height) - view_top;
+    float cx = view_w / 2.0f, cy = view_top + view_h / 2.0f;
+    float img_x = (view_w - iw * old_scale) / 2.0f;
+    float img_y = view_top + (view_h - ih * old_scale) / 2.0f;
     float img_cx = (cx - img_x) / old_scale;
     float img_cy = (cy - img_y) / old_scale;
 
     m_renderer.set_scale(new_scale);
     m_renderer.set_offset(
-        (cx - img_cx * new_scale) - (ts.width  - iw * new_scale) / 2.0f,
-        (cy - img_cy * new_scale) - (ts.height - ih * new_scale) / 2.0f);
+        (cx - img_cx * new_scale) - (view_w - iw * new_scale) / 2.0f,
+        (cy - img_cy * new_scale) - view_top - (view_h - ih * new_scale) / 2.0f);
     m_window.invalidate();
 }
 
@@ -1819,7 +2243,9 @@ static void thumb_loader_worker(
     std::vector<int>& queue,
     std::vector<App::ThumbEntry>& thumbs,
     ImageIndex& index,
-    int thumb_size)
+    int thumb_size,
+    std::atomic<uint64_t>& dimension_generation,
+    HWND notify_window)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     try {
@@ -1834,23 +2260,27 @@ static void thumb_loader_worker(
                 idx = queue.back();
                 queue.pop_back();
             }
-            if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
-            if (thumbs[idx].loaded) continue;
+            {
+                std::lock_guard lock(mtx);
+                if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
+                if (thumbs[idx].loaded) continue;
+            }
 
             try {
                 auto path = index.path_at(idx);
 
                 // Probe dimensions early (before decode) for accurate layout
-                if (thumbs[idx].orig_w == 0) {
-                    auto info = decoder.probe(path);
-                    if (info) { thumbs[idx].orig_w = info->width; thumbs[idx].orig_h = info->height; }
+                uint32_t orig_w = 0, orig_h = 0;
+                if (auto info = decoder.probe(path)) {
+                    orig_w = info->width;
+                    orig_h = info->height;
                 }
 
                 // Check disk cache first
                 std::hash<std::wstring> hasher;
                 wchar_t key[32];
                 swprintf_s(key, L"%016llx", hasher(path));
-                std::wstring cache_file = get_config_dir() + L"	humbs\\" + key + L".jpg";
+                std::wstring cache_file = get_config_dir() + L"\\thumbs\\" + key + L".jpg";
 
                 ComPtr<IWICBitmapSource> wic;
                 WIN32_FILE_ATTRIBUTE_DATA src_attr, cache_attr;
@@ -1874,7 +2304,7 @@ static void thumb_loader_worker(
                     }
                     // Save to disk cache
                     if (wic) {
-                        CreateDirectoryW((get_config_dir() + L"	humbs").c_str(), nullptr);
+                        CreateDirectoryW((get_config_dir() + L"\\thumbs").c_str(), nullptr);
                         save_wic_as_jpeg(wic.Get(), cache_file);
                     }
                 }
@@ -1886,12 +2316,22 @@ static void thumb_loader_worker(
                 }
 
                 std::lock_guard lock(mtx);
+                if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
+                bool dimensions_changed = thumbs[idx].orig_w != orig_w || thumbs[idx].orig_h != orig_h;
                 thumbs[idx].wic = wic;
                 thumbs[idx].loaded = true;
+                thumbs[idx].orig_w = orig_w;
+                thumbs[idx].orig_h = orig_h;
                 thumbs[idx].dominant_color = dom;
+                if (dimensions_changed)
+                    dimension_generation.fetch_add(1, std::memory_order_relaxed);
+                PostMessageW(notify_window, WM_THUMB_READY, 0, 0);
             } catch (...) {
                 std::lock_guard lock(mtx);
-                thumbs[idx].loaded = true;
+                if (idx >= 0 && idx < static_cast<int>(thumbs.size())) {
+                    thumbs[idx].loaded = true;
+                    PostMessageW(notify_window, WM_THUMB_READY, 0, 0);
+                }
             }
         }
     } catch (...) {
@@ -1901,6 +2341,7 @@ static void thumb_loader_worker(
 }
 
 void App::start_thumb_loader() {
+    if (m_thumb_running) return;
     m_thumb_running = true;
     m_thumb_threads.clear();
     int num_threads = 4;
@@ -1913,7 +2354,9 @@ void App::start_thumb_loader() {
                 std::ref(m_thumb_queue),
                 std::ref(m_thumbs),
                 std::ref(m_index),
-                m_thumb_size);
+                m_thumb_size,
+                std::ref(m_thumb_dimension_generation),
+                m_window.handle());
         } catch (...) {
             m_thumb_running = false;
             break;
@@ -1928,21 +2371,54 @@ void App::stop_thumb_loader() {
         if (t.joinable()) t.join();
     }
     m_thumb_threads.clear();
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        m_thumb_queue.clear();
+    }
 }
 
 void App::request_thumb(int idx) {
-    if (idx < 0 || idx >= static_cast<int>(m_thumbs.size())) return;
-    if (m_thumbs[idx].loaded) return;
     {
         std::lock_guard lock(m_thumb_mutex);
+        if (idx < 0 || idx >= static_cast<int>(m_thumbs.size())) return;
+        if (m_thumbs[idx].loaded) return;
         for (int q : m_thumb_queue) if (q == idx) return;
         m_thumb_queue.push_back(idx);
     }
     m_thumb_cv.notify_one();
 }
 
+void App::trim_thumb_cache(int visible_start, int visible_end) {
+    constexpr size_t max_d2d_entries = 64;
+    while (m_thumb_d2d.size() > max_d2d_entries) {
+        auto victim = m_thumb_d2d.end();
+        uint64_t oldest_use = std::numeric_limits<uint64_t>::max();
+        for (auto it = m_thumb_d2d.begin(); it != m_thumb_d2d.end(); ++it) {
+            if (it->first >= visible_start && it->first < visible_end) continue;
+            uint64_t last_use = 0;
+            auto use = m_thumb_d2d_use.find(it->first);
+            if (use != m_thumb_d2d_use.end()) last_use = use->second;
+            if (last_use < oldest_use) {
+                oldest_use = last_use;
+                victim = it;
+            }
+        }
+        if (victim == m_thumb_d2d.end()) break;
+        int index = victim->first;
+        m_thumb_d2d.erase(victim);
+        m_thumb_d2d_use.erase(index);
+        std::lock_guard lock(m_thumb_mutex);
+        if (index >= 0 && index < static_cast<int>(m_thumbs.size())) {
+            m_thumbs[index].wic.Reset();
+            m_thumbs[index].loaded = false;
+        }
+    }
+}
+
 void App::toggle_grid() {
     m_grid_mode = !m_grid_mode;
+    m_grid_layout_dirty = true;
+    update_content_viewport(!m_grid_mode);
 
     if (m_grid_mode) {
         int n = static_cast<int>(m_index.size());
@@ -1951,13 +2427,21 @@ void App::toggle_grid() {
             m_thumbs.clear();
             m_thumbs.resize(n);
             m_thumb_d2d.clear();
+            m_thumb_d2d_use.clear();
+            m_grid_layout_dirty = true;
         }
         start_thumb_loader();
+        float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+        int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+        int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
+            - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+        rebuild_grid_layout(grid_width, GridRebuildReason::Structural);
         // Smart scroll restoration
         if (m_current_idx == m_grid_saved_idx) {
             // User didn't navigate: restore original scroll
             m_grid_scroll_y = m_grid_scroll_saved;
             m_grid_sel = m_grid_saved_idx;
+            clamp_grid_scroll();
         } else {
             // User navigated: center on current image
             m_grid_sel = m_current_idx;
@@ -1966,12 +2450,12 @@ void App::toggle_grid() {
         }
         m_selected.clear();
         m_selected.resize(n, false);
-        if (m_grid_sel < n) m_selected[m_grid_sel] = true;
+        if (m_grid_sel >= 0 && m_grid_sel < n) m_selected[m_grid_sel] = true;
         m_sel_anchor = m_grid_sel;
 
         // Request first visible page of thumbnails
         int sb_zone3 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
-        int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone3;
+        int gw = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone3;
         int cols = std::max(1, (gw + m_thumb_gap_h) / (m_thumb_cell + m_thumb_gap_h));
         m_grid_cols = cols;
         int thumb_w = (gw - (cols - 1) * m_thumb_gap_h) / cols;
@@ -1985,8 +2469,6 @@ void App::toggle_grid() {
 
         update_title();
 
-        // 100ms timer for lazy thumbnail loading (fires even when unfocused)
-        m_grid_timer = SetTimer(m_window.handle(), 1, 100, nullptr);
     } else {
         // Exit grid — save state but keep thumb cache
         m_grid_scroll_saved = m_grid_scroll_y;
@@ -1998,75 +2480,34 @@ void App::toggle_grid() {
     m_window.invalidate();
 }
 
-bool App::grid_click(int x, int y, bool shift, bool ctrl) {
-    int cols = m_grid_cols, gap_h = m_thumb_gap_h;
+int App::grid_hit_test(int x, int y) const {
     int total = static_cast<int>(m_index.size());
-    if (cols == 0 || total == 0) return false;
+    if (m_grid_cols <= 0 || total == 0 || m_grid_rows.empty()) return -1;
 
-    // Match grid_render's layout: grid_area_w = window - panel - sb_zone - pad
-    float dpi_s = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    int sb_zone = static_cast<int>(20 * dpi_s);
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone - m_thumb_pad;
-
-    // Find row (account for m_thumb_pad offset)
-    int ty = y - m_toolbar_h - m_thumb_pad + m_grid_scroll_y;
-    int row = -1, row_y = 0;
-    for (int r = 0; r < static_cast<int>(m_row_heights.size()); ++r) {
-        if (ty < row_y + m_row_heights[r]) { row = r; break; }
-        row_y += m_row_heights[r];
-    }
-    if (row < 0) return false;
-
-    if (m_thumb_square) {
-        // Square grid: uniform cells centered
-        int cell_w = std::max(static_cast<int>(m_thumb_cell * m_thumb_zoom),
-                              (grid_area_w - (cols - 1) * gap_h) / cols);
-        int x0 = (grid_area_w - cols * cell_w - (cols - 1) * gap_h) / 2;
-        if (x0 < 0) x0 = 0;
-        int col = (x - m_thumb_pad - x0) / (cell_w + gap_h);
-        if (col < 0 || col >= cols) return false;
-        int idx = row * cols + col;
-        if (idx < 0 || idx >= total) return false;
-        select_item(idx, shift, ctrl);
-        return true;
+    int content_y = y - m_toolbar_h + m_grid_scroll_y;
+    auto row_it = std::lower_bound(m_grid_rows.begin(), m_grid_rows.end(), content_y,
+        [](const GridRow& row, int value) {
+            return row.row_y + row.row_h + row.label_extra < value;
+        });
+    if (row_it == m_grid_rows.end() || content_y < row_it->row_y
+        || content_y > row_it->row_y + row_it->row_h + row_it->label_extra) {
+        return -1;
     }
 
-    // Justified layout: recompute row
-    int usable_w = grid_area_w - (cols - 1) * gap_h;
-    int start = row * cols;
-    int end = std::min(start + cols, total);
-    float H = 120.0f;
-    double tw = 0;
-    for (int i = start; i < end; ++i) {
-        uint32_t iw = 1, ih = 1;
-        if (i < static_cast<int>(m_thumbs.size())) {
-            if (m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
-            else if (m_thumbs[i].orig_w > 0) { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
-        }
-        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
-        tw += (double)H * iw / ih;
+    float content_x = static_cast<float>(x - m_thumb_pad);
+    for (int index = row_it->start_idx; index < row_it->end_idx; ++index) {
+        float left = m_grid_item_x[static_cast<size_t>(index)];
+        float right = left + m_grid_item_w[static_cast<size_t>(index)];
+        if (content_x >= left && content_x < right) return index;
     }
-    float scale = (tw > 0) ? static_cast<float>(usable_w / tw) : 1.0f;
-    int row_h = std::max(40, static_cast<int>(H * scale));
-    float cx = static_cast<float>(m_thumb_pad);
-    int tx = x;
-    for (int i = start; i < end; ++i) {
-        uint32_t iw = 1, ih = 1;
-        if (i < static_cast<int>(m_thumbs.size())) {
-            if (m_thumbs[i].wic) m_thumbs[i].wic->GetSize(&iw, &ih);
-            else if (m_thumbs[i].orig_w > 0) { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
-        }
-        if (iw == 0) iw = 1; if (ih == 0) ih = 1;
-        float img_w = static_cast<float>(row_h) * iw / ih;
-        if (tx >= static_cast<int>(cx) && tx < static_cast<int>(cx + img_w)) {
-            select_item(i, shift, ctrl);
-            return true;
-        }
-        cx += img_w + gap_h;
-    }
-    return false;
+    return -1;
 }
-
+bool App::grid_click(int x, int y, bool shift, bool ctrl) {
+    int index = grid_hit_test(x, y);
+    if (index < 0) return false;
+    select_item(index, shift, ctrl);
+    return true;
+}
 void App::select_item(int idx, bool shift, bool ctrl) {
     int total = static_cast<int>(m_index.size());
     if (idx < 0 || idx >= total) return;
@@ -2118,6 +2559,11 @@ void App::handle_scrollbar_click(HWND hwnd, int /*mx*/, int my) {
 void App::grid_navigate(int dir, bool shift) {
     int total = static_cast<int>(m_index.size());
     if (total == 0) return;
+    if (m_grid_sel < 0) {
+        select_item(0, shift, false);
+        grid_ensure_visible();
+        return;
+    }
     int next = m_grid_sel + dir;
     if (dir == -1 && m_grid_sel <= 0) return;
     if (dir == 1 && m_grid_sel >= total - 1) return;
@@ -2143,52 +2589,203 @@ void App::grid_navigate(int dir, bool shift) {
 }
 
 void App::grid_ensure_visible() {
-    if (m_grid_cols == 0) return;
-    int row = m_grid_sel / m_grid_cols;
-    int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
-
-    // Use actual row heights if available (from last render); fall back to uniform estimate
-    if (!m_row_heights.empty() && row < static_cast<int>(m_row_heights.size())) {
-        int top_y = 0;
-        for (int r = 0; r < row; ++r) top_y += m_row_heights[r];
-        int row_h = m_row_heights[row];
-        m_grid_scroll_y = top_y + row_h / 2 - visible_h / 2;
-    } else {
-        // Fallback: uniform cell estimate
-        int sbz2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
-        int gw = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sbz2;
-        int thumb_w = (gw - (m_grid_cols - 1) * m_thumb_gap_h) / m_grid_cols;
-        int cell_h = thumb_w + m_thumb_gap_h;
-        int top_y = row * cell_h;
-        m_grid_scroll_y = top_y + cell_h / 2 - visible_h / 2;
+    if (m_grid_sel < 0 || m_grid_cols <= 0) return;
+    float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+    int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
+        - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+    uint64_t generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
+    if (m_grid_layout_dirty || m_grid_layout_width != grid_width
+        || m_grid_dims.size() != m_index.size()
+        || m_grid_layout_generation != generation) {
+        rebuild_grid_layout(grid_width, GridRebuildReason::Structural);
     }
-    if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
-    // Clamp to bottom
-    int total_h = 0;
-    for (auto h : m_row_heights) total_h += h;
-    int max_scroll = std::max(0, total_h - visible_h);
-    if (m_grid_scroll_y > max_scroll) m_grid_scroll_y = max_scroll;
+
+    int row_index = m_grid_sel / m_grid_cols;
+    if (row_index < 0 || row_index >= static_cast<int>(m_grid_rows.size())) return;
+    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    const auto& row = m_grid_rows[static_cast<size_t>(row_index)];
+    m_grid_scroll_y = row.row_y + row.row_h / 2 - visible_height / 2;
+    int max_scroll = std::max(0, m_grid_total_h - visible_height);
+    m_grid_scroll_y = std::clamp(m_grid_scroll_y, 0, max_scroll);
+}
+
+void App::clamp_grid_scroll() {
+    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    m_grid_scroll_y = clamp_grid_scroll_position(
+        m_grid_scroll_y, m_grid_total_h, visible_height);
+}
+bool App::toolbar_visible() const {
+    return !m_fullscreen || m_grid_mode || m_toolbar_revealed;
+}
+
+int App::visible_panel_width() const {
+    return m_panel_expanded ? m_panel_width : 0;
+}
+
+void App::update_content_viewport(bool refit) {
+    float top = (m_fullscreen && !m_grid_mode) ? 0.0f : static_cast<float>(m_toolbar_h);
+    float right = m_grid_mode ? 0.0f : static_cast<float>(visible_panel_width());
+    m_renderer.set_content_viewport(top, right);
+    if (refit) fit_to_window();
+}
+
+void App::update_panel_data(const std::wstring& path) {
+    if (path == m_panel_path
+        && (!path.empty() || (m_panel_info.empty() && m_panel_gen.empty()))) return;
+    m_panel_path = path;
+    m_panel_info.clear();
+    m_panel_gen.clear();
+    m_panel_scroll_y = 0.0f;
+    m_panel_sel = -1;
+    m_panel_copied.clear();
+    if (path.empty()) return;
+
+    size_t pos = path.find_last_of(L"\\/");
+    std::wstring name = (pos != std::wstring::npos) ? path.substr(pos + 1) : path;
+    m_panel_info.push_back({L"\u6587\u4EF6\u540D", name});
+
+    auto probe = m_decoder.probe(path);
+    if (probe) {
+        m_panel_info.push_back({L"\u5206\u8FA8\u7387",
+            std::to_wstring(probe->width) + L" \u00D7 " + std::to_wstring(probe->height)});
+    }
+
+    WIN32_FILE_ATTRIBUTE_DATA attr = {};
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attr)) {
+        ULONGLONG size = (static_cast<ULONGLONG>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
+        if (size < 1024) {
+            m_panel_info.push_back({L"\u5927\u5C0F", std::to_wstring(size) + L" B"});
+        } else if (size < 1024 * 1024) {
+            m_panel_info.push_back({L"\u5927\u5C0F", std::to_wstring(size / 1024) + L" KB"});
+        } else {
+            wchar_t buf[32];
+            swprintf_s(buf, L"%.1f MB", size / (1024.0 * 1024.0));
+            m_panel_info.push_back({L"\u5927\u5C0F", buf});
+        }
+    }
+
+    if (request_metadata(path))
+        m_panel_gen.push_back({L"", L"正在读取生成信息..."});
+    else
+        m_panel_gen.push_back({L"", L"无可用生成信息"});
+}
+
+void App::start_metadata_loader() {
+    if (m_metadata_running) return;
+    m_metadata_running = true;
+    try {
+        m_metadata_thread = std::thread(metadata_worker,
+            std::ref(m_metadata_running),
+            std::ref(m_metadata_mutex),
+            std::ref(m_metadata_cv),
+            std::ref(m_metadata_request_path),
+            std::ref(m_metadata_request_pending),
+            std::ref(m_metadata_result_path),
+            std::ref(m_metadata_result),
+            std::ref(m_metadata_result_ready),
+            m_window.handle());
+    } catch (...) {
+        m_metadata_running = false;
+    }
+}
+
+void App::stop_metadata_loader() {
+    m_metadata_running = false;
+    m_metadata_cv.notify_all();
+    if (m_metadata_thread.joinable()) m_metadata_thread.join();
+}
+
+bool App::request_metadata(const std::wstring& path) {
+    if (!m_metadata_running || path.empty()) return false;
+    {
+        std::lock_guard lock(m_metadata_mutex);
+        m_metadata_request_path = path;
+        m_metadata_request_pending = true;
+    }
+    m_metadata_cv.notify_one();
+    return true;
+}
+
+void App::apply_metadata_result() {
+    std::wstring path;
+    ImageMeta metadata;
+    {
+        std::lock_guard lock(m_metadata_mutex);
+        if (!m_metadata_result_ready) return;
+        path = std::move(m_metadata_result_path);
+        metadata = std::move(m_metadata_result);
+        m_metadata_result_ready = false;
+    }
+    if (path != m_panel_path) return;
+    apply_metadata(metadata);
+    m_window.invalidate();
+}
+
+void App::apply_metadata(const ImageMeta& meta) {
+    m_panel_gen.clear();
+    if (meta.valid) {
+        if (!meta.model.empty()) m_panel_gen.push_back({L"\u6A21\u578B", meta.model});
+        if (!meta.vae.empty()) m_panel_gen.push_back({L"VAE", meta.vae});
+        if (meta.seed >= 0) m_panel_gen.push_back({L"Seed", std::to_wstring(meta.seed)});
+        if (meta.steps > 0) m_panel_gen.push_back({L"\u6B65\u6570", std::to_wstring(meta.steps)});
+        if (meta.cfg > 0) {
+            wchar_t buf[16];
+            swprintf_s(buf, L"%.1f", meta.cfg);
+            m_panel_gen.push_back({L"CFG", buf});
+        }
+        if (!meta.sampler.empty()) m_panel_gen.push_back({L"\u91C7\u6837\u5668", meta.sampler});
+        if (!meta.scheduler.empty()) m_panel_gen.push_back({L"\u8C03\u5EA6\u5668", meta.scheduler});
+        if (!meta.positive_prompt.empty())
+            m_panel_gen.push_back({L"\u6B63\u5411\u63D0\u793A\u8BCD", meta.positive_prompt});
+        if (!meta.negative_prompt.empty())
+            m_panel_gen.push_back({L"\u53CD\u5411\u63D0\u793A\u8BCD", meta.negative_prompt});
+        if (!meta.lora.empty()) m_panel_gen.push_back({L"LoRA", meta.lora});
+    }
+    if (m_panel_gen.empty())
+        m_panel_gen.push_back({L"", L"\u65E0\u53EF\u7528\u751F\u6210\u4FE1\u606F"});
+}
+
+void App::draw_panel(const std::wstring& path, ID2D1Bitmap1* preview,
+                     uint32_t preview_w, uint32_t preview_h, float top,
+                     int fallback_count) {
+    m_panel_clickable.clear();
+    if (!m_panel_expanded) {
+        m_panel_total_h = 0.0f;
+        return;
+    }
+
+    update_panel_data(path);
+    std::vector<std::pair<std::wstring, std::wstring>> fallback_info;
+    const auto* info = &m_panel_info;
+    if (path.empty() && fallback_count >= 0) {
+        fallback_info.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(fallback_count) + L" \u5F20"});
+        info = &fallback_info;
+    }
+
+    float target_w = static_cast<float>(m_renderer.target_size().width);
+    float target_h = static_cast<float>(m_renderer.target_size().height);
+    float panel_w = static_cast<float>(visible_panel_width());
+    float available_h = std::max(0.0f, target_h - top);
+    m_panel_total_h = m_renderer.draw_side_panel(target_w - panel_w, top,
+        panel_w, available_h, preview, preview_w, preview_h, *info, m_panel_gen,
+        &m_panel_clickable, m_panel_sel,
+        m_panel_copied.empty() ? nullptr : &m_panel_copied, m_panel_scroll_y);
+    float max_scroll = std::max(0.0f, m_panel_total_h - available_h);
+    m_panel_scroll_y = std::min(m_panel_scroll_y, max_scroll);
 }
 
 void App::toggle_info() {
-    // Works in both viewer and grid mode
-    if (!m_has_image && !m_grid_mode) return;
-    if (m_grid_mode && (m_grid_sel < 0 || m_grid_sel >= static_cast<int>(m_index.size()))) return;
-
-    std::wstring target = m_grid_mode && m_grid_sel >= 0
-        ? m_index.path_at(m_grid_sel) : m_current_path;
-
-    if (!m_show_info) {
-        m_info_meta = extract_metadata(target);
-        if (!m_info_meta.valid) return;
-    }
-    m_show_info = !m_show_info;
+    m_panel_expanded = !m_panel_expanded;
+    m_grid_layout_dirty = true;
+    if (!m_panel_expanded) m_panel_clickable.clear();
+    update_content_viewport(!m_grid_mode);
     m_window.invalidate();
 }
 
 void App::toggle_thumb_square() {
     m_thumb_square = !m_thumb_square;
-    m_thumb_d2d.clear();  // force redraw with new aspect
+    m_grid_layout_dirty = true;
     m_window.invalidate();
 }
 
@@ -2217,428 +2814,411 @@ void App::delete_selected(bool permanent) {
         if (m_selected[i]) to_delete.push_back(i);
     if (to_delete.empty()) return;
 
+    const int previous_grid_sel = m_grid_sel;
+    std::wstring focused_path;
+    if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
+        focused_path = m_index.path_at(m_grid_sel);
+    std::vector<std::wstring> requested_paths;
+    requested_paths.reserve(to_delete.size());
+
     std::wstring from;
-    for (auto rit = to_delete.rbegin(); rit != to_delete.rend(); ++rit) {
-        from += m_index.path_at(*rit);
+    for (int index : to_delete) {
+        requested_paths.push_back(m_index.path_at(index));
+        from += requested_paths.back();
         from.push_back(L'\0');
     }
     from.push_back(L'\0');
+
+    stop_thumb_loader();
 
     SHFILEOPSTRUCTW fos = {};
     fos.wFunc  = FO_DELETE;
     fos.pFrom  = from.c_str();
     fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
     if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
-    if (SHFileOperationW(&fos) != 0) return;
+    const int shell_result = SHFileOperationW(&fos);
 
-    std::sort(to_delete.begin(), to_delete.end(), std::greater<int>());
-    for (int idx : to_delete) m_index.remove(idx);
-    clear_selection();
+    std::vector<int> removed_indices;
+    std::vector<std::wstring> remaining_selected;
+    removed_indices.reserve(to_delete.size());
+    remaining_selected.reserve(to_delete.size());
+    for (size_t i = 0; i < to_delete.size(); ++i) {
+        if (path_is_confirmed_missing(requested_paths[i]))
+            removed_indices.push_back(to_delete[i]);
+        else
+            remaining_selected.push_back(requested_paths[i]);
+    }
+    const bool complete = delete_fully_completed(shell_result,
+        fos.fAnyOperationsAborted != FALSE, to_delete.size(), removed_indices.size());
+
+    if (removed_indices.empty()) {
+        start_thumb_loader();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除未完成，文件仍保留在列表中。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
+        return;
+    }
+
+    m_index.remove_many(removed_indices);
 
     if (m_index.empty()) {
-        m_has_image = false; m_current_path.clear(); m_current_idx = -1;
+        m_has_image = false; m_current_path.clear(); m_current_wic.Reset(); m_current_idx = -1;
         m_grid_mode = false; stop_thumb_loader();
-        m_thumbs.clear(); m_thumb_d2d.clear();
+        m_thumbs.clear(); m_thumb_d2d.clear(); m_thumb_d2d_use.clear();
+        m_grid_layout_dirty = true;
         update_title();
-        m_window.invalidate(); return;
+        m_window.invalidate();
+        if (!complete) {
+            MessageBoxW(m_window.handle(),
+                L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+                MB_OK | MB_ICONWARNING);
+        }
+        return;
     }
-    m_grid_sel = std::min(m_grid_sel, static_cast<int>(m_index.size()) - 1);
-    if (m_current_idx >= static_cast<int>(m_index.size()))
-        m_current_idx = static_cast<int>(m_index.size()) - 1;
+
+    m_grid_sel = focused_path.empty() ? -1 : m_index.index_of(focused_path);
+    if (m_grid_sel < 0 && !remaining_selected.empty())
+        m_grid_sel = m_index.index_of(remaining_selected.front());
+    if (m_grid_sel < 0)
+        m_grid_sel = std::min(previous_grid_sel, static_cast<int>(m_index.size()) - 1);
+    m_current_idx = m_current_path.empty() ? -1 : m_index.index_of(m_current_path);
+    if (m_current_idx < 0 && m_grid_sel >= 0) {
+        m_current_wic.Reset();
+        m_current_idx = m_grid_sel;
+        m_current_path = m_index.path_at(m_grid_sel);
+        m_has_image = true;
+    }
+    m_thumbs.clear();
+    m_thumbs.resize(m_index.size());
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_grid_layout_dirty = true;
+    m_last_cached_sel = -1;
+    m_selected.assign(m_index.size(), false);
+    for (const auto& path : remaining_selected) {
+        int index = m_index.index_of(path);
+        if (index >= 0) m_selected[static_cast<size_t>(index)] = true;
+    }
+    if (!has_selection() && m_grid_sel >= 0)
+        m_selected[static_cast<size_t>(m_grid_sel)] = true;
+    m_sel_anchor = m_grid_sel;
+    start_thumb_loader();
+    grid_ensure_visible();
+    m_window.invalidate();
+    if (!complete) {
+        MessageBoxW(m_window.handle(),
+            L"删除操作未完全完成，列表已按磁盘实际状态更新。", L"MinView",
+            MB_OK | MB_ICONWARNING);
+    }
 }
 
-void App::copy_selected() {
-    std::vector<std::wstring> paths;
-    for (int i = 0; i < static_cast<int>(m_selected.size()); ++i)
-        if (m_selected[i]) paths.push_back(m_index.path_at(i));
-    if (paths.empty()) return;
-
-    int total_bytes = sizeof(DROPFILES);
-    for (auto& p : paths) total_bytes += static_cast<int>((p.size() + 1) * sizeof(wchar_t));
-    total_bytes += static_cast<int>(sizeof(wchar_t));
-
-    if (!OpenClipboard(m_window.handle())) return;
-    EmptyClipboard();
-    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, total_bytes);
-    if (!hMem) { CloseClipboard(); return; }
-    auto* df = static_cast<DROPFILES*>(GlobalLock(hMem));
-    df->pFiles = sizeof(DROPFILES);
-    df->fWide  = TRUE;
-    auto* dst = reinterpret_cast<wchar_t*>(reinterpret_cast<char*>(df) + sizeof(DROPFILES));
-    for (auto& p : paths) {
-        wcscpy_s(dst, p.size() + 1, p.c_str());
-        dst += p.size() + 1;
+void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
+    int total = static_cast<int>(m_index.size());
+    m_grid_dims.assign(static_cast<size_t>(total), {0, 0});
+    uint64_t applied_dimension_generation = 0;
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        int count = std::min(total, static_cast<int>(m_thumbs.size()));
+        for (int i = 0; i < count; ++i)
+            m_grid_dims[static_cast<size_t>(i)] = {m_thumbs[i].orig_w, m_thumbs[i].orig_h};
+        applied_dimension_generation =
+            m_thumb_dimension_generation.load(std::memory_order_relaxed);
     }
-    *dst = L'\0';
-    GlobalUnlock(hMem);
-    SetClipboardData(CF_HDROP, hMem);
-    CloseClipboard();
+
+    float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    int effective_cell = std::max(1, static_cast<int>(m_thumb_cell * m_thumb_zoom));
+    int cols = std::max(1, (grid_area_width + m_thumb_gap_h)
+        / (effective_cell + m_thumb_gap_h));
+    int label_height = m_show_labels ? static_cast<int>(42 * dpi_scale) : 0;
+    m_grid_cols = cols;
+    m_grid_rows.clear();
+    m_grid_rows.reserve(static_cast<size_t>((total + cols - 1) / cols));
+    m_grid_item_x.assign(static_cast<size_t>(total), 0.0f);
+    m_grid_item_w.assign(static_cast<size_t>(total), 0.0f);
+
+    int current_y = m_thumb_pad;
+    if (m_thumb_square) {
+        int cell_width = std::max(effective_cell,
+            (grid_area_width - (cols - 1) * m_thumb_gap_h) / cols);
+        int x0 = std::max(0,
+            (grid_area_width - cols * cell_width - (cols - 1) * m_thumb_gap_h) / 2);
+        for (int index = 0; index < total; index += cols) {
+            GridRow row;
+            row.start_idx = index;
+            row.end_idx = std::min(index + cols, total);
+            row.row_h = cell_width;
+            row.row_y = current_y;
+            row.label_extra = label_height;
+            float x = static_cast<float>(x0);
+            for (int i = row.start_idx; i < row.end_idx; ++i) {
+                m_grid_item_x[static_cast<size_t>(i)] = x;
+                m_grid_item_w[static_cast<size_t>(i)] = static_cast<float>(cell_width);
+                x += cell_width + m_thumb_gap_h;
+            }
+            m_grid_rows.push_back(row);
+            current_y += row.row_h + m_thumb_gap_v + row.label_extra;
+        }
+    } else {
+        int usable_width = std::max(1, grid_area_width - (cols - 1) * m_thumb_gap_h);
+        constexpr float base_height = 120.0f;
+        for (int index = 0; index < total; index += cols) {
+            GridRow row;
+            row.start_idx = index;
+            row.end_idx = std::min(index + cols, total);
+            row.row_y = current_y;
+            row.label_extra = label_height;
+            double width_at_base = 0.0;
+            for (int i = row.start_idx; i < row.end_idx; ++i) {
+                auto [raw_w, raw_h] = m_grid_dims[static_cast<size_t>(i)];
+                uint32_t image_w = raw_w == 0 ? 1 : raw_w;
+                uint32_t image_h = raw_h == 0 ? 1 : raw_h;
+                width_at_base += static_cast<double>(base_height) * image_w / image_h;
+            }
+            float scale = width_at_base > 0.0
+                ? static_cast<float>(usable_width / width_at_base) : 1.0f;
+            row.row_h = std::max(40, static_cast<int>(base_height * scale));
+            float x = 0.0f;
+            for (int i = row.start_idx; i < row.end_idx; ++i) {
+                auto [raw_w, raw_h] = m_grid_dims[static_cast<size_t>(i)];
+                uint32_t image_w = raw_w == 0 ? 1 : raw_w;
+                uint32_t image_h = raw_h == 0 ? 1 : raw_h;
+                float display_width = static_cast<float>(row.row_h) * image_w / image_h;
+                m_grid_item_x[static_cast<size_t>(i)] = x;
+                m_grid_item_w[static_cast<size_t>(i)] = display_width;
+                x += display_width + m_thumb_gap_h;
+            }
+            m_grid_rows.push_back(row);
+            current_y += row.row_h + m_thumb_gap_v + row.label_extra;
+        }
+    }
+
+    m_grid_total_rows = static_cast<int>(m_grid_rows.size());
+    m_grid_total_h = current_y;
+    const int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    const int selected_row = m_grid_sel >= 0 && m_grid_cols > 0
+        ? m_grid_sel / m_grid_cols : -1;
+    const bool has_selected_row =
+        selected_row >= 0 && selected_row < static_cast<int>(m_grid_rows.size());
+    if (has_selected_row) {
+        const auto& row = m_grid_rows[static_cast<size_t>(selected_row)];
+        m_grid_scroll_y = reconcile_grid_scroll_after_rebuild(
+            reason, m_grid_scroll_y, true, row.row_y,
+            row.row_y + row.row_h + row.label_extra,
+            m_grid_total_h, visible_height);
+    } else {
+        m_grid_scroll_y = reconcile_grid_scroll_after_rebuild(
+            reason, m_grid_scroll_y, false, 0, 0,
+            m_grid_total_h, visible_height);
+    }
+    m_row_heights.clear();
+    m_row_heights.reserve(m_grid_rows.size());
+    for (const auto& row : m_grid_rows)
+        m_row_heights.push_back(row.row_h + m_thumb_gap_v + row.label_extra);
+    m_grid_layout_width = grid_area_width;
+    m_grid_layout_generation = applied_dimension_generation;
+    m_grid_layout_dirty = false;
 }
 
 void App::grid_render() {
     if (!m_renderer.begin_frame()) return;
+    if (!synchronize_renderer_generation()) {
+        m_renderer.end_frame();
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
+        return;
+    }
     m_renderer.clear();
 
     int total = static_cast<int>(m_index.size());
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    int sb_zone = static_cast<int>(20 * dpi_scale);
-    int grid_area_w = static_cast<int>(m_renderer.target_size().width) - m_panel_width - sb_zone - m_thumb_pad;
-    int eff_cell = static_cast<int>(m_thumb_cell * m_thumb_zoom);
-    int gap_h = m_thumb_gap_h;
-    int gap_v = m_thumb_gap_v;
+    int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+    int grid_area_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
+        - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+    uint64_t dimension_generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
+    const GridRebuildReason rebuild_reason = classify_grid_rebuild_reason(
+        m_grid_layout_dirty, m_grid_layout_width != grid_area_width,
+        m_grid_dims.size() != static_cast<size_t>(total),
+        dimension_generation != m_grid_layout_generation);
+    if (rebuild_reason != GridRebuildReason::None)
+        rebuild_grid_layout(grid_area_width, rebuild_reason);
 
-    struct RowInfo { int start_idx, end_idx, row_h, row_y, label_extra; std::vector<float> img_x, img_w; };
-    std::vector<RowInfo> rows;
-    int label_def = m_show_labels ? static_cast<int>(42 * dpi_scale) : 0;
+    auto& rows = m_grid_rows;
+    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    int top_pixel = m_grid_scroll_y;
+    auto top_it = std::lower_bound(rows.begin(), rows.end(), top_pixel,
+        [](const GridRow& row, int value) {
+            return row.row_y + row.row_h + row.label_extra < value;
+        });
+    auto bottom_it = std::upper_bound(top_it, rows.end(), top_pixel + visible_height,
+        [](int value, const GridRow& row) { return value < row.row_y; });
+    int top_row = static_cast<int>(top_it - rows.begin());
+    int bottom_row = bottom_it == rows.begin() ? -1
+        : static_cast<int>(bottom_it - rows.begin()) - 1;
 
-    if (m_thumb_square) {
-        // ── Square grid: cells stretch to fill width ──
-        int cols = std::max(1, (grid_area_w + gap_h) / (eff_cell + gap_h));
-        m_grid_cols = cols;
-        int cell_w = std::max(eff_cell, (grid_area_w - (cols - 1) * gap_h) / cols);
-        int x0 = (grid_area_w - cols * cell_w - (cols - 1) * gap_h) / 2;
-        if (x0 < 0) x0 = 0;
-
-        int cur_y = m_thumb_pad;
-        for (int idx = 0; idx < total; ) {
-            RowInfo ri;
-            ri.start_idx = idx;
-            ri.end_idx = std::min(idx + cols, total);
-            ri.row_y = cur_y;
-            ri.row_h = cell_w;
-            ri.label_extra = label_def;
-            float x = static_cast<float>(x0);
-            for (int i = ri.start_idx; i < ri.end_idx; ++i) {
-                ri.img_x.push_back(x);
-                ri.img_w.push_back(static_cast<float>(cell_w));
-                x += cell_w + gap_h;
-            }
-            rows.push_back(ri);
-            cur_y += cell_w + gap_v + ri.label_extra;
-            idx = ri.end_idx;
-        }
-    } else {
-        // ── Justified layout (existing) ──
-        int cols = std::max(1, (grid_area_w + gap_h) / (eff_cell + gap_h));
-        m_grid_cols = cols;
-        int usable_w = grid_area_w - (cols - 1) * gap_h;
-
-        // --- First pass: justified row heights ---
-        int cur_y = m_thumb_pad, idx = 0;
-    float dpi_label = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-
-    while (idx < total) {
-        RowInfo ri;
-        ri.start_idx = idx;
-        ri.end_idx = std::min(idx + cols, total);
-        ri.row_y = cur_y;
-        ri.label_extra = 0;
-
-        // Gather aspect ratios — use probe dims if available, else 1:1
-        float H = 120.0f;
-        double total_w_at_H = 0;
-        for (int i = ri.start_idx; i < ri.end_idx; ++i) {
-            uint32_t iw = 1, ih = 1;
-            if (i < static_cast<int>(m_thumbs.size())) {
-                if (m_thumbs[i].wic)
-                    m_thumbs[i].wic->GetSize(&iw, &ih);
-                else if (m_thumbs[i].orig_w > 0)
-                    { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
-            }
-            if (iw == 0) iw = 1; if (ih == 0) ih = 1;
-            total_w_at_H += (double)H * iw / ih;
-        }
-        // Scale so total width fits usable_w
-        float scale = (total_w_at_H > 0) ? static_cast<float>(usable_w / total_w_at_H) : 1.0f;
-        ri.row_h = static_cast<int>(H * scale);
-        if (ri.row_h < 40) ri.row_h = 40;
-
-        // Compute per-image widths and x-positions
-        float x = 0;
-        for (int i = ri.start_idx; i < ri.end_idx; ++i) {
-            uint32_t iw = 1, ih = 1;
-            if (i < static_cast<int>(m_thumbs.size())) {
-                if (m_thumbs[i].wic)
-                    m_thumbs[i].wic->GetSize(&iw, &ih);
-                else if (m_thumbs[i].orig_w > 0)
-                    { iw = m_thumbs[i].orig_w; ih = m_thumbs[i].orig_h; }
-            }
-            if (iw == 0) iw = 1; if (ih == 0) ih = 1;
-            float img_w = static_cast<float>(ri.row_h) * iw / ih;
-            ri.img_x.push_back(x);
-            ri.img_w.push_back(img_w);
-            x += img_w + gap_h;
-
-            // Measure actual label height for this image
-            if (m_show_labels) {
-                auto& spath = m_index.path_at(i);
-                size_t pos = spath.find_last_of(L"\\/");
-                std::wstring fname = (pos != std::wstring::npos) ? spath.substr(pos + 1) : spath;
-                float fn_h = m_renderer.label_height(fname, img_w, 14.0f);
-                float res_h = 0;
-                if (i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].orig_w > 0) {
-                    res_h = m_renderer.label_height(
-                        std::to_wstring(m_thumbs[i].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[i].orig_h),
-                        img_w, 12.0f);
-                }
-                float total_label = 4.0f * dpi_label + fn_h + 3.0f * dpi_label + res_h + 2.0f * dpi_label;
-                ri.label_extra = std::max(ri.label_extra, static_cast<int>(total_label));
-            }
-        }
-        ri.label_extra = std::max(ri.label_extra, m_show_labels ? static_cast<int>(42 * dpi_label) : 0);
-        rows.push_back(ri);
-        cur_y += ri.row_h + gap_v + ri.label_extra;
-        idx = ri.end_idx;
-    }
-    }  // end justified layout
-    m_grid_total_rows = static_cast<int>(rows.size());
-
-    // Cache selected thumbnail rect for transition animation (only when sel changes)
-    if (m_animating || (m_grid_sel >= 0 && m_grid_sel != m_last_cached_sel)) {
-        m_last_cached_sel = m_grid_sel;
-        for (auto& ri : rows) {
-            if (m_grid_sel >= ri.start_idx && m_grid_sel < ri.end_idx) {
-                int j = m_grid_sel - ri.start_idx;
-                if (j < static_cast<int>(ri.img_x.size())) {
-                    // Use original image aspect ratio, not grid cell
-                    float cx = ri.img_x[j] + m_thumb_pad + ri.img_w[j] * 0.5f;
-                    float cy = static_cast<float>(m_toolbar_h + ri.row_y - m_grid_scroll_y + ri.row_h * 0.5f);
-                    int idx = ri.start_idx + j;
-                    float ow = 1.0f, oh = 1.0f;
-                    if (idx < static_cast<int>(m_thumbs.size()) && m_thumbs[idx].orig_w > 0) {
-                        ow = static_cast<float>(m_thumbs[idx].orig_w);
-                        oh = static_cast<float>(m_thumbs[idx].orig_h);
-                    }
-                    float cell_area = ri.img_w[j] * static_cast<float>(ri.row_h);
-                    float aspect = ow / oh;
-                    float src_h = std::sqrt(cell_area / aspect);
-                    float src_w = src_h * aspect;
-                    m_anim_src = {cx - src_w * 0.5f, cy - src_h * 0.5f,
-                                  cx + src_w * 0.5f, cy + src_h * 0.5f};
-                }
-                break;
-            }
-        }
-    }
-
-    m_row_heights.clear();
-    for (auto& ri : rows) m_row_heights.push_back(ri.row_h + gap_v + ri.label_extra);
-    int visible_h = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
-
-    // --- Scroll calc ---
-    int top_px = m_grid_scroll_y;
-    int top_row = 0, bot_row = static_cast<int>(rows.size()) - 1;
-    for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
-        if (rows[i].row_y + rows[i].row_h + rows[i].label_extra > top_px) { top_row = i; break; }
-    }
-    for (int i = top_row; i < static_cast<int>(rows.size()); ++i) {
-        if (rows[i].row_y > top_px + visible_h) { bot_row = i; break; }
-    }
-
-    // --- Request visible thumbs ---
     if (!m_scroll_active) {
-        for (int r = top_row; r <= bot_row && r < static_cast<int>(rows.size()); ++r)
-            for (int i = rows[r].start_idx; i < rows[r].end_idx; ++i)
-                request_thumb(i);
+        for (int r = top_row; r <= bottom_row; ++r)
+            for (int i = rows[static_cast<size_t>(r)].start_idx;
+                 i < rows[static_cast<size_t>(r)].end_idx; ++i) request_thumb(i);
     }
 
-    // --- Batch WIC grab ---
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
+    std::unordered_map<int, D2D1_COLOR_F> placeholder_colors;
     {
         std::lock_guard lock(m_thumb_mutex);
-        for (int r = top_row; r <= bot_row && r < static_cast<int>(rows.size()); ++r)
-            for (int i = rows[r].start_idx; i < rows[r].end_idx; ++i)
-                if (!m_thumb_d2d.count(i) && i < static_cast<int>(m_thumbs.size()) && m_thumbs[i].loaded && m_thumbs[i].wic)
+        for (int r = top_row; r <= bottom_row; ++r) {
+            const auto& row = rows[static_cast<size_t>(r)];
+            for (int i = row.start_idx; i < row.end_idx; ++i) {
+                if (i >= static_cast<int>(m_thumbs.size())) continue;
+                placeholder_colors.emplace(i, m_thumbs[i].dominant_color);
+                if (m_thumbs[i].loaded && !m_thumb_d2d.count(i) && m_thumbs[i].wic)
                     ready.push_back({i, m_thumbs[i].wic});
+            }
+        }
     }
-    int d2d_count = 0;
-    for (auto& [i, wic] : ready) {
-        if (d2d_count >= 2) break;
-        ComPtr<ID2D1Bitmap1> d2d_bmp;
-        if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d_bmp)) && d2d_bmp) {
-            m_thumb_d2d[i] = d2d_bmp; ++d2d_count;
+    int upload_count = 0;
+    size_t processed_count = 0;
+    for (auto& [index, wic] : ready) {
+        if (processed_count >= 4) break;
+        ++processed_count;
+        ComPtr<ID2D1Bitmap1> bitmap;
+        if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &bitmap)) && bitmap) {
+            m_thumb_d2d[index] = bitmap;
+            m_thumb_d2d_use[index] = ++m_thumb_use_clock;
+            {
+                std::lock_guard lock(m_thumb_mutex);
+                if (index >= 0 && index < static_cast<int>(m_thumbs.size()))
+                    m_thumbs[index].wic.Reset();
+            }
+            ++upload_count;
+        }
+    }
+    if (ready.size() > processed_count)
+        PostMessageW(m_window.handle(), WM_THUMB_READY, 0, 0);
+    int visible_start = top_row <= bottom_row
+        ? rows[static_cast<size_t>(top_row)].start_idx : 0;
+    int visible_end = top_row <= bottom_row
+        ? rows[static_cast<size_t>(bottom_row)].end_idx : 0;
+    trim_thumb_cache(visible_start, visible_end);
+
+    if (m_animating || (m_grid_sel >= 0 && m_grid_sel != m_last_cached_sel)) {
+        m_last_cached_sel = m_grid_sel;
+        if (m_grid_sel >= 0 && m_grid_sel < total && m_grid_cols > 0) {
+            int row_index = m_grid_sel / m_grid_cols;
+            if (row_index < static_cast<int>(rows.size())) {
+                const auto& row = rows[static_cast<size_t>(row_index)];
+                float width = m_grid_item_w[static_cast<size_t>(m_grid_sel)];
+                float center_x = m_grid_item_x[static_cast<size_t>(m_grid_sel)]
+                    + m_thumb_pad + width * 0.5f;
+                float center_y = static_cast<float>(m_toolbar_h + row.row_y
+                    - m_grid_scroll_y) + row.row_h * 0.5f;
+                auto [raw_w, raw_h] = m_grid_dims[static_cast<size_t>(m_grid_sel)];
+                float image_w = raw_w == 0 ? 1.0f : static_cast<float>(raw_w);
+                float image_h = raw_h == 0 ? 1.0f : static_cast<float>(raw_h);
+                float source_h = std::sqrt(width * row.row_h / (image_w / image_h));
+                float source_w = source_h * image_w / image_h;
+                m_anim_src = {center_x - source_w * 0.5f, center_y - source_h * 0.5f,
+                    center_x + source_w * 0.5f, center_y + source_h * 0.5f};
+            }
         }
     }
 
-    // Toolbar + panel + scrollbar
-    float px = static_cast<float>(m_renderer.target_size().width) - m_panel_width;
-    float tw = static_cast<float>(m_renderer.target_size().width);
-    float view_h = static_cast<float>(m_renderer.target_size().height);
-
-    // Title bar height for clipping (title bar itself drawn later, on top of everything)
-    float title_h2 = m_title_h * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    m_renderer.push_clip_below(title_h2);
-
-    // --- Second pass: render ---
-    for (int r = top_row; r <= bot_row && r < static_cast<int>(rows.size()); ++r) {
-        auto& ri = rows[r];
-        float row_y = static_cast<float>(m_toolbar_h + ri.row_y - m_grid_scroll_y);
-        for (int j = 0; j < ri.end_idx - ri.start_idx; ++j) {
-            int idx2 = ri.start_idx + j;
-            if (idx2 >= total) break;
-            float x = ri.img_x[j] + m_thumb_pad;
-            float w = ri.img_w[j];
-            bool sel = (idx2 == m_grid_sel) || (idx2 < static_cast<int>(m_selected.size()) && m_selected[idx2]);
-            auto dit = m_thumb_d2d.find(idx2);
-            if (dit != m_thumb_d2d.end() && dit->second) {
-                m_renderer.draw_grid_thumbnail(x, row_y, w, static_cast<float>(ri.row_h), dit->second.Get(), m_thumb_square);
-            } else if (idx2 < static_cast<int>(m_thumbs.size()) && m_thumbs[idx2].loaded) {
-                m_renderer.draw_grid_placeholder(x, row_y, w, static_cast<float>(ri.row_h), m_thumbs[idx2].dominant_color);
+    float target_width = static_cast<float>(m_renderer.target_size().width);
+    float target_height = static_cast<float>(m_renderer.target_size().height);
+    m_renderer.push_clip_below(static_cast<float>(m_toolbar_h));
+    for (int r = top_row; r <= bottom_row; ++r) {
+        const auto& row = rows[static_cast<size_t>(r)];
+        float row_y = static_cast<float>(m_toolbar_h + row.row_y - m_grid_scroll_y);
+        for (int index = row.start_idx; index < row.end_idx; ++index) {
+            float x = m_grid_item_x[static_cast<size_t>(index)] + m_thumb_pad;
+            float width = m_grid_item_w[static_cast<size_t>(index)];
+            auto bitmap = m_thumb_d2d.find(index);
+            if (bitmap != m_thumb_d2d.end() && bitmap->second) {
+                m_thumb_d2d_use[index] = ++m_thumb_use_clock;
+                m_renderer.draw_grid_thumbnail(x, row_y, width,
+                    static_cast<float>(row.row_h), bitmap->second.Get(), m_thumb_square);
+            } else {
+                auto color = placeholder_colors.find(index);
+                D2D1_COLOR_F fill = color == placeholder_colors.end()
+                    ? D2D1::ColorF(0.10f, 0.10f, 0.12f, 1.0f) : color->second;
+                m_renderer.draw_grid_placeholder(x, row_y, width,
+                    static_cast<float>(row.row_h), fill);
             }
-            if (sel) {
-                D2D1_RECT_F sel_rc = {x - 2, row_y - 2, x + w + 2, row_y + ri.row_h + 2};
-                m_renderer.draw_selection_border(sel_rc);
+
+            bool selected = index == m_grid_sel
+                || (index < static_cast<int>(m_selected.size())
+                    && m_selected[static_cast<size_t>(index)]);
+            if (selected) {
+                D2D1_RECT_F rect = {x - 2, row_y - 2, x + width + 2,
+                    row_y + row.row_h + 2};
+                m_renderer.draw_selection_border(rect);
             }
-            // Labels
             if (m_show_labels) {
-                auto& spath = m_index.path_at(idx2);
-                size_t pos2 = spath.find_last_of(L"\\/");
-                std::wstring fname = (pos2 != std::wstring::npos) ? spath.substr(pos2 + 1) : spath;
-                float dpi_s = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-                float ly = row_y + ri.row_h + 4.0f * dpi_s;
-                m_renderer.draw_label(x, ly, w, fname, 14.0f);
-                float name_h = m_renderer.label_height(fname, w, 14.0f);
-
-                if (m_thumbs[idx2].orig_w > 0) {
-                    float label_gap = 3.0f * dpi_s;
-                    m_renderer.draw_label(x, ly + name_h + label_gap, w,
-                        std::to_wstring(m_thumbs[idx2].orig_w) + L" \u00D7 " + std::to_wstring(m_thumbs[idx2].orig_h), 12.0f,
-                        0.5f, 0.5f, 0.55f);
+                const auto& path = m_index.path_at(index);
+                size_t separator = path.find_last_of(L"\\/");
+                std::wstring name = separator == std::wstring::npos
+                    ? path : path.substr(separator + 1);
+                float label_y = row_y + row.row_h + 4.0f * dpi_scale;
+                m_renderer.draw_label(x, label_y, width, name, 14.0f);
+                float name_height = m_renderer.label_height(name, width, 14.0f);
+                auto [image_w, image_h] = m_grid_dims[static_cast<size_t>(index)];
+                if (image_w > 0 && image_h > 0) {
+                    m_renderer.draw_label(x, label_y + name_height + 3.0f * dpi_scale,
+                        width, std::to_wstring(image_w) + L" \u00D7 " + std::to_wstring(image_h),
+                        12.0f, 0.5f, 0.5f, 0.55f);
                 }
+            }
         }
     }
-    }  // for r loop
 
-    // Scrollbar — centered in sb_zone between grid area and panel
-    int total_h = 0;
-    for (auto& ri : rows) total_h += ri.row_h + gap_v + ri.label_extra;
-    m_grid_total_h = total_h;  // cache for scrollbar interaction
-    float sb_x = static_cast<float>(m_renderer.target_size().width) - m_panel_width - static_cast<float>(sb_zone);
-    float sb_w = static_cast<float>(sb_zone) * 0.6f;  // 60% of zone = actual bar
-    float sb_x0 = sb_x + (sb_zone - sb_w) / 2.0f;     // centered
-    bool sb_active = m_scrollbar_dragging || m_scrollbar_hover;
-    m_renderer.draw_scrollbar(sb_x0, static_cast<float>(m_toolbar_h), sb_w, view_h - m_toolbar_h,
-        static_cast<float>(total_h), view_h, static_cast<float>(m_grid_scroll_y), sb_active);
+    float scrollbar_x = target_width - visible_panel_width() - scrollbar_zone;
+    float scrollbar_width = scrollbar_zone * 0.6f;
+    float scrollbar_left = scrollbar_x + (scrollbar_zone - scrollbar_width) * 0.5f;
+    m_renderer.draw_scrollbar(scrollbar_left, static_cast<float>(m_toolbar_h),
+        scrollbar_width, target_height - m_toolbar_h, static_cast<float>(m_grid_total_h),
+        target_height, static_cast<float>(m_grid_scroll_y),
+        m_scrollbar_dragging || m_scrollbar_hover);
 
-    // Side info panel
-    {
-        float pw = static_cast<float>(m_panel_width);
-        float ph = view_h;
-        std::vector<std::pair<std::wstring, std::wstring>> pinfo, pgen;
-        ID2D1Bitmap1* preview_bmp = nullptr;
-        uint32_t pvw = 0, pvh = 0;
-
-        if (m_grid_sel >= 0 && m_grid_sel < total) {
-            auto& selpath = m_index.path_at(m_grid_sel);
-            size_t pos = selpath.find_last_of(L"\\/");
-            std::wstring name = (pos != std::wstring::npos) ? selpath.substr(pos + 1) : selpath;
-            pinfo.push_back({L"\u6587\u4EF6\u540D", name});
-
-            auto probe = m_decoder.probe(selpath);
-            if (probe) {
-                pvw = probe->width; pvh = probe->height;
-                pinfo.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(pvw) + L" \u00D7 " + std::to_wstring(pvh)});
-            }
-
-            auto dit2 = m_thumb_d2d.find(m_grid_sel);
-            if (dit2 != m_thumb_d2d.end()) preview_bmp = dit2->second.Get();
-
-            WIN32_FILE_ATTRIBUTE_DATA attr;
-            if (GetFileAttributesExW(selpath.c_str(), GetFileExInfoStandard, &attr)) {
-                ULONGLONG fsize = (static_cast<ULONGLONG>(attr.nFileSizeHigh) << 32) | attr.nFileSizeLow;
-                if (fsize < 1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize) + L" B"});
-                else if (fsize < 1024*1024) pinfo.push_back({L"\u5927\u5C0F", std::to_wstring(fsize/1024) + L" KB"});
-                else { wchar_t buf[32]; swprintf_s(buf, L"%.1f MB", fsize/(1024.0*1024.0)); pinfo.push_back({L"\u5927\u5C0F", buf}); }
-            }
-
-            ImageMeta meta = extract_metadata(selpath);
-            if (meta.valid) {
-                if (!meta.model.empty()) pgen.push_back({L"\u6A21\u578B", meta.model});
-                if (meta.seed >= 0) pgen.push_back({L"Seed", std::to_wstring(meta.seed)});
-                if (meta.steps > 0) pgen.push_back({L"\u6B65\u6570", std::to_wstring(meta.steps)});
-                if (meta.cfg > 0) { wchar_t buf[16]; swprintf_s(buf, L"%.1f", meta.cfg); pgen.push_back({L"CFG", buf}); }
-                if (!meta.sampler.empty()) pgen.push_back({L"\u91C7\u6837\u5668", meta.sampler});
-                if (!meta.positive_prompt.empty()) pgen.push_back({L"\u6B63\u5411\u63D0\u793A\u8BCD", meta.positive_prompt});
-                if (!meta.negative_prompt.empty()) pgen.push_back({L"\u53CD\u5411\u63D0\u793A\u8BCD", meta.negative_prompt});
-                if (!meta.lora.empty()) pgen.push_back({L"LoRA", meta.lora});
-            }
-        } else {
-            pinfo.push_back({L"\u6587\u4EF6\u6570", std::to_wstring(total) + L" \u5F20"});
-        }
-        m_panel_clickable.clear();
-        float panel_h = m_renderer.draw_side_panel(px, static_cast<float>(m_toolbar_h), pw, ph - m_toolbar_h,
-            preview_bmp, pvw, pvh, pinfo, pgen, &m_panel_clickable,
-            m_panel_sel, m_panel_copied.empty() ? nullptr : &m_panel_copied,
-            m_panel_scroll_y);
-        m_panel_total_h = panel_h;
-        float max_scroll = std::max(0.0f, panel_h - (ph - m_toolbar_h));
-        m_panel_scroll_y = std::min(m_panel_scroll_y, max_scroll);
+    std::wstring panel_path;
+    ID2D1Bitmap1* preview = nullptr;
+    uint32_t preview_w = 0, preview_h = 0;
+    if (m_grid_sel >= 0 && m_grid_sel < total) {
+        panel_path = m_index.path_at(m_grid_sel);
+        auto bitmap = m_thumb_d2d.find(m_grid_sel);
+        if (bitmap != m_thumb_d2d.end()) preview = bitmap->second.Get();
+        preview_w = m_grid_dims[static_cast<size_t>(m_grid_sel)].first;
+        preview_h = m_grid_dims[static_cast<size_t>(m_grid_sel)].second;
     }
-
+    draw_panel(panel_path, preview, preview_w, preview_h,
+        static_cast<float>(m_toolbar_h), total);
     m_renderer.pop_clip();
+
     if (m_animating) {
-        uint32_t iw = static_cast<uint32_t>(m_anim_iw);
-        uint32_t ih = static_cast<uint32_t>(m_anim_ih);
-        if (iw == 0 || ih == 0) m_renderer.image_size(iw, ih);
-        if (iw > 0 && ih > 0) {
-            float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                               (static_cast<float>(m_renderer.target_size().height) - m_toolbar_h) / ih);
-            float dw = iw * s, dh = ih * s;
-            float dx = (m_renderer.target_size().width - dw) * 0.5f;
-            float dy = (m_renderer.target_size().height - dh) * 0.5f + m_toolbar_h * 0.5f;
-            if (m_anim_forward)
-                m_anim_dst = {dx, dy, dx + dw, dy + dh};
-            else {
-                m_anim_dst = m_anim_src;
-                m_anim_src = {dx, dy, dx + dw, dy + dh};
-            }
+        uint32_t image_w = static_cast<uint32_t>(m_anim_iw);
+        uint32_t image_h = static_cast<uint32_t>(m_anim_ih);
+        if (image_w == 0 || image_h == 0) m_renderer.image_size(image_w, image_h);
+        if (image_w > 0 && image_h > 0) {
+            float view_width = target_width - visible_panel_width();
+            float view_height = target_height - m_toolbar_h;
+            float scale = std::min(view_width / image_w, view_height / image_h);
+            float width = image_w * scale;
+            float height = image_h * scale;
+            float x = (view_width - width) * 0.5f;
+            float y = m_toolbar_h + (view_height - height) * 0.5f;
+            if (m_anim_forward) m_anim_dst = {x, y, x + width, y + height};
+            else { m_anim_dst = m_anim_src; m_anim_src = {x, y, x + width, y + height}; }
         }
         m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
-    // Title bar always on top, even above animation overlay
-    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
+    m_renderer.draw_title_bar(target_width, m_title_btn_hover, m_title_btn_press,
         m_toolbar_items, m_toolbar_active);
-    m_renderer.end_frame();
+    if (!m_renderer.end_frame())
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
 }
 
 void App::render_frame() {
-    if (m_temp_preview) {
-        if (!m_renderer.begin_frame()) return;
-        m_renderer.clear();
-        if (m_has_image) {
-            if (m_using_thumb_preview) {
-                auto full = get_preloaded(m_current_path);
-                if (full) { m_renderer.upload_image(full.Get()); m_using_thumb_preview = false; }
-            }
-            m_renderer.draw_image();
-            m_renderer.draw_overlay();
-        }
-        if (m_animating) {
-            uint32_t iw = static_cast<uint32_t>(m_anim_iw);
-            uint32_t ih = static_cast<uint32_t>(m_anim_ih);
-            if (iw == 0 || ih == 0) m_renderer.image_size(iw, ih);
-            if (iw > 0 && ih > 0) {
-                float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                                   (static_cast<float>(m_renderer.target_size().height) - m_toolbar_h) / ih);
-                float dw = iw * s, dh = ih * s;
-                float dx = (m_renderer.target_size().width - dw) * 0.5f;
-                float dy = (m_renderer.target_size().height - dh) * 0.5f + m_toolbar_h * 0.5f;
-                if (m_anim_forward)
-                    m_anim_dst = {dx, dy, dx + dw, dy + dh};
-                else {
-                    m_anim_dst = m_anim_src;
-                    m_anim_src = {dx, dy, dx + dw, dy + dh};
-                }
-            }
-            m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
-            if (m_anim_thumb)
-                m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
-        }
-        m_renderer.end_frame();
-        return;
-    }
     if (m_grid_mode) {
         grid_render();
         return;
@@ -2654,52 +3234,35 @@ void App::render_frame() {
             DeleteObject(bg);
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(128, 128, 128));
-            const wchar_t* msg = m_has_image
-                ? L"\u52A0\u8F7D\u4E2D..." : L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6";
+            const wchar_t* msg = m_has_image ? L"\u52A0\u8F7D\u4E2D..."
+                : (m_index.directory().empty() ? L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6"
+                    : L"\u5F53\u524D\u6587\u4EF6\u5939\u6682\u65E0\u53D7\u652F\u6301\u7684\u56FE\u7247\uFF0C\u53EF\u5F00\u542F\u9012\u5F52\u6D4F\u89C8");
             DrawTextW(hdc, msg, -1, &rc,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             EndPaint(m_window.handle(), &ps);
         }
         return;
     }
+    if (!synchronize_renderer_generation()) {
+        m_renderer.end_frame();
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
+        return;
+    }
     m_renderer.clear();
-    // Draw custom title bar (includes menu items)
     float tw = static_cast<float>(m_renderer.target_size().width);
-    float title_h = m_title_h * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
-        m_toolbar_items, m_toolbar_active);
-    m_renderer.push_clip_below(title_h);
+    float content_top = m_renderer.content_top();
+    m_renderer.push_clip_below(content_top);
     if (m_has_image) {
         m_renderer.draw_image();
         m_renderer.draw_overlay();
-        if (m_show_info) {
-            std::vector<std::pair<std::wstring, std::wstring>> items;
-            if (!m_info_meta.positive_prompt.empty())
-                items.push_back({L"\u63D0\u793A\u8BCD", m_info_meta.positive_prompt});
-            if (!m_info_meta.negative_prompt.empty())
-                items.push_back({L"\u53CD\u5411\u8BCD", m_info_meta.negative_prompt});
-            if (!m_info_meta.lora.empty())
-                items.push_back({L"LoRA", m_info_meta.lora});
-            if (!m_info_meta.model.empty())
-                items.push_back({L"\u6A21\u578B", m_info_meta.model});
-            if (!m_info_meta.vae.empty())
-                items.push_back({L"VAE", m_info_meta.vae});
-            if (m_info_meta.width > 0 && m_info_meta.height > 0)
-                items.push_back({L"\u5206\u8FA8\u7387", std::to_wstring(m_info_meta.width) + L" \u00D7 " + std::to_wstring(m_info_meta.height)});
-            if (m_info_meta.seed >= 0)
-                items.push_back({L"Seed", std::to_wstring(m_info_meta.seed)});
-            if (m_info_meta.steps > 0)
-                items.push_back({L"\u6B65\u6570", std::to_wstring(m_info_meta.steps)});
-            if (m_info_meta.cfg > 0)
-                items.push_back({L"CFG", std::to_wstring(m_info_meta.cfg)});
-            if (!m_info_meta.sampler.empty())
-                items.push_back({L"\u91C7\u6837\u5668", m_info_meta.sampler});
-            if (!m_info_meta.scheduler.empty())
-                items.push_back({L"\u8C03\u5EA6\u5668", m_info_meta.scheduler});
-            m_renderer.draw_info_card(items);
-        }
+        uint32_t image_w = 0, image_h = 0;
+        m_renderer.image_size(image_w, image_h);
+        draw_panel(m_current_path, m_renderer.image_bitmap(), image_w, image_h, content_top);
     } else {
-        m_renderer.draw_hint(L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6");
+        m_renderer.draw_hint(m_index.directory().empty()
+            ? L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6"
+            : L"\u5F53\u524D\u6587\u4EF6\u5939\u6682\u65E0\u53D7\u652F\u6301\u7684\u56FE\u7247\uFF0C\u53EF\u5F00\u542F\u9012\u5F52\u6D4F\u89C8");
+        draw_panel(L"", nullptr, 0, 0, content_top);
     }
     m_renderer.pop_clip();
     if (m_animating) {
@@ -2707,11 +3270,12 @@ void App::render_frame() {
         uint32_t ih = static_cast<uint32_t>(m_anim_ih);
         if (iw == 0 || ih == 0) m_renderer.image_size(iw, ih);
         if (iw > 0 && ih > 0) {
-            float s = std::min(static_cast<float>(m_renderer.target_size().width) / iw,
-                               (static_cast<float>(m_renderer.target_size().height) - m_toolbar_h) / ih);
+            float view_w = m_renderer.content_width();
+            float view_h = static_cast<float>(m_renderer.target_size().height) - content_top;
+            float s = std::min(view_w / iw, view_h / ih);
             float dw = iw * s, dh = ih * s;
-            float dx = (m_renderer.target_size().width - dw) * 0.5f;
-            float dy = (m_renderer.target_size().height - dh) * 0.5f + m_toolbar_h * 0.5f;
+            float dx = (view_w - dw) * 0.5f;
+            float dy = content_top + (view_h - dh) * 0.5f;
             if (m_anim_forward)
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
             else {
@@ -2723,7 +3287,33 @@ void App::render_frame() {
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
-    m_renderer.end_frame();
+    if (toolbar_visible()) {
+        m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
+            m_toolbar_items, m_toolbar_active);
+    }
+    if (!m_renderer.end_frame())
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
+}
+
+bool App::synchronize_renderer_generation() {
+    const uint64_t current_generation = m_renderer.device_generation();
+    if (!renderer_generation_changed(m_renderer_generation, current_generation)) return true;
+
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_anim_thumb.Reset();
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        for (auto& thumb : m_thumbs) {
+            if (!thumb.wic) thumb.loaded = false;
+        }
+    }
+
+    if (m_has_image && m_current_wic
+        && !m_renderer.upload_image(m_current_wic.Get(), false)) return false;
+
+    m_renderer_generation = current_generation;
+    return true;
 }
 
 } // namespace mv

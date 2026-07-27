@@ -56,6 +56,22 @@ ComPtr<IWICBitmapSource> Decoder::decode(const std::wstring& path) {
     return convert_to_pbgra(frame.Get());
 }
 
+ComPtr<IWICBitmapSource> Decoder::materialize(IWICBitmapSource* source) {
+    if (!source) throw std::runtime_error("Cannot materialize a null image");
+
+    ComPtr<IWICBitmap> bitmap;
+    HRESULT hr = m_factory->CreateBitmapFromSource(
+        source, WICBitmapCacheOnLoad, &bitmap);
+    if (FAILED(hr))
+        throw std::runtime_error("Failed to materialize image");
+
+    ComPtr<IWICBitmapSource> result;
+    hr = bitmap.As(&result);
+    if (FAILED(hr))
+        throw std::runtime_error("Failed to expose materialized image");
+    return result;
+}
+
 ComPtr<IWICBitmapSource> Decoder::decode_scaled(const std::wstring& path, uint32_t max_size) {
     auto decoder = create_decoder(path);
 
