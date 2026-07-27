@@ -5,6 +5,8 @@
 
 namespace mv {
 
+inline constexpr wchar_t WINDOW_CLASS_NAME[] = L"MVFrameW32";
+
 /// Thin Win32 window wrapper with DPI awareness.
 class Window {
 public:

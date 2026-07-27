@@ -33,6 +33,9 @@ public:
     /// Decode and scale to fit within max_size (max dimension).
     ComPtr<IWICBitmapSource> decode_scaled(const std::wstring& path, uint32_t max_size);
 
+    /// Copy a WIC source into memory so recovery does not retain a file handle.
+    ComPtr<IWICBitmapSource> materialize(IWICBitmapSource* source);
+
     /// Get image metadata (size, DPI) without full decode.
     std::optional<ImageInfo> probe(const std::wstring& path);
 

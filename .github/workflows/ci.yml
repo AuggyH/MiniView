@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-policy:
+    name: PR / policy
+    if: github.event_name == 'pull_request'
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: 校验 PR 标题
+        shell: pwsh
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          $pattern = '^(feat|fix|docs|refactor|test|ci|build|chore)(\([a-z0-9._-]+\))?(!)?: .+'
+          if ($env:PR_TITLE -cnotmatch $pattern) {
+            Write-Error 'PR 标题必须符合 Conventional Commits，例如：feat(grid): 优化缩略图布局'
+            exit 1
+          }
+
+  build-and-test:
+    name: Windows / build-and-test
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 配置 Release 构建
+        run: >-
+          cmake -S . -B build -A x64
+          -DBUILD_TESTING=ON
+          -DMINVIEW_WARNINGS_AS_ERRORS=ON
+
+      - name: 编译
+        run: cmake --build build --config Release -- /m
+
+      - name: 运行自动化测试
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: 上传候选程序
+        uses: actions/upload-artifact@v4
+        with:
+          name: MinView-windows-x64-${{ github.sha }}
+          path: build/Release/MinView.exe
+          if-no-files-found: error
+          retention-days: 7
