@@ -4,8 +4,6 @@
 
 namespace mv {
 
-constexpr const wchar_t* CLASS_NAME = L"MVFrameW32";
-
 Window::~Window() {
     if (m_hwnd) {
         DestroyWindow(m_hwnd);
@@ -23,7 +21,7 @@ bool Window::create(const std::wstring& /*title*/, int width, int height) {
     wc.hInstance     = hinst;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = CreateSolidBrush(RGB(26, 26, 26));  // dark background
-    wc.lpszClassName = CLASS_NAME;
+    wc.lpszClassName = WINDOW_CLASS_NAME;
 
     RegisterClassExW(&wc);
 
@@ -41,7 +39,7 @@ bool Window::create(const std::wstring& /*title*/, int width, int height) {
 
     m_hwnd = CreateWindowExW(
         WS_EX_APPWINDOW,
-        CLASS_NAME, L"",  // No title — we draw our own
+        WINDOW_CLASS_NAME, L"",  // No title — we draw our own
         WS_OVERLAPPEDWINDOW & ~WS_CAPTION,  // custom title bar, keeps resize borders
         pos_x, pos_y, win_w, win_h,
         nullptr, nullptr, hinst, this);

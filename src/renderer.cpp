@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "renderer_state.h"
 #include <dwrite_1.h>
 #include <fstream>
 #include <d3d11_1.h>
@@ -27,6 +28,11 @@ bool Renderer::init(HWND hwnd) {
 
 bool Renderer::create_device_resources() {
     if (!m_hwnd) return false;
+    discard_device_resources();
+    auto fail = [this]() {
+        discard_device_resources();
+        return false;
+    };
 
     RECT rc; GetClientRect(m_hwnd, &rc);
     m_target_size = {
@@ -48,21 +54,26 @@ bool Renderer::create_device_resources() {
         D3D11_SDK_VERSION, &m_d3d_device, nullptr, &m_d3d_context);
     if (FAILED(hr)) {
         // Try WARP (software) as fallback
+        m_d3d_context.Reset();
+        m_d3d_device.Reset();
         hr = D3D11CreateDevice(
             nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags,
             feature_levels, ARRAYSIZE(feature_levels),
             D3D11_SDK_VERSION, &m_d3d_device, nullptr, &m_d3d_context);
-        if (FAILED(hr)) return false;
+        if (FAILED(hr)) return fail();
     }
 
     ComPtr<IDXGIDevice> dxgi_device;
-    m_d3d_device.As(&dxgi_device);
+    hr = m_d3d_device.As(&dxgi_device);
+    if (FAILED(hr)) return fail();
 
     ComPtr<IDXGIAdapter> dxgi_adapter;
-    dxgi_device->GetAdapter(&dxgi_adapter);
+    hr = dxgi_device->GetAdapter(&dxgi_adapter);
+    if (FAILED(hr)) return fail();
 
     ComPtr<IDXGIFactory2> dxgi_factory;
-    dxgi_adapter->GetParent(IID_PPV_ARGS(&dxgi_factory));
+    hr = dxgi_adapter->GetParent(IID_PPV_ARGS(&dxgi_factory));
+    if (FAILED(hr)) return fail();
 
     DXGI_SWAP_CHAIN_DESC1 scd = {};
     scd.Width       = m_target_size.width;
@@ -75,21 +86,21 @@ bool Renderer::create_device_resources() {
 
     hr = dxgi_factory->CreateSwapChainForHwnd(
         m_d3d_device.Get(), m_hwnd, &scd, nullptr, nullptr, &m_swap_chain);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail();
 
     hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, IID_PPV_ARGS(&m_d2d_factory));
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail();
 
     hr = m_d2d_factory->CreateDevice(dxgi_device.Get(), &m_d2d_device);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail();
 
     hr = m_d2d_device->CreateDeviceContext(
         D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &m_d2d_context);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail();
 
     ComPtr<IDXGISurface> back_buffer;
     hr = m_swap_chain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail();
 
     D2D1_BITMAP_PROPERTIES1 bp = {};
     bp.pixelFormat.format    = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -99,38 +110,49 @@ bool Renderer::create_device_resources() {
     ComPtr<ID2D1Bitmap1> target_bitmap;
     hr = m_d2d_context->CreateBitmapFromDxgiSurface(
         back_buffer.Get(), &bp, &target_bitmap);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) return fail();
 
     m_d2d_context->SetTarget(target_bitmap.Get());
     m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
     m_d2d_context->SetUnitMode(D2D1_UNIT_MODE_PIXELS);
 
-    return create_text_resources();
+    if (!create_text_resources()) return fail();
+    ++m_device_generation;
+    return true;
 }
 
 bool Renderer::create_text_resources() {
+    ComPtr<IDWriteFactory> dwrite_factory;
     HRESULT hr = DWriteCreateFactory(
         DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-        reinterpret_cast<IUnknown**>(m_dwrite_factory.GetAddressOf()));
+        reinterpret_cast<IUnknown**>(dwrite_factory.GetAddressOf()));
     if (FAILED(hr)) return false;
 
-    hr = m_dwrite_factory->CreateTextFormat(
+    ComPtr<IDWriteTextFormat> text_format;
+    hr = dwrite_factory->CreateTextFormat(
         L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
         OVERLAY_FONT_SIZE * m_dpi_y / 96.0f, L"en-US",
-        &m_text_format);
+        &text_format);
     if (FAILED(hr)) return false;
 
-    m_text_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-    m_text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    hr = text_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    if (FAILED(hr)) return false;
+    hr = text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    if (FAILED(hr)) return false;
 
-    if (m_d2d_context) {
-        m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f),
-            &m_overlay_brush);
-    }
+    if (!m_d2d_context) return false;
+    ComPtr<ID2D1SolidColorBrush> overlay_brush;
+    hr = m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f),
+        &overlay_brush);
+    if (FAILED(hr)) return false;
+
+    m_dwrite_factory = dwrite_factory;
+    m_text_format = text_format;
+    m_overlay_brush = overlay_brush;
     return true;
 }
 
@@ -147,58 +169,70 @@ void Renderer::discard_device_resources() {
     m_d3d_device.Reset();
 }
 
-void Renderer::resize(uint32_t width, uint32_t height) {
-    if (width == 0 || height == 0) return;
+bool Renderer::resize(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return false;
     m_target_size = {width, height};
 
-    // Recalculate fit scale if we have an image loaded
-    if (m_img_width > 0 && m_img_height > 0) {
-        float sx = static_cast<float>(width)  / m_img_width;
-        float sy = static_cast<float>(height) / m_img_height;
-        m_fit_scale = std::min(sx, sy);
+    update_fit_scale();
+
+    if (!m_swap_chain || !m_d2d_context) return false;
+
+    m_d2d_context->SetTarget(nullptr);
+    HRESULT hr = m_swap_chain->ResizeBuffers(
+        2, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
+    if (should_recreate_render_device(hr)) {
+        discard_device_resources();
+        return false;
     }
 
-    if (m_swap_chain && m_d2d_context) {
-        m_d2d_context->SetTarget(nullptr);
-        HRESULT hr = m_swap_chain->ResizeBuffers(
-            2, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
-        if (SUCCEEDED(hr)) {
-            ComPtr<IDXGISurface> back_buffer;
-            hr = m_swap_chain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
-            if (SUCCEEDED(hr)) {
-                D2D1_BITMAP_PROPERTIES1 bp = {};
-                bp.pixelFormat.format    = DXGI_FORMAT_B8G8R8A8_UNORM;
-                bp.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
-                bp.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
-                ComPtr<ID2D1Bitmap1> target;
-                m_d2d_context->CreateBitmapFromDxgiSurface(
-                    back_buffer.Get(), &bp, &target);
-                m_d2d_context->SetTarget(target.Get());
-            }
-        }
+    ComPtr<IDXGISurface> back_buffer;
+    hr = m_swap_chain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
+    if (should_recreate_render_device(hr)) {
+        discard_device_resources();
+        return false;
     }
+
+    D2D1_BITMAP_PROPERTIES1 bp = {};
+    bp.pixelFormat.format    = DXGI_FORMAT_B8G8R8A8_UNORM;
+    bp.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
+    bp.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+    ComPtr<ID2D1Bitmap1> target;
+    hr = m_d2d_context->CreateBitmapFromDxgiSurface(
+        back_buffer.Get(), &bp, &target);
+    if (should_recreate_render_device(hr) || !target) {
+        discard_device_resources();
+        return false;
+    }
+
+    m_d2d_context->SetTarget(target.Get());
+    m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
+    return true;
 }
 
-void Renderer::upload_image(IWICBitmapSource* wic_bitmap) {
-    if (!m_d2d_context) return;
+bool Renderer::upload_image(IWICBitmapSource* wic_bitmap, bool reset_view) {
+    if (!m_d2d_context || !wic_bitmap) return false;
 
     uint32_t w, h;
-    wic_bitmap->GetSize(&w, &h);
+    HRESULT hr = wic_bitmap->GetSize(&w, &h);
+    if (FAILED(hr) || w == 0 || h == 0) return false;
+
+    ComPtr<ID2D1Bitmap1> image_bitmap;
+    hr = m_d2d_context->CreateBitmapFromWicBitmap(
+        wic_bitmap, nullptr, &image_bitmap);
+    if (FAILED(hr) || !image_bitmap) return false;
+
+    m_image_bitmap = image_bitmap;
     m_img_width = w;
     m_img_height = h;
 
-    m_image_bitmap.Reset();
-    HRESULT hr = m_d2d_context->CreateBitmapFromWicBitmap(
-        wic_bitmap, nullptr, &m_image_bitmap);
-    if (FAILED(hr)) return;
-
-    float sx = static_cast<float>(m_target_size.width)  / w;
-    float sy = static_cast<float>(m_target_size.height - m_content_top) / h;
-    m_scale = std::min(sx, sy);
-    m_fit_scale = m_scale;
-    m_offset_x = 0;
-    m_offset_y = 0;
-    m_scroll_y = 0;
+    update_fit_scale();
+    if (reset_view) {
+        m_scale = m_fit_scale;
+        m_offset_x = 0;
+        m_offset_y = 0;
+        m_scroll_y = 0;
+    }
+    return true;
 }
 
 bool Renderer::begin_frame() {
@@ -213,15 +247,17 @@ bool Renderer::begin_frame() {
 bool Renderer::end_frame() {
     if (!m_d2d_context) return false;
     HRESULT hr = m_d2d_context->EndDraw();
-    if (hr == D2DERR_RECREATE_TARGET) {
+    if (should_recreate_render_device(hr)) {
         discard_device_resources();
-        // Don't try to present — next frame will recreate
         return false;
     }
-    if (FAILED(hr)) return false;
 
     DXGI_PRESENT_PARAMETERS pp = {};
-    m_swap_chain->Present1(0, 0, &pp);
+    hr = m_swap_chain->Present1(0, 0, &pp);
+    if (should_recreate_render_device(hr)) {
+        discard_device_resources();
+        return false;
+    }
     return true;
 }
 
@@ -235,7 +271,7 @@ void Renderer::draw_image() {
 
     float scaled_w = m_img_width  * m_scale;
     float scaled_h = m_img_height * m_scale;
-    float x = (m_target_size.width  - scaled_w) / 2.0f + m_offset_x;
+    float x = (content_width() - scaled_w) / 2.0f + m_offset_x;
     float y = m_content_top + (m_target_size.height - m_content_top - scaled_h) / 2.0f + m_offset_y + m_scroll_y;
 
     D2D1_RECT_F dest = {x, y, x + scaled_w, y + scaled_h};
@@ -386,6 +422,26 @@ void Renderer::set_offset(float x, float y) {
     m_offset_y = y;
 }
 
+void Renderer::set_content_viewport(float top, float right) {
+    m_content_top = std::max(0.0f, top);
+    m_content_right = std::max(0.0f, right);
+    update_fit_scale();
+}
+
+float Renderer::content_width() const {
+    return std::max(1.0f, static_cast<float>(m_target_size.width) - m_content_right);
+}
+
+void Renderer::update_fit_scale() {
+    if (m_img_width == 0 || m_img_height == 0) return;
+    float sx = content_width() / static_cast<float>(m_img_width);
+    float content_height = std::max(1.0f,
+        static_cast<float>(m_target_size.height) - m_content_top);
+    float sy = content_height / static_cast<float>(m_img_height);
+    m_fit_scale = std::min(sx, sy);
+    if (m_scale < m_fit_scale) m_scale = m_fit_scale;
+}
+
 void Renderer::set_scroll_y(float y) {
     m_scroll_y = y;
 }
@@ -393,7 +449,10 @@ void Renderer::set_scroll_y(float y) {
 void Renderer::set_dpi(float dpi_x, float dpi_y) {
     if (dpi_x > 0) m_dpi_x = dpi_x;
     if (dpi_y > 0) m_dpi_y = dpi_y;
-    if (m_d2d_context) m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
+    if (m_d2d_context) {
+        m_d2d_context->SetDpi(m_dpi_x, m_dpi_y);
+        create_text_resources();
+    }
 }
 
 // ── Grid drawing ─────────────────────────────────────────────
@@ -405,6 +464,11 @@ HRESULT Renderer::create_bitmap_from_wic(IWICBitmapSource* wic, ID2D1Bitmap1** o
 
 void Renderer::draw_grid_placeholder(float x, float y, float w, float h, D2D1_COLOR_F color) {
     if (!m_d2d_context) return;
+
+    // Keep an unloaded or very dark thumbnail visibly distinct from the
+    // #1A1A1A canvas so a fast scroll never looks like an empty grid.
+    if (std::max({color.r, color.g, color.b}) < 0.18f)
+        color = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
 
     float radius = 4.0f * m_dpi_y / 96.0f;
     D2D1_RECT_F rc = {x, y, x + w, y + h};
@@ -625,6 +689,11 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
             y = ty + title_pad;
         }
         for (auto& [label, value] : gen_info) {
+            if (label.empty()) {
+                y = draw_text_line(x + pad, y, content_w, value, value_br.Get(), 10.0f)
+                    + gap - 4.0f * dpi_s;
+                continue;
+            }
 
             int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
             float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);

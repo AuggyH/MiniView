@@ -1,0 +1,31 @@
+"area: app":
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/app.*
+          - src/main.cpp
+          - src/viewer.*
+          - src/window.*
+
+"area: rendering":
+  - changed-files:
+      - any-glob-to-any-file: src/renderer.*
+
+"area: decoding":
+  - changed-files:
+      - any-glob-to-any-file: src/decoder.*
+
+"area: indexing":
+  - changed-files:
+      - any-glob-to-any-file: src/indexer.*
+
+"area: metadata":
+  - changed-files:
+      - any-glob-to-any-file: src/metadata.*
+
+"area: build":
+  - changed-files:
+      - any-glob-to-any-file:
+          - CMakeLists.txt
+          - build.bat
+          - .github/workflows/**
+          - .github/dependabot.yml

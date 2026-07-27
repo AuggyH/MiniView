@@ -40,7 +40,6 @@ void save_last_dir(const std::wstring& dir) {
 namespace {
 
 constexpr const wchar_t* MUTEX_NAME = L"MinView_SingleInstance_Mutex";
-constexpr const wchar_t* WINDOW_CLASS = L"MinViewWindow";
 constexpr const wchar_t* PROG_ID = L"MinView.Image";
 
 const wchar_t* IMAGE_EXTS[] = {
@@ -52,7 +51,7 @@ const wchar_t* IMAGE_EXTS[] = {
 };
 
 bool forward_to_existing(const std::wstring& path) {
-    HWND hwnd = FindWindowW(WINDOW_CLASS, nullptr);
+    HWND hwnd = FindWindowW(mv::WINDOW_CLASS_NAME, nullptr);
     if (!hwnd || !IsWindow(hwnd)) return false;
 
     COPYDATASTRUCT cds = {};
