@@ -1106,6 +1106,8 @@ function Test-BoundedProcessGuards {
         $hangParentScript = Join-Path $hangRoot 'parent.ps1'
         $hangChildPidPath = Join-Path $hangRoot 'child.pid'
         $hangSentinelPath = Join-Path $hangRoot 'delayed-sentinel.txt'
+        $hangStdoutMarker = '{0}stdout{3}|'
+        $hangStderrMarker = '{6}stderr|'
         [System.IO.File]::WriteAllText(
             $hangChildScript,
             'param([string]$PidPath,[string]$SentinelPath,' +
@@ -1126,8 +1128,10 @@ function Test-BoundedProcessGuards {
                 '$ChildScript,''-PidPath'',$ChildPidPath,' +
                 '''-SentinelPath'',$SentinelPath,' +
                 '''-DelayMilliseconds'',[string]$SentinelDelay) -PassThru;' +
-                '[Console]::Out.Write((''H'' * $FloodLength));' +
-                '[Console]::Error.Write((''E'' * $FloodLength));' +
+                '[Console]::Out.Write(''' + $hangStdoutMarker +
+                    ''' + (''H'' * $FloodLength));' +
+                '[Console]::Error.Write(''' + $hangStderrMarker +
+                    ''' + (''E'' * $FloodLength));' +
                 'Start-Sleep -Seconds 60',
             $utf8WithoutBom)
         $hangResult = Invoke-BoundedProcess `
@@ -1169,9 +1173,23 @@ function Test-BoundedProcessGuards {
             "$($script:HangRegressionTimeoutMilliseconds) ms " +
             "(duration $($hangResult.DurationMilliseconds) ms); " +
             "$expectedTerminationState; $expectedTerminationDetail; "
+        $expectedHangStdout =
+            $hangStdoutMarker + ('H' * $script:LargeOutputLength)
+        $expectedHangStderr =
+            $hangStderrMarker + ('E' * $script:LargeOutputLength)
         $expectedHangStreams =
-            'stdout: ' + (Get-ProcessOutputExcerpt $hangResult.Stdout) +
-            '; stderr: ' + (Get-ProcessOutputExcerpt $hangResult.Stderr)
+            'stdout: ' + (Get-ProcessOutputExcerpt $expectedHangStdout) +
+            '; stderr: ' + (Get-ProcessOutputExcerpt $expectedHangStderr)
+        $expectedHangDiagnostic = $expectedHangPrefix + $expectedHangStreams
+        $hangStreamsMatch = $hangDiagnostic.EndsWith(
+            $expectedHangStreams,
+            [System.StringComparison]::Ordinal)
+        $hangTemplateOwnedPrefix = if ($hangStreamsMatch) {
+            $hangDiagnostic.Substring(
+                0, $hangDiagnostic.Length - $expectedHangStreams.Length)
+        } else {
+            ''
+        }
         if (-not $hangResult.Started -or
             -not $hangResult.TimedOut -or
             -not $hangResult.TerminationAttempted -or
@@ -1179,13 +1197,17 @@ function Test-BoundedProcessGuards {
             -not $hangResult.OutputDrainSucceeded -or
             $hangResult.Stdout.Length -lt $script:LargeOutputLength -or
             $hangResult.Stderr.Length -lt $script:LargeOutputLength -or
+            $hangResult.Stdout -cne $expectedHangStdout -or
+            $hangResult.Stderr -cne $expectedHangStderr -or
             -not $hangDiagnostic.StartsWith(
                 $expectedHangPrefix,
                 [System.StringComparison]::Ordinal) -or
-            -not $hangDiagnostic.EndsWith(
-                $expectedHangStreams,
-                [System.StringComparison]::Ordinal) -or
-            $hangDiagnostic -match '\{[0-6]\}') {
+            -not $hangStreamsMatch -or
+            $hangTemplateOwnedPrefix -match '\{[0-6]\}' -or
+            $hangDiagnostic -cne $expectedHangDiagnostic -or
+            -not $hangDiagnostic.Contains('{0}') -or
+            -not $hangDiagnostic.Contains('{3}') -or
+            -not $hangDiagnostic.Contains('{6}')) {
             $failures.Add(
                 "bounded hang regression failed: $hangDiagnostic")
         }
