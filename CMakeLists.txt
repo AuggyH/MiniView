@@ -20,6 +20,7 @@ set(SOURCES
     src/decoder.cpp
     src/viewer.cpp
     src/app.cpp
+    src/file_operation.cpp
     src/indexer.cpp
     src/metadata.cpp
     src/MinView.rc
@@ -145,6 +146,7 @@ if(BUILD_TESTING)
 
     add_executable(file_operation_tests
         tests/file_operation_tests.cpp
+        src/file_operation.cpp
     )
     target_include_directories(file_operation_tests PRIVATE src)
     target_compile_options(file_operation_tests PRIVATE /W4 /utf-8)

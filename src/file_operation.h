@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -14,20 +15,43 @@ enum class DeleteMode {
     Permanent,
 };
 
-struct DeleteKeyState {
+inline constexpr UINT kDeleteCommandRecycle = 1031;
+inline constexpr UINT kDeleteCommandPermanent = 1032;
+
+enum class DeleteTarget {
+    CurrentImage,
+    GridSelection,
+};
+
+struct DeleteIntent {
+    DeleteTarget target = DeleteTarget::CurrentImage;
+    DeleteMode mode = DeleteMode::Recycle;
+};
+
+struct DeleteRouteState {
+    bool grid_mode = false;
+    bool has_selection = false;
     bool shift_down = false;
     bool control_down = false;
     bool main_window_focused = false;
     bool ime_composing = false;
-    bool repeated = false;
 };
 
-inline std::optional<DeleteMode> route_delete_key(
-    UINT key, const DeleteKeyState& state) {
-    if (key != VK_DELETE || state.control_down || !state.main_window_focused
-        || state.ime_composing || state.repeated) return std::nullopt;
-    return state.shift_down ? DeleteMode::Permanent : DeleteMode::Recycle;
-}
+struct DeleteIntentHandlers {
+    std::function<void(DeleteMode)> current_image;
+    std::function<void(DeleteMode)> grid_selection;
+};
+
+std::optional<DeleteIntent> route_delete_key(
+    UINT key, LPARAM key_lparam, const DeleteRouteState& state);
+std::optional<DeleteIntent> route_delete_command(
+    UINT command, bool grid_mode, bool has_selection);
+bool dispatch_delete_key(
+    UINT key, LPARAM key_lparam, const DeleteRouteState& state,
+    const DeleteIntentHandlers& handlers);
+bool dispatch_delete_command(
+    UINT command, bool grid_mode, bool has_selection,
+    const DeleteIntentHandlers& handlers);
 
 struct PermanentDeletePrompt {
     std::wstring title;
@@ -67,6 +91,64 @@ enum class DeleteRequestResult {
     StaleTargets,
     MutationInvoked,
 };
+
+struct DeleteMutationResult {
+    int shell_result = 0;
+    bool aborted = false;
+};
+
+struct DeleteAdapterCallbacks {
+    std::function<int(const PermanentDeletePrompt&)> confirm;
+    std::function<bool(const std::vector<std::wstring>&)> targets_still_current;
+    std::function<DeleteMutationResult(
+        const std::vector<std::wstring>&, DeleteMode)> mutate;
+    std::function<bool(const std::wstring&)> target_is_missing;
+    std::function<void()> stop_loader;
+    std::function<void()> start_loader;
+};
+
+struct DeleteAdapterResult {
+    DeleteRequestResult request_result = DeleteRequestResult::InvalidTargets;
+    std::vector<size_t> removed_positions;
+    std::vector<std::wstring> remaining_targets;
+    bool complete = false;
+};
+
+DeleteAdapterResult execute_current_delete(
+    DeleteMode mode, const std::vector<std::wstring>& targets,
+    bool loader_was_running, const DeleteAdapterCallbacks& callbacks);
+DeleteAdapterResult execute_grid_delete(
+    DeleteMode mode, const std::vector<std::wstring>& targets,
+    const DeleteAdapterCallbacks& callbacks);
+
+struct CurrentDeleteRecoveryResult {
+    std::wstring successor_path;
+    int successor_index = -1;
+    bool successor_attempted = false;
+    bool successor_opened = false;
+    bool restart_loader = false;
+};
+
+CurrentDeleteRecoveryResult recover_current_delete(
+    const std::wstring& deleted_path, int deleted_index,
+    const std::vector<std::wstring>& remaining_paths,
+    bool loader_was_running,
+    const std::function<bool(const std::wstring&, int)>& open_successor,
+    std::wstring& current_path, int& current_index, bool& has_image);
+
+struct GridDeleteRecoveryResult {
+    bool index_empty = false;
+    bool current_identity_changed = false;
+    bool restart_loader = false;
+};
+
+GridDeleteRecoveryResult recover_grid_delete(
+    const std::vector<std::wstring>& remaining_paths,
+    int previous_grid_selection, const std::wstring& focused_path,
+    const std::vector<std::wstring>& remaining_selected_paths,
+    std::wstring& current_path, int& current_index, bool& has_image,
+    bool& grid_mode, int& grid_selection, std::vector<bool>& selected,
+    int& selection_anchor);
 
 template <typename Confirm, typename TargetsStillCurrent, typename Mutate>
 inline DeleteRequestResult run_guarded_delete(
