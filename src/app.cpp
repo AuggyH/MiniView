@@ -387,7 +387,8 @@ static void ApplyMenuTheme(HMENU menu, HBRUSH br) {
 
 // ── App lifecycle ────────────────────────────────────────────
 
-App::App()  = default;
+App::App()
+    : m_delete_composition(make_windows_delete_composition(*this)) {}
 App::~App() { stop_metadata_loader(); stop_preloader(); stop_thumb_loader(); }
 
 int App::run(const std::wstring& initial_path) {
@@ -523,16 +524,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_CREATE_COPY: create_file_copies(); return 0;
         case IDM_DELETE:
         case IDM_DELETE_PERM: {
-            const DeleteIntentHandlers handlers = {
-                [this](DeleteMode mode) {
-                    delete_current_file(mode == DeleteMode::Permanent);
-                },
-                [this](DeleteMode mode) {
-                    delete_selected(mode == DeleteMode::Permanent);
-                },
-            };
-            dispatch_delete_command(
-                LOWORD(wp), m_grid_mode, has_selection(), handlers);
+            m_delete_composition->handle_window_command(LOWORD(wp));
             return 0;
         }
         case IDM_EXPLORER: open_in_explorer(); return 0;
@@ -1128,24 +1120,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
 
-        DeleteRouteState delete_state;
-        delete_state.grid_mode = m_grid_mode;
-        delete_state.has_selection = has_selection();
-        delete_state.shift_down = shift;
-        delete_state.control_down = ctrl;
-        delete_state.main_window_focused =
+        DeleteKeyGuards delete_guards;
+        delete_guards.shift_down = shift;
+        delete_guards.control_down = ctrl;
+        delete_guards.main_window_focused =
                 GetForegroundWindow() == hwnd && GetFocus() == hwnd;
-        delete_state.ime_composing = m_ime_composing;
-        const DeleteIntentHandlers handlers = {
-            [this](DeleteMode mode) {
-                delete_current_file(mode == DeleteMode::Permanent);
-            },
-            [this](DeleteMode mode) {
-                delete_selected(mode == DeleteMode::Permanent);
-            },
-        };
-        if (dispatch_delete_key(
-                static_cast<UINT>(wp), lp, delete_state, handlers))
+        delete_guards.ime_composing = m_ime_composing;
+        if (m_delete_composition->handle_key(
+                static_cast<UINT>(wp), lp, delete_guards))
             return 0;
 
         if (ctrl) {
@@ -1567,100 +1549,92 @@ void App::preload_neighbors() {
 
 // ── Delete ───────────────────────────────────────────────────
 
-void App::delete_current_file(bool permanent) {
-    if (!can_delete_current_image(m_has_image, m_current_path)) return;
+HWND App::delete_owner_window() const {
+    return m_window.handle();
+}
 
-    const std::wstring deleted_path = m_current_path;
-    const std::vector<std::wstring> requested_paths = {deleted_path};
-    const bool loader_was_running = m_thumb_running;
-    DeleteAdapterCallbacks callbacks;
-    callbacks.confirm = [this](const PermanentDeletePrompt& prompt) {
-        return MessageBoxW(m_window.handle(), prompt.message.c_str(),
-            prompt.title.c_str(), prompt.flags);
-    };
-    callbacks.targets_still_current = [this](
-        const std::vector<std::wstring>& approved_paths) {
-        return approved_paths.size() == 1
-            && can_delete_current_image(m_has_image, m_current_path)
-            && m_current_path == approved_paths.front()
-            && m_current_idx >= 0
-            && m_current_idx < static_cast<int>(m_index.size())
-            && m_index.path_at(m_current_idx) == approved_paths.front();
-    };
-    callbacks.mutate = [](const std::vector<std::wstring>& approved_paths,
-        DeleteMode mode) {
-        std::wstring from = approved_paths.front();
-        from.push_back(L'\0');
-        from.push_back(L'\0');
-        SHFILEOPSTRUCTW fos = {};
-        fos.wFunc = FO_DELETE;
-        fos.pFrom = from.c_str();
-        fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
-        if (mode == DeleteMode::Recycle) fos.fFlags |= FOF_ALLOWUNDO;
-        const int shell_result = SHFileOperationW(&fos);
-        return DeleteMutationResult{
-            shell_result, fos.fAnyOperationsAborted != FALSE};
-    };
-    callbacks.target_is_missing = [](const std::wstring& path) {
-        return path_is_confirmed_missing(path);
-    };
-    callbacks.stop_loader = [this] { stop_thumb_loader(); };
-    callbacks.start_loader = [this] { start_thumb_loader(); };
-    const DeleteAdapterResult delete_result = execute_current_delete(
-        permanent ? DeleteMode::Permanent : DeleteMode::Recycle,
-        requested_paths, loader_was_running, callbacks);
-    if (delete_result.request_result != DeleteRequestResult::MutationInvoked) return;
+DeleteCompositionState App::capture_delete_state() const {
+    DeleteCompositionState state;
+    state.index_paths.reserve(m_index.size());
+    for (int i = 0; i < static_cast<int>(m_index.size()); ++i)
+        state.index_paths.push_back(m_index.path_at(i));
+    state.current_path = m_current_path;
+    state.current_index = m_current_idx;
+    state.has_image = m_has_image;
+    state.grid_mode = m_grid_mode;
+    state.grid_selection = m_grid_sel;
+    state.selected = m_selected;
+    state.selection_anchor = m_sel_anchor;
+    state.loader_running = m_thumb_running.load(std::memory_order_relaxed);
+    return state;
+}
 
-    const bool removed = !delete_result.removed_positions.empty();
-    if (!removed) {
-        if (!delete_result.complete) {
-            MessageBoxW(m_window.handle(),
-                L"删除未完成，文件仍保留在列表中。", L"MinView",
-                MB_OK | MB_ICONWARNING);
-        }
-        return;
-    }
+void App::remove_delete_indices(const std::vector<int>& indices) {
+    m_index.remove_many(indices);
+}
 
-    const int removed_index = m_index.index_of(deleted_path);
-    if (removed_index >= 0) m_index.remove_many({removed_index});
+bool App::open_delete_successor(const std::wstring& path, int index) {
+    static_cast<void>(index);
+    return open_image(path);
+}
+
+void App::set_delete_current_identity(
+    const std::wstring& path, int index, bool has_image) {
+    m_current_path = path;
+    m_current_idx = index;
+    m_has_image = has_image;
+}
+
+void App::set_delete_grid_state(
+    bool grid_mode, int grid_selection, const std::vector<bool>& selected,
+    int selection_anchor) {
+    m_grid_mode = grid_mode;
+    m_grid_sel = grid_selection;
+    m_selected = selected;
+    m_sel_anchor = selection_anchor;
+}
+
+void App::reset_delete_current_bitmap() {
+    m_current_wic.Reset();
+}
+
+void App::stop_delete_loader() {
+    stop_thumb_loader();
+}
+
+void App::start_delete_loader() {
+    start_thumb_loader();
+}
+
+void App::rebuild_delete_thumbnails() {
     m_thumbs.clear();
     m_thumbs.resize(m_index.size());
     m_thumb_d2d.clear();
     m_thumb_d2d_use.clear();
     m_grid_layout_dirty = true;
+}
 
-    std::vector<std::wstring> remaining_paths;
-    remaining_paths.reserve(m_index.size());
-    for (int i = 0; i < static_cast<int>(m_index.size()); ++i)
-        remaining_paths.push_back(m_index.path_at(i));
+void App::clear_delete_thumbnails() {
+    m_thumbs.clear();
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_grid_layout_dirty = true;
+}
 
-    m_current_wic.Reset();
-    const CurrentDeleteRecoveryResult recovery = recover_current_delete(
-        deleted_path, removed_index, remaining_paths, loader_was_running,
-        [this](const std::wstring& path, int) { return open_image(path); },
-        m_current_path, m_current_idx, m_has_image);
+void App::reset_delete_grid_cache() {
+    m_last_cached_sel = -1;
+}
 
-    if (!recovery.successor_attempted) {
-        update_title();
-        m_window.invalidate();
-        if (!delete_result.complete) {
-            MessageBoxW(m_window.handle(),
-                L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
-                MB_OK | MB_ICONWARNING);
-        }
-        return;
-    }
+void App::ensure_delete_grid_visible() {
+    grid_ensure_visible();
+}
 
-    if (!recovery.successor_opened) {
-        update_title();
-        m_window.invalidate();
-    }
-    if (recovery.restart_loader) start_thumb_loader();
-    if (!delete_result.complete) {
-        MessageBoxW(m_window.handle(),
-            L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
-            MB_OK | MB_ICONWARNING);
-    }
+void App::update_delete_title() {
+    update_title();
+}
+
+void App::invalidate_delete_view() {
+    m_window.invalidate();
 }
 
 // ── Context menu ─────────────────────────────────────────────
@@ -1721,7 +1695,7 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
     case 9: create_file_copies();       break;
     case IDM_DELETE:
     case IDM_DELETE_PERM:
-        SendMessageW(hwnd, WM_COMMAND, static_cast<WPARAM>(cmd), 0);
+        m_delete_composition->handle_context_command(static_cast<UINT>(cmd));
         break;
     case 5: {
         // Open File dialog
@@ -1911,12 +1885,15 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     // Handle commands
     switch (cmd) {
+    case IDM_DELETE:
+    case IDM_DELETE_PERM:
+        m_delete_composition->handle_toolbar_command(static_cast<UINT>(cmd));
+        break;
     case IDM_OPEN_FILE: case IDM_OPEN_FOLDER: case IDM_FULLSCREEN: case IDM_RECURSIVE:
     case IDM_THUMB_SQUARE: case IDM_INFO:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
     case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
     case IDM_COPY_IMAGE: case IDM_COPY_PATH: case IDM_CREATE_COPY:
-    case IDM_DELETE: case IDM_DELETE_PERM:
     case IDM_EXPLORER: case IDM_ABOUT:
         SendMessageW(hwnd, WM_COMMAND, cmd, 0); break;
     }
@@ -2866,117 +2843,6 @@ void App::select_range(int start, int end) {
     if (start > end) std::swap(start, end);
     for (int i = start; i <= end && i < static_cast<int>(m_selected.size()); ++i)
         m_selected[i] = true;
-}
-
-void App::delete_selected(bool permanent) {
-    if (m_selected.size() != m_index.size()) return;
-    std::vector<int> to_delete;
-    for (int i = 0; i < static_cast<int>(m_selected.size()); ++i)
-        if (m_selected[i]) to_delete.push_back(i);
-    if (to_delete.empty()) return;
-
-    const int previous_grid_sel = m_grid_sel;
-    std::wstring focused_path;
-    if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
-        focused_path = m_index.path_at(m_grid_sel);
-    std::vector<std::wstring> requested_paths;
-    requested_paths.reserve(to_delete.size());
-
-    for (int index : to_delete) {
-        requested_paths.push_back(m_index.path_at(index));
-    }
-
-    DeleteAdapterCallbacks callbacks;
-    callbacks.confirm = [this](const PermanentDeletePrompt& prompt) {
-        return MessageBoxW(m_window.handle(), prompt.message.c_str(),
-            prompt.title.c_str(), prompt.flags);
-    };
-    callbacks.targets_still_current = [this](
-        const std::vector<std::wstring>& approved_paths) {
-        return m_grid_mode && approved_paths == selected_paths();
-    };
-    callbacks.mutate = [](const std::vector<std::wstring>& approved_paths,
-        DeleteMode mode) {
-        std::wstring from;
-        for (const auto& path : approved_paths) {
-            from += path;
-            from.push_back(L'\0');
-        }
-        from.push_back(L'\0');
-        SHFILEOPSTRUCTW fos = {};
-        fos.wFunc = FO_DELETE;
-        fos.pFrom = from.c_str();
-        fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
-        if (mode == DeleteMode::Recycle) fos.fFlags |= FOF_ALLOWUNDO;
-        const int shell_result = SHFileOperationW(&fos);
-        return DeleteMutationResult{
-            shell_result, fos.fAnyOperationsAborted != FALSE};
-    };
-    callbacks.target_is_missing = [](const std::wstring& path) {
-        return path_is_confirmed_missing(path);
-    };
-    callbacks.stop_loader = [this] { stop_thumb_loader(); };
-    callbacks.start_loader = [this] { start_thumb_loader(); };
-    const DeleteAdapterResult delete_result = execute_grid_delete(
-        permanent ? DeleteMode::Permanent : DeleteMode::Recycle,
-        requested_paths, callbacks);
-    if (delete_result.request_result != DeleteRequestResult::MutationInvoked) return;
-
-    std::vector<int> removed_indices;
-    removed_indices.reserve(delete_result.removed_positions.size());
-    for (size_t position : delete_result.removed_positions)
-        removed_indices.push_back(to_delete[position]);
-
-    if (removed_indices.empty()) {
-        if (!delete_result.complete) {
-            MessageBoxW(m_window.handle(),
-                L"删除未完成，文件仍保留在列表中。", L"MinView",
-                MB_OK | MB_ICONWARNING);
-        }
-        return;
-    }
-
-    m_index.remove_many(removed_indices);
-
-    std::vector<std::wstring> remaining_paths;
-    remaining_paths.reserve(m_index.size());
-    for (int i = 0; i < static_cast<int>(m_index.size()); ++i)
-        remaining_paths.push_back(m_index.path_at(i));
-    const GridDeleteRecoveryResult recovery = recover_grid_delete(
-        remaining_paths, previous_grid_sel, focused_path,
-        delete_result.remaining_targets,
-        m_current_path, m_current_idx, m_has_image,
-        m_grid_mode, m_grid_sel, m_selected, m_sel_anchor);
-    if (recovery.current_identity_changed) m_current_wic.Reset();
-
-    if (recovery.index_empty) {
-        stop_thumb_loader();
-        m_thumbs.clear(); m_thumb_d2d.clear(); m_thumb_d2d_use.clear();
-        m_grid_layout_dirty = true;
-        update_title();
-        m_window.invalidate();
-        if (!delete_result.complete) {
-            MessageBoxW(m_window.handle(),
-                L"删除操作报告未完全完成，列表已按磁盘实际状态更新。", L"MinView",
-                MB_OK | MB_ICONWARNING);
-        }
-        return;
-    }
-
-    m_thumbs.clear();
-    m_thumbs.resize(m_index.size());
-    m_thumb_d2d.clear();
-    m_thumb_d2d_use.clear();
-    m_grid_layout_dirty = true;
-    m_last_cached_sel = -1;
-    if (recovery.restart_loader) start_thumb_loader();
-    grid_ensure_visible();
-    m_window.invalidate();
-    if (!delete_result.complete) {
-        MessageBoxW(m_window.handle(),
-            L"删除操作未完全完成，列表已按磁盘实际状态更新。", L"MinView",
-            MB_OK | MB_ICONWARNING);
-    }
 }
 
 void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {

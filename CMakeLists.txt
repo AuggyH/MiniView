@@ -21,6 +21,7 @@ set(SOURCES
     src/viewer.cpp
     src/app.cpp
     src/file_operation.cpp
+    src/file_operation_windows.cpp
     src/indexer.cpp
     src/metadata.cpp
     src/MinView.rc
@@ -153,7 +154,10 @@ if(BUILD_TESTING)
     if(MINVIEW_WARNINGS_AS_ERRORS)
         target_compile_options(file_operation_tests PRIVATE /WX)
     endif()
-    target_compile_definitions(file_operation_tests PRIVATE NOMINMAX)
+    target_compile_definitions(file_operation_tests PRIVATE
+        NOMINMAX
+        MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
+    )
     set_target_properties(file_operation_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(file_operation_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME file_operation.unit COMMAND file_operation_tests)

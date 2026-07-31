@@ -5,6 +5,8 @@
 #include "indexer.h"
 #include "metadata.h"
 #include "app_state.h"
+#include "file_operation.h"
+#include <memory>
 #include <string>
 #include <thread>
 #include <mutex>
@@ -15,7 +17,7 @@
 
 namespace mv {
 
-class App {
+class App : private DeleteCompositionHost {
 public:
     App();
     ~App();
@@ -45,8 +47,25 @@ private:
     bool    synchronize_renderer_generation();
     void    update_title();
 
-    void    delete_current_file(bool permanent);
-    void    delete_selected(bool permanent);
+    HWND    delete_owner_window() const override;
+    DeleteCompositionState capture_delete_state() const override;
+    void    remove_delete_indices(const std::vector<int>& indices) override;
+    bool    open_delete_successor(const std::wstring& path, int index) override;
+    void    set_delete_current_identity(
+                const std::wstring& path, int index, bool has_image) override;
+    void    set_delete_grid_state(
+                bool grid_mode, int grid_selection,
+                const std::vector<bool>& selected,
+                int selection_anchor) override;
+    void    reset_delete_current_bitmap() override;
+    void    stop_delete_loader() override;
+    void    start_delete_loader() override;
+    void    rebuild_delete_thumbnails() override;
+    void    clear_delete_thumbnails() override;
+    void    reset_delete_grid_cache() override;
+    void    ensure_delete_grid_visible() override;
+    void    update_delete_title() override;
+    void    invalidate_delete_view() override;
     void    open_in_explorer();
     void    show_toolbar_menu(HWND hwnd, int idx, int x, int y);
     std::vector<std::wstring> selected_paths() const;
@@ -109,6 +128,7 @@ private:
     Renderer   m_renderer;
     Decoder    m_decoder;
     ImageIndex m_index;
+    std::unique_ptr<DeleteComposition> m_delete_composition;
 
     std::wstring m_current_path;
     Microsoft::WRL::ComPtr<IWICBitmapSource> m_current_wic;
