@@ -159,6 +159,7 @@ private:
     bool  m_panel_expanded = true;
     bool  m_from_grid = false;  // current image has a grid context → Space/Esc returns
     bool  m_toolbar_revealed = false;
+    bool  m_ime_composing = false;
 
     // Transition animation
     bool  m_animating = false;

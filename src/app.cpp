@@ -1109,9 +1109,39 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
 
+    case WM_IME_STARTCOMPOSITION:
+        m_ime_composing = true;
+        return -1;
+
+    case WM_IME_ENDCOMPOSITION:
+    case WM_KILLFOCUS:
+        m_ime_composing = false;
+        return -1;
+
     case WM_KEYDOWN: {
         bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+
+        if (wp == VK_DELETE) {
+            DeleteKeyState key_state;
+            key_state.shift_down = shift;
+            key_state.control_down = ctrl;
+            key_state.main_window_focused =
+                GetForegroundWindow() == hwnd && GetFocus() == hwnd;
+            key_state.ime_composing = m_ime_composing;
+            key_state.repeated = (static_cast<ULONG_PTR>(lp)
+                & (ULONG_PTR{1} << 30)) != 0;
+            const auto mode = route_delete_key(static_cast<UINT>(wp), key_state);
+            if (mode) {
+                const bool permanent = *mode == DeleteMode::Permanent;
+                if (m_grid_mode && has_selection()) {
+                    delete_selected(permanent);
+                } else if (!m_grid_mode) {
+                    delete_current_file(permanent);
+                }
+            }
+            return 0;
+        }
 
         if (ctrl) {
             switch (wp) {
@@ -1214,13 +1244,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_END:
             if (m_grid_mode) { select_item(static_cast<int>(m_index.size()) - 1, shift, false); grid_ensure_visible(); return 0; }
             navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
-        case VK_DELETE:
-            if (m_grid_mode && has_selection()) {
-                delete_selected(shift);
-            } else if (!m_grid_mode) {
-                delete_current_file(shift);
-            }
-            return 0;
         }
         break;
     }
@@ -1542,20 +1565,40 @@ void App::preload_neighbors() {
 void App::delete_current_file(bool permanent) {
     if (!can_delete_current_image(m_has_image, m_current_path)) return;
 
-    const bool loader_was_running = m_thumb_running;
-    if (loader_was_running) stop_thumb_loader();
-
     const std::wstring deleted_path = m_current_path;
-    std::wstring from = deleted_path;
-    from.push_back(L'\0'); from.push_back(L'\0');
-
+    const std::vector<std::wstring> requested_paths = {deleted_path};
+    const bool loader_was_running = m_thumb_running;
     SHFILEOPSTRUCTW fos = {};
-    fos.wFunc  = FO_DELETE;
-    fos.pFrom  = from.c_str();
-    fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
-    if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
+    int shell_result = 0;
+    const DeleteRequestResult request_result = run_guarded_delete(
+        permanent ? DeleteMode::Permanent : DeleteMode::Recycle,
+        requested_paths,
+        [this](const PermanentDeletePrompt& prompt) {
+            return MessageBoxW(m_window.handle(), prompt.message.c_str(),
+                prompt.title.c_str(), prompt.flags);
+        },
+        [this](const std::vector<std::wstring>& approved_paths) {
+            return approved_paths.size() == 1
+                && can_delete_current_image(m_has_image, m_current_path)
+                && m_current_path == approved_paths.front()
+                && m_current_idx >= 0
+                && m_current_idx < static_cast<int>(m_index.size())
+                && m_index.path_at(m_current_idx) == approved_paths.front();
+        },
+        [this, loader_was_running, &fos, &shell_result](
+            const std::vector<std::wstring>& approved_paths, DeleteMode mode) {
+            if (loader_was_running) stop_thumb_loader();
+            std::wstring from = approved_paths.front();
+            from.push_back(L'\0');
+            from.push_back(L'\0');
+            fos.wFunc = FO_DELETE;
+            fos.pFrom = from.c_str();
+            fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+            if (mode == DeleteMode::Recycle) fos.fFlags |= FOF_ALLOWUNDO;
+            shell_result = SHFileOperationW(&fos);
+        });
+    if (request_result != DeleteRequestResult::MutationInvoked) return;
 
-    const int shell_result = SHFileOperationW(&fos);
     const bool removed = path_is_confirmed_missing(deleted_path);
     const bool complete = delete_fully_completed(
         shell_result, fos.fAnyOperationsAborted != FALSE, 1, removed ? 1 : 0);
@@ -1876,6 +1919,7 @@ void App::open_in_explorer() {
 std::vector<std::wstring> App::selected_paths() const {
     std::vector<std::wstring> paths;
     if (m_grid_mode) {
+        if (m_selected.size() != m_index.size()) return paths;
         for (int i = 0; i < static_cast<int>(m_selected.size()); ++i) {
             if (m_selected[static_cast<size_t>(i)]) paths.push_back(m_index.path_at(i));
         }
@@ -2792,6 +2836,7 @@ void App::toggle_thumb_square() {
 // ── Multi-select helpers ─────────────────────────────────
 
 bool App::has_selection() const {
+    if (m_selected.size() != m_index.size()) return false;
     for (auto s : m_selected) if (s) return true;
     return false;
 }
@@ -2809,6 +2854,7 @@ void App::select_range(int start, int end) {
 }
 
 void App::delete_selected(bool permanent) {
+    if (m_selected.size() != m_index.size()) return;
     std::vector<int> to_delete;
     for (int i = 0; i < static_cast<int>(m_selected.size()); ++i)
         if (m_selected[i]) to_delete.push_back(i);
@@ -2821,22 +2867,38 @@ void App::delete_selected(bool permanent) {
     std::vector<std::wstring> requested_paths;
     requested_paths.reserve(to_delete.size());
 
-    std::wstring from;
     for (int index : to_delete) {
         requested_paths.push_back(m_index.path_at(index));
-        from += requested_paths.back();
-        from.push_back(L'\0');
     }
-    from.push_back(L'\0');
-
-    stop_thumb_loader();
 
     SHFILEOPSTRUCTW fos = {};
-    fos.wFunc  = FO_DELETE;
-    fos.pFrom  = from.c_str();
-    fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
-    if (!permanent) fos.fFlags |= FOF_ALLOWUNDO;
-    const int shell_result = SHFileOperationW(&fos);
+    int shell_result = 0;
+    const DeleteRequestResult request_result = run_guarded_delete(
+        permanent ? DeleteMode::Permanent : DeleteMode::Recycle,
+        requested_paths,
+        [this](const PermanentDeletePrompt& prompt) {
+            return MessageBoxW(m_window.handle(), prompt.message.c_str(),
+                prompt.title.c_str(), prompt.flags);
+        },
+        [this](const std::vector<std::wstring>& approved_paths) {
+            return m_grid_mode && approved_paths == selected_paths();
+        },
+        [this, &fos, &shell_result](
+            const std::vector<std::wstring>& approved_paths, DeleteMode mode) {
+            stop_thumb_loader();
+            std::wstring from;
+            for (const auto& path : approved_paths) {
+                from += path;
+                from.push_back(L'\0');
+            }
+            from.push_back(L'\0');
+            fos.wFunc = FO_DELETE;
+            fos.pFrom = from.c_str();
+            fos.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI;
+            if (mode == DeleteMode::Recycle) fos.fFlags |= FOF_ALLOWUNDO;
+            shell_result = SHFileOperationW(&fos);
+        });
+    if (request_result != DeleteRequestResult::MutationInvoked) return;
 
     std::vector<int> removed_indices;
     std::vector<std::wstring> remaining_selected;
