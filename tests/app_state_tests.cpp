@@ -30,6 +30,41 @@ int main() {
     expect(!mv::should_preserve_selection_for_drag(true, true, false),
         "shift click should keep range-selection semantics");
 
+    std::vector<bool> selected(3, false);
+    int grid_selection = -1;
+    int selection_anchor = -1;
+    expect(mv::apply_grid_item_selection(
+            0, 3, false, false, selected, grid_selection, selection_anchor)
+            && selected == std::vector<bool>({true, false, false})
+            && grid_selection == 0 && selection_anchor == 0,
+        "plain click must establish the exact internal selection");
+    expect(mv::apply_grid_item_selection(
+            1, 3, false, true, selected, grid_selection, selection_anchor)
+            && mv::apply_grid_item_selection(
+                2, 3, false, true, selected, grid_selection, selection_anchor)
+            && selected == std::vector<bool>({true, true, true}),
+        "Ctrl click must add each exact item to the internal selection");
+    expect(mv::apply_grid_item_selection(
+            2, 3, false, true, selected, grid_selection, selection_anchor)
+            && selected == std::vector<bool>({true, true, false})
+            && grid_selection == 2 && selection_anchor == 2,
+        "Ctrl toggle off must retain focus without retaining selection");
+    expect(mv::grid_item_has_selection_border(0, grid_selection, selected)
+            && mv::grid_item_has_selection_border(1, grid_selection, selected)
+            && !mv::grid_item_has_selection_border(2, grid_selection, selected),
+        "only exact internal selection members may render selection borders");
+
+    selected.assign(3, false);
+    grid_selection = -1;
+    selection_anchor = -1;
+    expect(mv::apply_grid_item_selection(
+            0, 3, false, false, selected, grid_selection, selection_anchor)
+            && mv::apply_grid_item_selection(
+                2, 3, true, false, selected, grid_selection, selection_anchor)
+            && selected == std::vector<bool>({true, true, true})
+            && grid_selection == 2,
+        "Shift range must select the inclusive anchor-to-focus interval");
+
     expect(mv::clamp_grid_scroll_position(900, 600, 400) == 200,
         "shorter layouts should clamp scroll position to the new bottom");
     expect(mv::clamp_grid_scroll_position(-10, 600, 400) == 0,

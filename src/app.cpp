@@ -2542,11 +2542,9 @@ bool App::grid_click(int x, int y, bool shift, bool ctrl) {
 }
 void App::select_item(int idx, bool shift, bool ctrl) {
     int total = static_cast<int>(m_index.size());
-    if (idx < 0 || idx >= total) return;
-    if (shift && m_sel_anchor >= 0) select_range(m_sel_anchor, idx);
-    else if (ctrl) { if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = !m_selected[idx]; m_sel_anchor = idx; }
-    else { clear_selection(); if (idx < static_cast<int>(m_selected.size())) m_selected[idx] = true; m_sel_anchor = idx; }
-    m_grid_sel = idx;
+    if (!apply_grid_item_selection(
+            idx, total, shift, ctrl, m_selected, m_grid_sel, m_sel_anchor))
+        return;
     m_window.invalidate();
 }
 
@@ -3072,9 +3070,8 @@ void App::grid_render() {
                     static_cast<float>(row.row_h), fill);
             }
 
-            bool selected = index == m_grid_sel
-                || (index < static_cast<int>(m_selected.size())
-                    && m_selected[static_cast<size_t>(index)]);
+            bool selected = grid_item_has_selection_border(
+                index, m_grid_sel, m_selected);
             if (selected) {
                 D2D1_RECT_F rect = {x - 2, row_y - 2, x + width + 2,
                     row_y + row.row_h + 2};
