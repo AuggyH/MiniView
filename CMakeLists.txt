@@ -148,6 +148,8 @@ if(BUILD_TESTING)
     add_executable(file_operation_tests
         tests/file_operation_tests.cpp
         src/file_operation.cpp
+        src/file_operation_windows.cpp
+        src/decoder.cpp
     )
     target_include_directories(file_operation_tests PRIVATE src)
     target_compile_options(file_operation_tests PRIVATE /W4 /utf-8)
@@ -157,6 +159,11 @@ if(BUILD_TESTING)
     target_compile_definitions(file_operation_tests PRIVATE
         NOMINMAX
         MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(file_operation_tests PRIVATE
+        shell32
+        windowscodecs
+        ole32
     )
     set_target_properties(file_operation_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(file_operation_tests PRIVATE /SUBSYSTEM:CONSOLE)

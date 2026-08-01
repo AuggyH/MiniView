@@ -1,4 +1,5 @@
 #include "file_operation.h"
+#include "decoder.h"
 
 #include <algorithm>
 #include <array>
@@ -26,6 +27,76 @@ void expect(bool condition, const char* message) {
         std::cerr << "FAIL: " << message << '\n';
         ++failures;
     }
+}
+
+class TemporaryDirectory {
+public:
+    TemporaryDirectory() {
+        const fs::path base = fs::temp_directory_path();
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            const std::wstring name = L"minview-file-operation-"
+                + std::to_wstring(GetCurrentProcessId()) + L"-"
+                + std::to_wstring(GetTickCount64()) + L"-"
+                + std::to_wstring(attempt);
+            const fs::path candidate = base / name;
+            std::error_code error;
+            if (fs::create_directory(candidate, error)) {
+                m_path = candidate;
+                return;
+            }
+        }
+    }
+
+    ~TemporaryDirectory() {
+        if (!is_owned_path()) return;
+        std::error_code error;
+        static_cast<void>(fs::remove_all(m_path, error));
+    }
+
+    const fs::path& path() const { return m_path; }
+
+private:
+    bool is_owned_path() const {
+        if (m_path.empty()) return false;
+        std::error_code error;
+        const fs::path temp_root = fs::weakly_canonical(
+            fs::temp_directory_path(), error);
+        if (error) return false;
+        const fs::path candidate = fs::weakly_canonical(m_path, error);
+        return !error && candidate.parent_path() == temp_root
+            && candidate.filename().wstring().starts_with(
+                L"minview-file-operation-");
+    }
+
+    fs::path m_path;
+};
+
+bool write_test_bmp(const fs::path& path, LONG width = 2, LONG height = 2) {
+    BITMAPFILEHEADER file_header = {};
+    BITMAPINFOHEADER info_header = {};
+    const DWORD row_bytes = static_cast<DWORD>((width * 3 + 3) & ~3);
+    std::vector<unsigned char> pixels(
+        static_cast<size_t>(row_bytes) * static_cast<size_t>(height), 0x7f);
+    file_header.bfType = 0x4d42;
+    file_header.bfOffBits = sizeof(file_header) + sizeof(info_header);
+    file_header.bfSize = file_header.bfOffBits
+        + static_cast<DWORD>(pixels.size());
+    info_header.biSize = sizeof(info_header);
+    info_header.biWidth = width;
+    info_header.biHeight = height;
+    info_header.biPlanes = 1;
+    info_header.biBitCount = 24;
+    info_header.biCompression = BI_RGB;
+    info_header.biSizeImage = static_cast<DWORD>(pixels.size());
+
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(&file_header),
+        static_cast<std::streamsize>(sizeof(file_header)));
+    output.write(reinterpret_cast<const char*>(&info_header),
+        static_cast<std::streamsize>(sizeof(info_header)));
+    output.write(reinterpret_cast<const char*>(pixels.data()),
+        static_cast<std::streamsize>(pixels.size()));
+    return static_cast<bool>(output);
 }
 
 std::string read_source_file(const fs::path& path) {
@@ -203,6 +274,220 @@ mv::DeleteKeyGuards focused_guards(bool shift = false) {
     guards.shift_down = shift;
     guards.main_window_focused = true;
     return guards;
+}
+
+void test_windows_port_with_scaled_sources(size_t target_count) {
+    TemporaryDirectory temp;
+    expect(!temp.path().empty(),
+        "the Windows delete integration test requires an isolated temp root");
+    if (temp.path().empty()) return;
+
+    std::vector<std::wstring> targets;
+    for (size_t index = 0; index < target_count; ++index) {
+        const fs::path path = temp.path()
+            / (L"target-" + std::to_wstring(index + 1) + L".bmp");
+        constexpr std::array<std::pair<LONG, LONG>, 3> dimensions = {{
+            {2, 2}, {320, 240}, {640, 480},
+        }};
+        expect(write_test_bmp(
+                path, dimensions[index].first, dimensions[index].second),
+            "the integration test must create each isolated bitmap target");
+        targets.push_back(fs::absolute(path).wstring());
+    }
+    const fs::path sentinel_path = temp.path() / L"sentinel.bmp";
+    expect(write_test_bmp(sentinel_path),
+        "the integration test must create an unselected sentinel");
+    const std::wstring sentinel = fs::absolute(sentinel_path).wstring();
+    const std::string sentinel_bytes = read_source_file(sentinel_path);
+
+    mv::Decoder decoder;
+    std::vector<Microsoft::WRL::ComPtr<IWICBitmapSource>> scaled_sources;
+    for (const auto& target : targets)
+        scaled_sources.push_back(decoder.decode_scaled(target, 160));
+    expect(scaled_sources.size() == target_count
+            && std::all_of(scaled_sources.begin(), scaled_sources.end(),
+                [](const auto& source) { return source != nullptr; }),
+        "production scaled bitmap sources must remain alive during deletion");
+
+    FakeDeleteHost host;
+    host.state.index_paths = targets;
+    host.state.index_paths.push_back(sentinel);
+    host.state.current_path = targets.front();
+    host.state.current_index = 0;
+    host.state.has_image = true;
+    host.state.grid_mode = true;
+    host.state.grid_selection = 0;
+    host.state.selected.assign(host.state.index_paths.size(), false);
+    std::fill_n(host.state.selected.begin(), target_count, true);
+    host.state.selection_anchor = 0;
+
+    int confirmation_calls = 0;
+    int warning_calls = 0;
+    int shell_calls = 0;
+    mv::DeleteShellRequest captured_request;
+    mv::DeleteShellResult captured_result;
+    mv::DeleteOsPorts ports = mv::make_windows_delete_ports(host);
+    ports.message_box = [&](const mv::PermanentDeletePrompt& prompt) {
+        if ((prompt.flags & MB_TYPEMASK) == MB_OKCANCEL)
+            ++confirmation_calls;
+        else
+            ++warning_calls;
+        return IDOK;
+    };
+    auto production_shell_delete = std::move(ports.shell_delete);
+    ports.shell_delete = [&](const mv::DeleteShellRequest& request) {
+        ++shell_calls;
+        captured_request = request;
+        captured_result = production_shell_delete(request);
+        return captured_result;
+    };
+
+    auto composition = mv::make_delete_composition(host, std::move(ports));
+    expect(composition->handle_command(
+            mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM),
+        "the Windows integration path must enter the production composition");
+
+    expect(confirmation_calls == 1 && warning_calls == 0 && shell_calls == 1,
+        "confirmed Windows deletion must invoke the real Shell port once without warning");
+    expect(captured_request.targets == targets
+            && request_has_exact_multi_string(captured_request, targets)
+            && request_has_silent_shell_flags(captured_request)
+            && (captured_request.flags & FOF_ALLOWUNDO) == 0,
+        "the real Windows port must receive the exact permanent-delete multi-string");
+    expect(captured_result.shell_result == 0 && !captured_result.aborted
+            && captured_result.missing_targets == targets,
+        "the real Windows port must report every confirmed target removed");
+    expect(std::all_of(targets.begin(), targets.end(),
+            [](const auto& target) { return mv::path_is_confirmed_missing(target); }),
+        "one, two, and three held scaled bitmap targets must be permanently deleted");
+    expect(fs::exists(sentinel_path)
+            && read_source_file(sentinel_path) == sentinel_bytes,
+        "the unselected sentinel must remain byte-identical");
+
+    std::vector<int> expected_indices;
+    for (size_t index = 0; index < target_count; ++index)
+        expected_indices.push_back(static_cast<int>(index));
+    expect(host.removed_indices == expected_indices
+            && host.state.index_paths == std::vector<std::wstring>{sentinel},
+        "the App list must remove exactly the confirmed production targets");
+}
+
+void test_windows_port_invalid_set_fails_closed() {
+    TemporaryDirectory temp;
+    expect(!temp.path().empty(),
+        "the fail-closed integration test requires an isolated temp root");
+    if (temp.path().empty()) return;
+
+    const fs::path existing_path = temp.path() / L"existing.bmp";
+    const fs::path sentinel_path = temp.path() / L"sentinel.bmp";
+    expect(write_test_bmp(existing_path) && write_test_bmp(sentinel_path),
+        "the fail-closed integration test must create isolated files");
+    const std::string existing_bytes = read_source_file(existing_path);
+    const std::string sentinel_bytes = read_source_file(sentinel_path);
+    const std::wstring existing = fs::absolute(existing_path).wstring();
+    const std::wstring missing =
+        fs::absolute(temp.path() / L"missing.bmp").wstring();
+    const std::wstring sentinel = fs::absolute(sentinel_path).wstring();
+
+    FakeDeleteHost host;
+    host.state.index_paths = {existing, missing, sentinel};
+    host.state.current_path = existing;
+    host.state.current_index = 0;
+    host.state.has_image = true;
+    host.state.grid_mode = true;
+    host.state.grid_selection = 0;
+    host.state.selected = {true, true, false};
+    host.state.selection_anchor = 0;
+
+    int dialog_calls = 0;
+    int shell_calls = 0;
+    mv::DeleteOsPorts ports = mv::make_windows_delete_ports(host);
+    ports.message_box = [&](const auto&) {
+        ++dialog_calls;
+        return IDOK;
+    };
+    auto production_shell_delete = std::move(ports.shell_delete);
+    ports.shell_delete = [&](const mv::DeleteShellRequest& request) {
+        ++shell_calls;
+        return production_shell_delete(request);
+    };
+    auto composition = mv::make_delete_composition(host, std::move(ports));
+    composition->handle_command(
+        mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM);
+
+    expect(dialog_calls == 0 && shell_calls == 0 && host.remove_calls == 0,
+        "an invalid multi-target set must fail closed before confirmation or Shell mutation");
+    expect(read_source_file(existing_path) == existing_bytes
+            && read_source_file(sentinel_path) == sentinel_bytes,
+        "fail-closed validation must preserve every existing file byte-for-byte");
+}
+
+void test_windows_port_partial_failure_recovers_exactly() {
+    TemporaryDirectory temp;
+    expect(!temp.path().empty(),
+        "the partial-failure integration test requires an isolated temp root");
+    if (temp.path().empty()) return;
+
+    const fs::path first_path = temp.path() / L"first.bmp";
+    const fs::path locked_path = temp.path() / L"locked.bmp";
+    const fs::path sentinel_path = temp.path() / L"sentinel.bmp";
+    expect(write_test_bmp(first_path) && write_test_bmp(locked_path)
+            && write_test_bmp(sentinel_path),
+        "the partial-failure integration test must create isolated files");
+    const std::string locked_bytes = read_source_file(locked_path);
+    const std::string sentinel_bytes = read_source_file(sentinel_path);
+    const std::wstring first = fs::absolute(first_path).wstring();
+    const std::wstring locked = fs::absolute(locked_path).wstring();
+    const std::wstring sentinel = fs::absolute(sentinel_path).wstring();
+
+    HANDLE held = CreateFileW(locked.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, nullptr);
+    expect(held != INVALID_HANDLE_VALUE,
+        "the integration test must hold one target without delete sharing");
+    if (held == INVALID_HANDLE_VALUE) return;
+
+    FakeDeleteHost host;
+    host.state.index_paths = {first, locked, sentinel};
+    host.state.current_path = first;
+    host.state.current_index = 0;
+    host.state.has_image = true;
+    host.state.grid_mode = true;
+    host.state.grid_selection = 0;
+    host.state.selected = {true, true, false};
+    host.state.selection_anchor = 0;
+
+    int warning_calls = 0;
+    mv::DeleteShellResult captured_result;
+    mv::DeleteOsPorts ports = mv::make_windows_delete_ports(host);
+    ports.message_box = [&](const mv::PermanentDeletePrompt& prompt) {
+        if ((prompt.flags & MB_TYPEMASK) != MB_OKCANCEL) ++warning_calls;
+        return IDOK;
+    };
+    auto production_shell_delete = std::move(ports.shell_delete);
+    ports.shell_delete = [&](const mv::DeleteShellRequest& request) {
+        captured_result = production_shell_delete(request);
+        return captured_result;
+    };
+    auto composition = mv::make_delete_composition(host, std::move(ports));
+    composition->handle_command(
+        mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM);
+    CloseHandle(held);
+
+    expect(captured_result.shell_result == ERROR_SHARING_VIOLATION
+            && !captured_result.aborted
+            && captured_result.missing_targets == std::vector{first},
+        "the real Shell port must expose return, aborted, and actual partial completion");
+    expect(mv::path_is_confirmed_missing(first) && fs::exists(locked_path)
+            && read_source_file(locked_path) == locked_bytes
+            && fs::exists(sentinel_path)
+            && read_source_file(sentinel_path) == sentinel_bytes,
+        "partial failure must remove only the completed target and preserve the rest");
+    expect(host.removed_indices == std::vector<int>{0}
+            && host.state.index_paths == std::vector{locked, sentinel}
+            && host.state.selected == std::vector<bool>({true, false})
+            && warning_calls == 1,
+        "partial failure must restore a coherent list and retained selection with warning");
 }
 
 void test_app_raw_delete_forwarding_contract(const fs::path& source_root) {
@@ -559,6 +844,12 @@ void test_command_sources_and_recovery(
 } // namespace
 
 int main() {
+    const HRESULT com_result = CoInitializeEx(
+        nullptr, COINIT_APARTMENTTHREADED);
+    expect(SUCCEEDED(com_result),
+        "file operation tests require an initialized COM apartment");
+    if (FAILED(com_result)) return 1;
+
     const fs::path source_root = fs::path(MINVIEW_SOURCE_DIR);
     const std::wstring first =
         (source_root / "tests/file_operation_tests.cpp").wstring();
@@ -579,11 +870,18 @@ int main() {
     test_current_keyboard_paths(first, second, third);
     test_command_id_entry_matrix(first, second, third);
     test_command_sources_and_recovery(first, second, third);
+    test_windows_port_with_scaled_sources(1);
+    test_windows_port_with_scaled_sources(2);
+    test_windows_port_with_scaled_sources(3);
+    test_windows_port_invalid_set_fails_closed();
+    test_windows_port_partial_failure_recovers_exactly();
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";
+        CoUninitialize();
         return 1;
     }
     std::cout << "file operation composition tests passed\n";
+    CoUninitialize();
     return 0;
 }
