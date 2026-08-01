@@ -5,8 +5,7 @@
 
 namespace mv {
 
-std::unique_ptr<DeleteComposition> make_windows_delete_composition(
-    DeleteCompositionHost& host) {
+DeleteOsPorts make_windows_delete_ports(DeleteCompositionHost& host) {
     DeleteOsPorts ports;
     ports.message_box = [&host](const PermanentDeletePrompt& prompt) {
         return MessageBoxW(host.delete_owner_window(), prompt.message.c_str(),
@@ -26,7 +25,12 @@ std::unique_ptr<DeleteComposition> make_windows_delete_composition(
         }
         return result;
     };
-    return make_delete_composition(host, std::move(ports));
+    return ports;
+}
+
+std::unique_ptr<DeleteComposition> make_windows_delete_composition(
+    DeleteCompositionHost& host) {
+    return make_delete_composition(host, make_windows_delete_ports(host));
 }
 
 } // namespace mv
