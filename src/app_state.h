@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 namespace mv {
 
@@ -28,6 +29,50 @@ inline bool is_image_zoomed(float scale, float fit_scale) {
 inline bool should_preserve_selection_for_drag(
     bool clicked_selected, bool shift, bool ctrl) {
     return clicked_selected && !shift && !ctrl;
+}
+
+inline bool apply_grid_item_selection(
+    int index, int item_count, bool shift, bool ctrl,
+    std::vector<bool>& selected, int& grid_selection, int& selection_anchor) {
+    if (index < 0 || index >= item_count) return false;
+
+    if (shift && selection_anchor >= 0) {
+        int start = selection_anchor;
+        int end = index;
+        std::fill(selected.begin(), selected.end(), false);
+        selection_anchor = -1;
+        if (start > end) std::swap(start, end);
+        for (int current = start;
+             current <= end && current < static_cast<int>(selected.size());
+             ++current) {
+            selected[static_cast<size_t>(current)] = true;
+        }
+    } else if (ctrl) {
+        if (index < static_cast<int>(selected.size()))
+            selected[static_cast<size_t>(index)] =
+                !selected[static_cast<size_t>(index)];
+        selection_anchor = index;
+    } else {
+        std::fill(selected.begin(), selected.end(), false);
+        selection_anchor = -1;
+        if (index < static_cast<int>(selected.size()))
+            selected[static_cast<size_t>(index)] = true;
+        selection_anchor = index;
+    }
+
+    grid_selection = index;
+    return true;
+}
+
+inline bool grid_item_is_selected(
+    int index, const std::vector<bool>& selected) {
+    return index >= 0 && index < static_cast<int>(selected.size())
+        && selected[static_cast<size_t>(index)];
+}
+
+inline bool grid_item_has_selection_border(
+    int index, int /*grid_selection*/, const std::vector<bool>& selected) {
+    return grid_item_is_selected(index, selected);
 }
 
 inline int clamp_grid_scroll_position(int scroll, int total_height, int visible_height) {
