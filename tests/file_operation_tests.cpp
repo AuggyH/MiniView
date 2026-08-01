@@ -1,6 +1,8 @@
 #include "file_operation.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -13,6 +15,9 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+static_assert(mv::IDM_DELETE == 1031);
+static_assert(mv::IDM_DELETE_PERM == 1032);
 
 int failures = 0;
 
@@ -28,6 +33,12 @@ std::string read_source_file(const fs::path& path) {
     return std::string(
         std::istreambuf_iterator<char>(input),
         std::istreambuf_iterator<char>());
+}
+
+std::string without_whitespace(std::string source) {
+    source.erase(std::remove_if(source.begin(), source.end(),
+        [](unsigned char ch) { return std::isspace(ch) != 0; }), source.end());
+    return source;
 }
 
 bool request_has_exact_multi_string(
@@ -194,47 +205,30 @@ mv::DeleteKeyGuards focused_guards(bool shift = false) {
     return guards;
 }
 
-void test_app_delegation_contract(const fs::path& source_root) {
-    const std::string app_header = read_source_file(source_root / "src/app.h");
-    const std::string app_source = read_source_file(source_root / "src/app.cpp");
-    const std::string cmake = read_source_file(source_root / "CMakeLists.txt");
+void test_app_raw_delete_forwarding_contract(const fs::path& source_root) {
+    const std::string app_source = without_whitespace(
+        read_source_file(source_root / "src/app.cpp"));
 
-    expect(app_header.find("class App : private DeleteCompositionHost")
+    expect(app_source.find("IDM_DELETE=") == std::string::npos
+            && app_source.find("IDM_DELETE_PERM=") == std::string::npos
+            && app_source.find("DeleteMode::") == std::string::npos,
+        "App must not retain a private delete command-to-mode mapping");
+    expect(app_source.find(
+            "m_delete_composition->handle_key(static_cast<UINT>(wp),lp,delete_guards)")
             != std::string::npos,
-        "App must be the production DeleteComposition host");
-    expect(app_header.find(
-            "std::unique_ptr<DeleteComposition> m_delete_composition")
+        "App must forward the raw key action to the shared delete seam");
+    expect(app_source.find(
+            "m_delete_composition->handle_command(DeleteCommandEntry::WindowCommand,LOWORD(wp))")
             != std::string::npos,
-        "App must own the production DeleteComposition object");
-    expect(app_source.find("make_windows_delete_composition(*this)")
+        "App must forward the raw WM_COMMAND ID to the shared delete seam");
+    expect(app_source.find(
+            "m_delete_composition->handle_command(DeleteCommandEntry::Toolbar,static_cast<UINT>(cmd))")
             != std::string::npos,
-        "App must instantiate the production Windows composition factory");
-    expect(app_source.find("m_delete_composition->handle_key")
+        "App must forward the raw toolbar ID to the shared delete seam");
+    expect(app_source.find(
+            "m_delete_composition->handle_command(DeleteCommandEntry::ContextMenu,static_cast<UINT>(cmd))")
             != std::string::npos,
-        "App WM_KEYDOWN must delegate to DeleteComposition");
-    expect(app_source.find("m_delete_composition->handle_window_command")
-            != std::string::npos,
-        "App WM_COMMAND must delegate to DeleteComposition");
-    expect(app_source.find("m_delete_composition->handle_toolbar_command")
-            != std::string::npos,
-        "the toolbar must delegate delete commands to DeleteComposition");
-    expect(app_source.find("m_delete_composition->handle_context_command")
-            != std::string::npos,
-        "the context menu must delegate delete commands to DeleteComposition");
-    expect(app_source.find("DeleteAdapterCallbacks") == std::string::npos
-            && app_source.find("SHFileOperationW") == std::string::npos
-            && app_source.find("delete_current_file(") == std::string::npos
-            && app_source.find("delete_selected(") == std::string::npos,
-        "app.cpp must not retain a parallel delete composition or Shell mutation");
-
-    const size_t test_target = cmake.find("add_executable(file_operation_tests");
-    const size_t test_target_end = cmake.find(
-        "target_include_directories(file_operation_tests", test_target);
-    expect(test_target != std::string::npos
-            && test_target_end != std::string::npos
-            && cmake.substr(test_target, test_target_end - test_target)
-                .find("file_operation_windows.cpp") == std::string::npos,
-        "the unit target must not link the real Windows delete ports");
+        "App must forward the raw context-menu ID to the shared delete seam");
 }
 
 void test_keyboard_guards(
@@ -370,6 +364,67 @@ void test_current_keyboard_paths(
     }
 }
 
+void test_command_id_entry_matrix(
+    const std::wstring& first, const std::wstring& second,
+    const std::wstring& third) {
+    const std::array entries = {
+        mv::DeleteCommandEntry::WindowCommand,
+        mv::DeleteCommandEntry::Toolbar,
+        mv::DeleteCommandEntry::ContextMenu,
+    };
+    const std::array commands = {
+        std::pair{mv::IDM_DELETE, false},
+        std::pair{mv::IDM_DELETE_PERM, true},
+    };
+
+    for (const auto entry : entries) {
+        for (const bool grid_mode : {false, true}) {
+            for (const auto& [command, permanent] : commands) {
+                FakeDeleteHost host;
+                host.state = grid_mode
+                    ? make_grid_state(first, second, third)
+                    : make_current_state(first, second, third);
+                FakeDeletePorts fake;
+                const std::vector<std::wstring> expected_targets = grid_mode
+                    ? std::vector{first, second} : std::vector{first};
+                fake.shell_result.missing_targets = expected_targets;
+                auto composition = mv::make_delete_composition(
+                    host, fake.make_ports());
+
+                expect(composition->handle_command(entry, command),
+                    "every App delete command entry must accept both exact IDs");
+                expect(fake.confirmation_calls() == (permanent ? 1 : 0)
+                        && fake.shell_requests.size() == 1,
+                    "ordinary must skip confirmation and permanent must require IDOK");
+                const auto& request = fake.shell_requests.front();
+                expect(request.operation == FO_DELETE
+                        && request.targets == expected_targets
+                        && request_has_exact_multi_string(request, expected_targets),
+                    "each command entry must bind the exact current or grid snapshot");
+                expect(((request.flags & FOF_ALLOWUNDO) == 0) == permanent
+                        && request_has_silent_shell_flags(request),
+                    "IDM_DELETE must recycle and IDM_DELETE_PERM must be permanent");
+                expect(host.remove_calls == 1
+                        && host.removed_indices == (grid_mode
+                            ? std::vector<int>{0, 1} : std::vector<int>{0}),
+                    "IDOK command routing must invoke the expected mutation once");
+                expect(host.state.index_paths == (grid_mode
+                            ? std::vector{third} : std::vector{second, third}),
+                    "command mutation must remove only the confirmed snapshot");
+            }
+        }
+
+        FakeDeleteHost host;
+        host.state = make_current_state(first, second, third);
+        FakeDeletePorts fake;
+        auto composition = mv::make_delete_composition(host, fake.make_ports());
+        expect(!composition->handle_command(entry, 9999)
+                && fake.dialogs.empty() && fake.shell_requests.empty()
+                && host.remove_calls == 0,
+            "unknown raw commands must fail closed at every entry");
+    }
+}
+
 void test_command_sources_and_recovery(
     const std::wstring& first, const std::wstring& second,
     const std::wstring& third) {
@@ -403,7 +458,8 @@ void test_command_sources_and_recovery(
         fake.shell_result.missing_targets = {first};
         auto composition = mv::make_delete_composition(host, fake.make_ports());
 
-        expect(composition->handle_window_command(mv::kDeleteCommandPermanent),
+        expect(composition->handle_command(
+                mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM),
             "WM_COMMAND must enter the production composition");
         expect(fake.confirmation_calls() == 1 && fake.shell_requests.size() == 1,
             "grid permanent WM_COMMAND must confirm and invoke Shell once");
@@ -438,7 +494,8 @@ void test_command_sources_and_recovery(
         fake.shell_result.aborted = true;
         auto composition = mv::make_delete_composition(host, fake.make_ports());
 
-        expect(composition->handle_toolbar_command(mv::kDeleteCommandRecycle),
+        expect(composition->handle_command(
+                mv::DeleteCommandEntry::Toolbar, mv::IDM_DELETE),
             "toolbar delete forwarding must enter the production composition");
         expect(fake.confirmation_calls() == 0 && fake.shell_requests.size() == 1
                 && (fake.shell_requests.front().flags & FOF_ALLOWUNDO) != 0,
@@ -456,12 +513,14 @@ void test_command_sources_and_recovery(
         fake.shell_result.missing_targets = {first};
         auto composition = mv::make_delete_composition(host, fake.make_ports());
 
-        expect(composition->handle_context_command(mv::kDeleteCommandPermanent),
+        expect(composition->handle_command(
+                mv::DeleteCommandEntry::ContextMenu, mv::IDM_DELETE_PERM),
             "context delete forwarding must enter the production composition");
         expect(fake.confirmation_calls() == 1 && fake.shell_requests.size() == 1
                 && (fake.shell_requests.front().flags & FOF_ALLOWUNDO) == 0,
             "context permanent delete must use the same IDOK-only permanent path");
-        expect(!composition->handle_context_command(9999),
+        expect(!composition->handle_command(
+                mv::DeleteCommandEntry::ContextMenu, 9999),
             "unrelated context commands must not be claimed by the composition");
     }
 
@@ -476,7 +535,8 @@ void test_command_sources_and_recovery(
         fake.shell_result.missing_targets = {first, second};
         auto composition = mv::make_delete_composition(host, fake.make_ports());
 
-        composition->handle_window_command(mv::kDeleteCommandPermanent);
+        composition->handle_command(
+            mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM);
         expect(fake.confirmation_calls() == 1 && fake.shell_requests.empty()
                 && host.remove_calls == 0 && host.stop_loader_calls == 0,
             "grid selection drift after confirmation must produce zero mutation");
@@ -489,7 +549,8 @@ void test_command_sources_and_recovery(
         FakeDeletePorts fake;
         auto composition = mv::make_delete_composition(host, fake.make_ports());
 
-        expect(composition->handle_window_command(mv::kDeleteCommandPermanent)
+        expect(composition->handle_command(
+                    mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM)
                 && fake.dialogs.empty() && fake.shell_requests.empty(),
             "a recognized grid delete command without a selection must fail closed");
     }
@@ -513,9 +574,10 @@ int main() {
             (source_root / "tests/does-not-exist.png").wstring()),
         "a missing target must remain invalid without touching the filesystem");
 
-    test_app_delegation_contract(source_root);
+    test_app_raw_delete_forwarding_contract(source_root);
     test_keyboard_guards(first, second, third);
     test_current_keyboard_paths(first, second, third);
+    test_command_id_entry_matrix(first, second, third);
     test_command_sources_and_recovery(first, second, third);
 
     if (failures != 0) {

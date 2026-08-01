@@ -17,8 +17,14 @@ enum class DeleteMode {
     Permanent,
 };
 
-inline constexpr UINT kDeleteCommandRecycle = 1031;
-inline constexpr UINT kDeleteCommandPermanent = 1032;
+inline constexpr UINT IDM_DELETE = 1031;
+inline constexpr UINT IDM_DELETE_PERM = 1032;
+
+enum class DeleteCommandEntry {
+    WindowCommand,
+    Toolbar,
+    ContextMenu,
+};
 
 enum class DeleteTarget {
     CurrentImage,
@@ -207,12 +213,9 @@ public:
     DeleteComposition(DeleteCompositionHost& host, DeleteOsPorts ports);
 
     bool handle_key(UINT key, LPARAM key_lparam, const DeleteKeyGuards& guards);
-    bool handle_window_command(UINT command);
-    bool handle_toolbar_command(UINT command);
-    bool handle_context_command(UINT command);
+    bool handle_command(DeleteCommandEntry entry, UINT command);
 
 private:
-    bool handle_command(UINT command);
     void dispatch_intent(const DeleteIntent& intent);
     void delete_current(DeleteMode mode);
     void delete_grid(DeleteMode mode);

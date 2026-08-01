@@ -162,8 +162,6 @@ enum {
     IDM_COPY_IMAGE   = 1030,
     IDM_COPY_PATH    = 1034,
     IDM_CREATE_COPY  = 1035,
-    IDM_DELETE       = kDeleteCommandRecycle,
-    IDM_DELETE_PERM  = kDeleteCommandPermanent,
     IDM_EXPLORER     = 1033,
     IDM_ABOUT        = 1040,
 };
@@ -483,6 +481,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_COMMAND:
+        if (m_delete_composition->handle_command(
+                DeleteCommandEntry::WindowCommand, LOWORD(wp)))
+            return 0;
         switch (LOWORD(wp)) {
         case IDM_OPEN_FILE: {
             OPENFILENAMEW ofn = {};
@@ -522,11 +523,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_COPY_IMAGE:  copy_image_data(); return 0;
         case IDM_COPY_PATH:   copy_file_paths(); return 0;
         case IDM_CREATE_COPY: create_file_copies(); return 0;
-        case IDM_DELETE:
-        case IDM_DELETE_PERM: {
-            m_delete_composition->handle_window_command(LOWORD(wp));
-            return 0;
-        }
         case IDM_EXPLORER: open_in_explorer(); return 0;
         case IDM_ABOUT:
             MessageBoxW(hwnd,
@@ -1688,15 +1684,15 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         TPM_RETURNCMD | TPM_RIGHTBUTTON,
         x, y, 0, hwnd, nullptr);
 
+    if (m_delete_composition->handle_command(
+            DeleteCommandEntry::ContextMenu, static_cast<UINT>(cmd)))
+        return;
+
     switch (cmd) {
     case 1: open_in_explorer();         break;
     case 2: copy_image_data();          break;
     case 8: copy_file_paths();          break;
     case 9: create_file_copies();       break;
-    case IDM_DELETE:
-    case IDM_DELETE_PERM:
-        m_delete_composition->handle_context_command(static_cast<UINT>(cmd));
-        break;
     case 5: {
         // Open File dialog
         OPENFILENAMEW ofn = {};
@@ -1884,11 +1880,11 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     }
 
     // Handle commands
+    if (m_delete_composition->handle_command(
+            DeleteCommandEntry::Toolbar, static_cast<UINT>(cmd)))
+        return;
+
     switch (cmd) {
-    case IDM_DELETE:
-    case IDM_DELETE_PERM:
-        m_delete_composition->handle_toolbar_command(static_cast<UINT>(cmd));
-        break;
     case IDM_OPEN_FILE: case IDM_OPEN_FOLDER: case IDM_FULLSCREEN: case IDM_RECURSIVE:
     case IDM_THUMB_SQUARE: case IDM_INFO:
     case IDM_SORT_NAME: case IDM_SORT_DATE:

@@ -113,9 +113,9 @@ std::optional<DeleteIntent> route_delete_key(
 
 std::optional<DeleteIntent> route_delete_command(
     UINT command, bool grid_mode, bool has_selection) {
-    if (command == kDeleteCommandRecycle)
+    if (command == IDM_DELETE)
         return make_delete_intent(DeleteMode::Recycle, grid_mode, has_selection);
-    if (command == kDeleteCommandPermanent)
+    if (command == IDM_DELETE_PERM)
         return make_delete_intent(DeleteMode::Permanent, grid_mode, has_selection);
     return std::nullopt;
 }
@@ -228,21 +228,18 @@ bool DeleteComposition::handle_key(
     return true;
 }
 
-bool DeleteComposition::handle_window_command(UINT command) {
-    return handle_command(command);
-}
+bool DeleteComposition::handle_command(
+    DeleteCommandEntry entry, UINT command) {
+    switch (entry) {
+    case DeleteCommandEntry::WindowCommand:
+    case DeleteCommandEntry::Toolbar:
+    case DeleteCommandEntry::ContextMenu:
+        break;
+    default:
+        return false;
+    }
 
-bool DeleteComposition::handle_toolbar_command(UINT command) {
-    return handle_command(command);
-}
-
-bool DeleteComposition::handle_context_command(UINT command) {
-    return handle_command(command);
-}
-
-bool DeleteComposition::handle_command(UINT command) {
-    if (command != kDeleteCommandRecycle
-        && command != kDeleteCommandPermanent)
+    if (command != IDM_DELETE && command != IDM_DELETE_PERM)
         return false;
 
     const DeleteCompositionState state = m_host.capture_delete_state();
