@@ -10,6 +10,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -274,6 +275,75 @@ mv::DeleteKeyGuards focused_guards(bool shift = false) {
     guards.shift_down = shift;
     guards.main_window_focused = true;
     return guards;
+}
+
+std::wstring expected_permanent_prompt_message(
+    const std::vector<std::wstring>& targets) {
+    std::wstring message = L"将永久删除以下文件：\r\n\r\n";
+    for (const auto& target : targets) {
+        message += target;
+        message += L"\r\n";
+    }
+    message += L"\r\n此操作无法恢复。";
+    return message;
+}
+
+void test_exact_grid_snapshot_cardinality(
+    const std::wstring& first, const std::wstring& second,
+    const std::wstring& third) {
+    const std::vector<std::wstring> all_targets = {first, second, third};
+    for (size_t count = 1; count <= all_targets.size(); ++count) {
+        const std::vector<std::wstring> expected(
+            all_targets.begin(), all_targets.begin() + count);
+        FakeDeleteHost host;
+        host.state = make_current_state(first, second, third);
+        host.state.grid_mode = true;
+        host.state.grid_selection = static_cast<int>(count - 1);
+        host.state.selected.assign(all_targets.size(), false);
+        std::fill_n(host.state.selected.begin(), count, true);
+        host.state.selection_anchor = 0;
+
+        FakeDeletePorts fake;
+        fake.shell_result.missing_targets = expected;
+        auto composition = mv::make_delete_composition(host, fake.make_ports());
+        composition->handle_command(
+            mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM);
+
+        expect(fake.confirmation_calls() == 1
+                && fake.shell_requests.size() == 1,
+            "each exact 1/2/3-item snapshot must confirm and reach mutation once");
+        if (fake.dialogs.empty() || fake.shell_requests.empty()) continue;
+        const auto& prompt = fake.dialogs.front();
+        const auto& request = fake.shell_requests.front();
+        expect(prompt.title == L"确认永久删除"
+                && prompt.message == expected_permanent_prompt_message(expected)
+                && (prompt.flags & MB_TYPEMASK) == MB_OKCANCEL
+                && (prompt.flags & MB_DEFMASK) == MB_DEFBUTTON2,
+            "the permanent prompt must render every immutable snapshot target exactly");
+        expect(request.targets == expected
+                && request_has_exact_multi_string(request, expected),
+            "the mutation port must receive the same complete immutable snapshot");
+    }
+
+    FakeDeleteHost drift_host;
+    drift_host.state = make_current_state(first, second, third);
+    drift_host.state.grid_mode = true;
+    drift_host.state.grid_selection = 2;
+    drift_host.state.selected = {true, true, true};
+    drift_host.state.selection_anchor = 0;
+    FakeDeletePorts drift_ports;
+    drift_ports.after_confirmation = [&drift_host](const auto&) {
+        drift_host.state.selected = {true, true, false};
+    };
+    drift_ports.shell_result.missing_targets = all_targets;
+    auto drift_composition = mv::make_delete_composition(
+        drift_host, drift_ports.make_ports());
+    drift_composition->handle_command(
+        mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE_PERM);
+    expect(drift_ports.confirmation_calls() == 1
+            && drift_ports.shell_requests.empty()
+            && drift_host.remove_calls == 0,
+        "a three-item selection drift after confirmation must fail closed");
 }
 
 void test_windows_port_with_scaled_sources(size_t target_count) {
@@ -843,7 +913,7 @@ void test_command_sources_and_recovery(
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
     const HRESULT com_result = CoInitializeEx(
         nullptr, COINIT_APARTMENTTHREADED);
     expect(SUCCEEDED(com_result),
@@ -865,16 +935,21 @@ int main() {
             (source_root / "tests/does-not-exist.png").wstring()),
         "a missing target must remain invalid without touching the filesystem");
 
-    test_app_raw_delete_forwarding_contract(source_root);
-    test_keyboard_guards(first, second, third);
-    test_current_keyboard_paths(first, second, third);
-    test_command_id_entry_matrix(first, second, third);
-    test_command_sources_and_recovery(first, second, third);
-    test_windows_port_with_scaled_sources(1);
-    test_windows_port_with_scaled_sources(2);
-    test_windows_port_with_scaled_sources(3);
-    test_windows_port_invalid_set_fails_closed();
-    test_windows_port_partial_failure_recovers_exactly();
+    test_exact_grid_snapshot_cardinality(first, second, third);
+    const bool snapshot_only = argc == 2
+        && std::string_view(argv[1]) == "--snapshot-only";
+    if (!snapshot_only) {
+        test_app_raw_delete_forwarding_contract(source_root);
+        test_keyboard_guards(first, second, third);
+        test_current_keyboard_paths(first, second, third);
+        test_command_id_entry_matrix(first, second, third);
+        test_command_sources_and_recovery(first, second, third);
+        test_windows_port_with_scaled_sources(1);
+        test_windows_port_with_scaled_sources(2);
+        test_windows_port_with_scaled_sources(3);
+        test_windows_port_invalid_set_fails_closed();
+        test_windows_port_partial_failure_recovers_exactly();
+    }
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";
