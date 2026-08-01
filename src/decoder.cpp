@@ -74,6 +74,10 @@ ComPtr<IWICBitmapSource> Decoder::materialize(IWICBitmapSource* source) {
 
 ComPtr<IWICBitmapSource> Decoder::decode_scaled(const std::wstring& path, uint32_t max_size) {
     auto decoder = create_decoder(path);
+    const auto materialize_pbgra = [this](IWICBitmapSource* source) {
+        auto converted = convert_to_pbgra(source);
+        return materialize(converted.Get());
+    };
 
     ComPtr<IWICBitmapFrameDecode> frame;
     HRESULT hr = decoder->GetFrame(0, &frame);
@@ -111,17 +115,17 @@ ComPtr<IWICBitmapSource> Decoder::decode_scaled(const std::wstring& path, uint32
             hr = scaler2->Initialize(scaler.Get(), sw, sh, WICBitmapInterpolationModeFant);
             if (FAILED(hr))
                 throw std::runtime_error("Failed to scale bitmap (step 2)");
-            return convert_to_pbgra(scaler2.Get());
+            return materialize_pbgra(scaler2.Get());
         }
 
         hr = scaler->Initialize(frame.Get(), sw, sh, WICBitmapInterpolationModeFant);
         if (FAILED(hr))
             throw std::runtime_error("Failed to scale bitmap");
 
-        return convert_to_pbgra(scaler.Get());
+        return materialize_pbgra(scaler.Get());
     }
 
-    return convert_to_pbgra(frame.Get());
+    return materialize_pbgra(frame.Get());
 }
 
 std::optional<ImageInfo> Decoder::probe(const std::wstring& path) {

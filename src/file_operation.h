@@ -227,6 +227,7 @@ private:
 
 std::unique_ptr<DeleteComposition> make_delete_composition(
     DeleteCompositionHost& host, DeleteOsPorts ports);
+DeleteOsPorts make_windows_delete_ports(DeleteCompositionHost& host);
 std::unique_ptr<DeleteComposition> make_windows_delete_composition(
     DeleteCompositionHost& host);
 
