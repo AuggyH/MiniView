@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <string>
 
 namespace mv {
@@ -689,6 +690,185 @@ void Renderer::draw_comic_pages(
         }
         m_d2d_context->PopAxisAlignedClip();
     }
+    m_d2d_context->PopAxisAlignedClip();
+}
+
+void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
+    if (!m_d2d_context || !m_dwrite_factory) return;
+    const ComicControlsLayout layout = build_comic_controls_layout(input);
+    if (layout.viewport.empty()) return;
+
+    const D2D1_RECT_F viewport = to_d2d_rect(layout.viewport);
+    m_d2d_context->PushAxisAlignedClip(
+        &viewport, D2D1_ANTIALIAS_MODE_ALIASED);
+
+    if (layout.scrollbar.visible) {
+        ComPtr<ID2D1SolidColorBrush> track_brush;
+        ComPtr<ID2D1SolidColorBrush> thumb_brush;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.48f, 0.48f, 0.52f, 0.26f), &track_brush);
+        const D2D1_COLOR_F thumb_color = layout.scrollbar.dragging
+            ? D2D1::ColorF(0.78f, 0.78f, 0.84f, 0.96f)
+            : layout.scrollbar.hovered
+                ? D2D1::ColorF(0.66f, 0.66f, 0.72f, 0.90f)
+                : D2D1::ColorF(0.50f, 0.50f, 0.56f, 0.72f);
+        m_d2d_context->CreateSolidColorBrush(thumb_color, &thumb_brush);
+        if (track_brush) {
+            const D2D1_ROUNDED_RECT track = {
+                to_d2d_rect(layout.scrollbar.track),
+                layout.metrics.scrollbar_radius,
+                layout.metrics.scrollbar_radius};
+            m_d2d_context->FillRoundedRectangle(&track, track_brush.Get());
+        }
+        if (thumb_brush) {
+            const D2D1_ROUNDED_RECT thumb = {
+                to_d2d_rect(layout.scrollbar.thumb),
+                layout.metrics.scrollbar_radius,
+                layout.metrics.scrollbar_radius};
+            m_d2d_context->FillRoundedRectangle(&thumb, thumb_brush.Get());
+        }
+    }
+
+    const auto draw_text_overlay = [this, &layout](
+        const ComicTextOverlayLayout& overlay, float font_size,
+        float padding, float background_alpha) {
+        if (!overlay.visible || overlay.bounds.empty() || overlay.text.empty()
+            || overlay.text.size()
+                > static_cast<std::size_t>(std::numeric_limits<UINT32>::max())) {
+            return;
+        }
+
+        const D2D1_RECT_F bounds = to_d2d_rect(overlay.bounds);
+        ComPtr<ID2D1SolidColorBrush> background;
+        ComPtr<ID2D1SolidColorBrush> border;
+        ComPtr<ID2D1SolidColorBrush> text;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.08f, 0.08f, 0.09f, background_alpha),
+            &background);
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.56f, 0.56f, 0.62f, 0.34f), &border);
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.91f, 0.91f, 0.93f, 0.94f), &text);
+        const float radius = std::min(
+            overlay.bounds.height() * 0.28f,
+            8.0f * layout.metrics.dpi_scale);
+        const D2D1_ROUNDED_RECT rounded = {bounds, radius, radius};
+        if (background) {
+            m_d2d_context->FillRoundedRectangle(&rounded, background.Get());
+        }
+        if (border) {
+            m_d2d_context->DrawRoundedRectangle(
+                &rounded, border.Get(),
+                std::max(1.0f, layout.metrics.dpi_scale));
+        }
+        if (!text) return;
+
+        ComPtr<IDWriteTextFormat> format;
+        m_dwrite_factory->CreateTextFormat(
+            L"Microsoft YaHei", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+            font_size, L"zh-CN", &format);
+        if (!format) return;
+        format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+
+        const float text_width = std::max(
+            1.0f, overlay.bounds.width() - 2.0f * padding);
+        const float text_height = std::max(1.0f, overlay.bounds.height());
+        ComPtr<IDWriteTextLayout> text_layout;
+        m_dwrite_factory->CreateTextLayout(
+            overlay.text.c_str(), static_cast<UINT32>(overlay.text.size()),
+            format.Get(), text_width, text_height, &text_layout);
+        if (!text_layout) return;
+        DWRITE_TRIMMING trimming = {};
+        trimming.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
+        ComPtr<IDWriteInlineObject> ellipsis;
+        m_dwrite_factory->CreateEllipsisTrimmingSign(
+            format.Get(), &ellipsis);
+        if (ellipsis) text_layout->SetTrimming(&trimming, ellipsis.Get());
+        const D2D1_POINT_2F origin = {
+            overlay.bounds.left + padding, overlay.bounds.top};
+        m_d2d_context->DrawTextLayout(
+            origin, text_layout.Get(), text.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    };
+
+    draw_text_overlay(
+        layout.page_badge, layout.metrics.page_badge_font_size,
+        layout.metrics.page_badge_padding, 0.72f);
+    draw_text_overlay(
+        layout.transient_overlay, layout.metrics.page_toast_font_size,
+        layout.metrics.page_toast_padding, 0.88f);
+
+    if (layout.autoscroll.visible) {
+        const D2D1_POINT_2F anchor = {
+            layout.autoscroll.anchor_x, layout.autoscroll.anchor_y};
+        const D2D1_ELLIPSE dead_zone = {
+            anchor, layout.autoscroll.dead_zone_radius,
+            layout.autoscroll.dead_zone_radius};
+        const D2D1_ELLIPSE anchor_dot = {
+            anchor, layout.metrics.autoscroll_anchor_radius,
+            layout.metrics.autoscroll_anchor_radius};
+        ComPtr<ID2D1SolidColorBrush> zone;
+        ComPtr<ID2D1SolidColorBrush> ring;
+        ComPtr<ID2D1SolidColorBrush> arrow;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.10f, 0.10f, 0.12f, 0.58f), &zone);
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.72f, 0.72f, 0.78f, 0.72f), &ring);
+        const float arrow_alpha = 0.72f + 0.24f * layout.autoscroll.intensity;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.84f, 0.84f, 0.90f, arrow_alpha), &arrow);
+        if (zone) {
+            m_d2d_context->FillEllipse(&dead_zone, zone.Get());
+            m_d2d_context->FillEllipse(&anchor_dot, zone.Get());
+        }
+        if (ring) {
+            m_d2d_context->DrawEllipse(
+                &dead_zone, ring.Get(), layout.metrics.autoscroll_stroke_width);
+            m_d2d_context->DrawEllipse(
+                &anchor_dot, ring.Get(), layout.metrics.autoscroll_stroke_width);
+            const float chevron = layout.metrics.autoscroll_arrow_head * 0.65f;
+            const float center_gap = layout.metrics.dpi_scale;
+            m_d2d_context->DrawLine(
+                {anchor.x - chevron, anchor.y - center_gap},
+                {anchor.x, anchor.y - chevron}, ring.Get(),
+                layout.metrics.autoscroll_stroke_width);
+            m_d2d_context->DrawLine(
+                {anchor.x, anchor.y - chevron},
+                {anchor.x + chevron, anchor.y - center_gap}, ring.Get(),
+                layout.metrics.autoscroll_stroke_width);
+            m_d2d_context->DrawLine(
+                {anchor.x - chevron, anchor.y + center_gap},
+                {anchor.x, anchor.y + chevron}, ring.Get(),
+                layout.metrics.autoscroll_stroke_width);
+            m_d2d_context->DrawLine(
+                {anchor.x, anchor.y + chevron},
+                {anchor.x + chevron, anchor.y + center_gap}, ring.Get(),
+                layout.metrics.autoscroll_stroke_width);
+        }
+        if (arrow && layout.autoscroll.direction
+                != ComicAutoscrollDirection::Stationary) {
+            const float stroke = layout.metrics.autoscroll_stroke_width
+                * (1.0f + 0.5f * layout.autoscroll.intensity);
+            const D2D1_POINT_2F tail = {
+                anchor.x, layout.autoscroll.arrow_tail_y};
+            const D2D1_POINT_2F tip = {
+                anchor.x, layout.autoscroll.arrow_tip_y};
+            m_d2d_context->DrawLine(tail, tip, arrow.Get(), stroke);
+            const float head_y = layout.autoscroll.direction
+                    == ComicAutoscrollDirection::Backward
+                ? tip.y + layout.autoscroll.arrow_head
+                : tip.y - layout.autoscroll.arrow_head;
+            m_d2d_context->DrawLine(
+                tip, {tip.x - layout.autoscroll.arrow_head, head_y},
+                arrow.Get(), stroke);
+            m_d2d_context->DrawLine(
+                tip, {tip.x + layout.autoscroll.arrow_head, head_y},
+                arrow.Get(), stroke);
+        }
+    }
+
     m_d2d_context->PopAxisAlignedClip();
 }
 

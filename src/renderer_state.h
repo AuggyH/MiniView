@@ -6,10 +6,14 @@
 #include <cmath>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 #include <winerror.h>
 
 namespace mv {
+
+constexpr std::size_t kComicOverlayMaxTextCharacters = 32768;
 
 inline bool should_recreate_render_device(HRESULT result) {
     return FAILED(result);
@@ -25,11 +29,18 @@ struct ComicRenderRect {
     float right = 0.0f;
     float bottom = 0.0f;
 
-    float width() const noexcept { return std::max(0.0f, right - left); }
-    float height() const noexcept { return std::max(0.0f, bottom - top); }
+    float width() const noexcept {
+        const float value = right - left;
+        return std::isfinite(value) && value > 0.0f ? value : 0.0f;
+    }
+    float height() const noexcept {
+        const float value = bottom - top;
+        return std::isfinite(value) && value > 0.0f ? value : 0.0f;
+    }
     bool empty() const noexcept {
         return !std::isfinite(left) || !std::isfinite(top)
             || !std::isfinite(right) || !std::isfinite(bottom)
+            || !std::isfinite(right - left) || !std::isfinite(bottom - top)
             || right <= left || bottom <= top;
     }
 };
@@ -78,6 +89,117 @@ struct ComicRenderPlan {
     std::vector<ComicPageRenderCommand> pages;
 };
 
+enum class ComicScrollbarHit {
+    None,
+    PageBackward,
+    Thumb,
+    PageForward,
+};
+
+enum class ComicAutoscrollDirection {
+    Stationary,
+    Backward,
+    Forward,
+};
+
+enum class ComicTransientOverlayKind {
+    None,
+    PageChange,
+    Status,
+};
+
+struct ComicControlMetrics {
+    float dpi_scale = 1.0f;
+    float edge_margin = 8.0f;
+    float overlay_gap = 8.0f;
+    float scrollbar_zone_width = 20.0f;
+    float scrollbar_track_width = 6.0f;
+    float scrollbar_min_thumb = 32.0f;
+    float scrollbar_radius = 3.0f;
+    float page_badge_height = 28.0f;
+    float page_badge_min_width = 64.0f;
+    float page_badge_padding = 10.0f;
+    float page_badge_font_size = 12.0f;
+    float page_toast_height = 36.0f;
+    float page_toast_max_width = 480.0f;
+    float page_toast_padding = 14.0f;
+    float page_toast_font_size = 13.0f;
+    float autoscroll_anchor_radius = 10.0f;
+    float autoscroll_dead_zone_radius = 16.0f;
+    float autoscroll_arrow_min_length = 18.0f;
+    float autoscroll_arrow_max_length = 48.0f;
+    float autoscroll_arrow_head = 5.0f;
+    float autoscroll_stroke_width = 1.5f;
+};
+
+struct ComicScrollbarGeometry {
+    bool visible = false;
+    bool hovered = false;
+    bool dragging = false;
+    ComicRenderRect hit_bounds;
+    ComicRenderRect track;
+    ComicRenderRect thumb;
+    float scroll_range = 0.0f;
+    float thumb_travel = 0.0f;
+};
+
+struct ComicScrollbarDragResult {
+    bool valid = false;
+    float scroll_y = 0.0f;
+};
+
+struct ComicTextOverlayLayout {
+    bool visible = false;
+    ComicRenderRect bounds;
+    std::wstring text;
+};
+
+struct ComicAutoscrollLayout {
+    bool visible = false;
+    ComicAutoscrollDirection direction = ComicAutoscrollDirection::Stationary;
+    float anchor_x = 0.0f;
+    float anchor_y = 0.0f;
+    float dead_zone_radius = 0.0f;
+    float arrow_tail_y = 0.0f;
+    float arrow_tip_y = 0.0f;
+    float arrow_head = 0.0f;
+    float intensity = 0.0f;
+};
+
+// Coordinates use the same absolute client physical-pixel space as
+// ComicRenderViewport and App pointer input. The content viewport must already
+// exclude any visible toolbar and side panel; dpi scales DIP constants only.
+// App owns every timer, input state and business index. Renderer synchronously
+// consumes one immutable snapshot and does not retain either string view.
+struct ComicControlsRenderInput {
+    ComicRenderRect content_viewport;
+    float dpi = 96.0f;
+    float virtual_height = 0.0f;
+    float scroll_y = 0.0f;
+    bool scrollbar_hovered = false;
+    bool scrollbar_dragging = false;
+    int anchored_page_index = -1; // zero-based
+    int total_pages = 0;
+    std::wstring_view current_filename;
+    ComicTransientOverlayKind transient_kind =
+        ComicTransientOverlayKind::None;
+    std::wstring_view transient_status_text;
+    bool middle_autoscroll_active = false;
+    float autoscroll_anchor_x = 0.0f;
+    float autoscroll_anchor_y = 0.0f;
+    float autoscroll_pointer_x = 0.0f;
+    float autoscroll_pointer_y = 0.0f;
+};
+
+struct ComicControlsLayout {
+    ComicRenderRect viewport;
+    ComicControlMetrics metrics;
+    ComicScrollbarGeometry scrollbar;
+    ComicTextOverlayLayout page_badge;
+    ComicTextOverlayLayout transient_overlay;
+    ComicAutoscrollLayout autoscroll;
+};
+
 inline float normalize_render_dpi(float dpi) noexcept {
     return std::isfinite(dpi) && dpi > 0.0f ? dpi : 96.0f;
 }
@@ -103,6 +225,298 @@ inline ComicRenderRect intersect_render_rects(
         std::min(first.right, second.right),
         std::min(first.bottom, second.bottom)};
     return result.empty() ? ComicRenderRect{} : result;
+}
+
+inline ComicControlMetrics comic_control_metrics(float dpi) noexcept {
+    const float scale = normalize_render_dpi(dpi) / 96.0f;
+    return {
+        scale,
+        8.0f * scale,
+        8.0f * scale,
+        20.0f * scale,
+        6.0f * scale,
+        32.0f * scale,
+        3.0f * scale,
+        28.0f * scale,
+        64.0f * scale,
+        10.0f * scale,
+        12.0f * scale,
+        36.0f * scale,
+        480.0f * scale,
+        14.0f * scale,
+        13.0f * scale,
+        10.0f * scale,
+        16.0f * scale,
+        18.0f * scale,
+        48.0f * scale,
+        5.0f * scale,
+        1.5f * scale};
+}
+
+inline bool comic_control_metrics_valid(
+    const ComicControlMetrics& metrics) noexcept {
+    return std::isfinite(metrics.dpi_scale) && metrics.dpi_scale > 0.0f
+        && std::isfinite(metrics.edge_margin)
+        && std::isfinite(metrics.overlay_gap)
+        && std::isfinite(metrics.scrollbar_zone_width)
+        && std::isfinite(metrics.scrollbar_track_width)
+        && std::isfinite(metrics.scrollbar_min_thumb)
+        && std::isfinite(metrics.scrollbar_radius)
+        && std::isfinite(metrics.page_badge_height)
+        && std::isfinite(metrics.page_badge_min_width)
+        && std::isfinite(metrics.page_badge_padding)
+        && std::isfinite(metrics.page_badge_font_size)
+        && std::isfinite(metrics.page_toast_height)
+        && std::isfinite(metrics.page_toast_max_width)
+        && std::isfinite(metrics.page_toast_padding)
+        && std::isfinite(metrics.page_toast_font_size)
+        && std::isfinite(metrics.autoscroll_anchor_radius)
+        && std::isfinite(metrics.autoscroll_dead_zone_radius)
+        && std::isfinite(metrics.autoscroll_arrow_min_length)
+        && std::isfinite(metrics.autoscroll_arrow_max_length)
+        && std::isfinite(metrics.autoscroll_arrow_head)
+        && std::isfinite(metrics.autoscroll_stroke_width);
+}
+
+inline ComicScrollbarGeometry build_comic_scrollbar_geometry(
+    ComicRenderRect viewport, float virtual_height, float scroll_y,
+    float dpi, bool hovered = false, bool dragging = false) noexcept {
+    ComicScrollbarGeometry geometry;
+    geometry.hovered = hovered;
+    geometry.dragging = dragging;
+    if (viewport.empty() || !std::isfinite(dpi) || dpi <= 0.0f
+        || !std::isfinite(virtual_height) || !std::isfinite(scroll_y)
+        || virtual_height <= viewport.height()) return geometry;
+
+    const ComicControlMetrics metrics = comic_control_metrics(dpi);
+    if (!comic_control_metrics_valid(metrics)) return geometry;
+    const float track_top = viewport.top + metrics.edge_margin;
+    const float track_bottom = viewport.bottom - metrics.edge_margin;
+    const float track_height = track_bottom - track_top;
+    const float track_right = viewport.right - metrics.edge_margin;
+    const float track_left = track_right - metrics.scrollbar_track_width;
+    const float hit_left = viewport.right - metrics.scrollbar_zone_width;
+    if (!std::isfinite(track_top) || !std::isfinite(track_bottom)
+        || !std::isfinite(track_left) || !std::isfinite(track_right)
+        || !std::isfinite(hit_left) || track_height <= 0.0f
+        || track_left <= hit_left || hit_left < viewport.left) return geometry;
+
+    const float scroll_range = virtual_height - viewport.height();
+    const float ratio = viewport.height() / virtual_height;
+    const float proportional_height = track_height * ratio;
+    if (!std::isfinite(scroll_range) || !std::isfinite(ratio)
+        || !std::isfinite(proportional_height) || scroll_range <= 0.0f) {
+        return geometry;
+    }
+    const float thumb_height = std::min(
+        track_height, std::max(metrics.scrollbar_min_thumb, proportional_height));
+    const float thumb_travel = track_height - thumb_height;
+    const float clamped_scroll = std::clamp(scroll_y, 0.0f, scroll_range);
+    const float thumb_top = thumb_travel > 0.0f
+        ? track_top + thumb_travel * (clamped_scroll / scroll_range)
+        : track_top;
+    const float thumb_bottom = thumb_top + thumb_height;
+    if (!std::isfinite(thumb_top) || !std::isfinite(thumb_bottom)) {
+        return geometry;
+    }
+
+    geometry.visible = true;
+    geometry.hit_bounds = {hit_left, track_top, viewport.right, track_bottom};
+    geometry.track = {track_left, track_top, track_right, track_bottom};
+    geometry.thumb = {track_left, thumb_top, track_right, thumb_bottom};
+    geometry.scroll_range = scroll_range;
+    geometry.thumb_travel = thumb_travel;
+    return geometry;
+}
+
+inline ComicScrollbarHit hit_test_comic_scrollbar(
+    const ComicScrollbarGeometry& geometry, float x, float y) noexcept {
+    if (!geometry.visible || geometry.hit_bounds.empty()
+        || geometry.thumb.empty() || !std::isfinite(x) || !std::isfinite(y)
+        || x < geometry.hit_bounds.left || x > geometry.hit_bounds.right
+        || y < geometry.hit_bounds.top || y > geometry.hit_bounds.bottom) {
+        return ComicScrollbarHit::None;
+    }
+    if (y < geometry.thumb.top) return ComicScrollbarHit::PageBackward;
+    if (y > geometry.thumb.bottom) return ComicScrollbarHit::PageForward;
+    return ComicScrollbarHit::Thumb;
+}
+
+inline ComicScrollbarDragResult map_comic_scrollbar_drag(
+    const ComicScrollbarGeometry& geometry, float pointer_y,
+    float grab_offset_y) noexcept {
+    ComicScrollbarDragResult result;
+    if (!geometry.visible || geometry.track.empty() || geometry.thumb.empty()
+        || !std::isfinite(pointer_y) || !std::isfinite(grab_offset_y)
+        || !std::isfinite(geometry.scroll_range)
+        || !std::isfinite(geometry.thumb_travel)
+        || grab_offset_y < 0.0f || grab_offset_y > geometry.thumb.height()
+        || geometry.scroll_range <= 0.0f || geometry.thumb_travel <= 0.0f) {
+        return result;
+    }
+    const float requested_top = pointer_y - grab_offset_y;
+    if (!std::isfinite(requested_top)) return result;
+    const float clamped_top = std::clamp(
+        requested_top, geometry.track.top,
+        geometry.track.bottom - geometry.thumb.height());
+    const float fraction = (clamped_top - geometry.track.top)
+        / geometry.thumb_travel;
+    const float scroll_y = fraction * geometry.scroll_range;
+    if (!std::isfinite(scroll_y)) return result;
+    result.valid = true;
+    result.scroll_y = std::clamp(scroll_y, 0.0f, geometry.scroll_range);
+    return result;
+}
+
+inline ComicControlsLayout build_comic_controls_layout(
+    const ComicControlsRenderInput& input) {
+    ComicControlsLayout layout;
+    if (input.content_viewport.empty() || !std::isfinite(input.dpi)
+        || input.dpi <= 0.0f) return layout;
+    layout.viewport = input.content_viewport;
+    layout.metrics = comic_control_metrics(input.dpi);
+    if (!comic_control_metrics_valid(layout.metrics)) return ComicControlsLayout{};
+    layout.scrollbar = build_comic_scrollbar_geometry(
+        layout.viewport, input.virtual_height, input.scroll_y, input.dpi,
+        input.scrollbar_hovered, input.scrollbar_dragging);
+
+    const bool valid_page = input.anchored_page_index >= 0
+        && input.total_pages > 0
+        && input.anchored_page_index < input.total_pages;
+    std::wstring page;
+    std::wstring total;
+    if (valid_page) {
+        page = std::to_wstring(input.anchored_page_index + 1);
+        total = std::to_wstring(input.total_pages);
+        layout.page_badge.text = page + L" / " + total;
+        const float usable_right = layout.scrollbar.visible
+            ? layout.scrollbar.hit_bounds.left - layout.metrics.overlay_gap
+            : layout.viewport.right - layout.metrics.edge_margin;
+        const float available_width = usable_right - layout.viewport.left
+            - layout.metrics.edge_margin;
+        const float character_width = 7.5f * layout.metrics.dpi_scale;
+        const float desired_width = std::max(
+            layout.metrics.page_badge_min_width,
+            character_width * static_cast<float>(layout.page_badge.text.size())
+                + 2.0f * layout.metrics.page_badge_padding);
+        const float badge_width = std::min(desired_width, available_width);
+        const float badge_height = std::min(
+            layout.metrics.page_badge_height,
+            layout.viewport.height() - 2.0f * layout.metrics.edge_margin);
+        if (std::isfinite(badge_width) && std::isfinite(badge_height)
+            && badge_width > 0.0f && badge_height > 0.0f) {
+            const float bottom = layout.viewport.bottom
+                - layout.metrics.edge_margin;
+            layout.page_badge.bounds = {
+                usable_right - badge_width, bottom - badge_height,
+                usable_right, bottom};
+            layout.page_badge.visible = !layout.page_badge.bounds.empty();
+        }
+
+    }
+
+    const bool page_change = valid_page && input.transient_kind
+        == ComicTransientOverlayKind::PageChange
+        && !input.current_filename.empty()
+        && input.current_filename.size()
+            <= kComicOverlayMaxTextCharacters - 32;
+    const bool status = input.transient_kind
+        == ComicTransientOverlayKind::Status
+        && !input.transient_status_text.empty()
+        && input.transient_status_text.size()
+            <= kComicOverlayMaxTextCharacters;
+    if (page_change || status) {
+        if (page_change) {
+            layout.transient_overlay.text = input.current_filename;
+            layout.transient_overlay.text += L" \u00B7 \u7B2C";
+            layout.transient_overlay.text += page;
+            layout.transient_overlay.text += L"/";
+            layout.transient_overlay.text += total;
+            layout.transient_overlay.text += L"\u9875";
+        } else {
+            layout.transient_overlay.text = input.transient_status_text;
+        }
+        const float toast_right = layout.scrollbar.visible
+            ? layout.scrollbar.hit_bounds.left - layout.metrics.overlay_gap
+            : layout.viewport.right - layout.metrics.edge_margin;
+        const float toast_left = layout.viewport.left
+            + layout.metrics.edge_margin;
+        const float available = toast_right - toast_left;
+        const float toast_width = std::min(
+            layout.metrics.page_toast_max_width, available);
+        const float toast_bottom = layout.page_badge.visible
+            ? layout.page_badge.bounds.top - layout.metrics.overlay_gap
+            : layout.viewport.bottom - layout.metrics.edge_margin;
+        const float toast_height = std::min(
+            layout.metrics.page_toast_height,
+            toast_bottom - layout.viewport.top - layout.metrics.edge_margin);
+        if (std::isfinite(toast_width) && std::isfinite(toast_height)
+            && toast_width > 0.0f && toast_height > 0.0f) {
+            const float center = toast_left + available * 0.5f;
+            layout.transient_overlay.bounds = {
+                center - toast_width * 0.5f, toast_bottom - toast_height,
+                center + toast_width * 0.5f, toast_bottom};
+            layout.transient_overlay.visible =
+                !layout.transient_overlay.bounds.empty();
+        }
+    }
+
+    if (input.middle_autoscroll_active
+        && std::isfinite(input.autoscroll_anchor_x)
+        && std::isfinite(input.autoscroll_anchor_y)
+        && std::isfinite(input.autoscroll_pointer_x)
+        && std::isfinite(input.autoscroll_pointer_y)) {
+        const float safe_right = layout.scrollbar.visible
+            ? layout.scrollbar.hit_bounds.left : layout.viewport.right;
+        const float radius = layout.metrics.autoscroll_dead_zone_radius;
+        if (input.autoscroll_anchor_x >= layout.viewport.left
+            && input.autoscroll_anchor_x < safe_right
+            && input.autoscroll_anchor_y >= layout.viewport.top
+            && input.autoscroll_anchor_y <= layout.viewport.bottom) {
+            ComicAutoscrollLayout& autoscroll = layout.autoscroll;
+            autoscroll.visible = true;
+            autoscroll.anchor_x = input.autoscroll_anchor_x;
+            autoscroll.anchor_y = input.autoscroll_anchor_y;
+            autoscroll.dead_zone_radius = radius;
+            autoscroll.arrow_head = layout.metrics.autoscroll_arrow_head;
+            const float delta_y = input.autoscroll_pointer_y
+                - input.autoscroll_anchor_y;
+            const float distance = std::fabs(delta_y);
+            if (distance > radius) {
+                autoscroll.direction = delta_y < 0.0f
+                    ? ComicAutoscrollDirection::Backward
+                    : ComicAutoscrollDirection::Forward;
+                const float speed_distance = std::min(
+                    distance - radius,
+                    240.0f * layout.metrics.dpi_scale);
+                autoscroll.intensity = std::clamp(
+                    speed_distance / (240.0f * layout.metrics.dpi_scale),
+                    0.0f, 1.0f);
+                const float length = layout.metrics.autoscroll_arrow_min_length
+                    + (layout.metrics.autoscroll_arrow_max_length
+                        - layout.metrics.autoscroll_arrow_min_length)
+                        * autoscroll.intensity;
+                const float sign = autoscroll.direction
+                    == ComicAutoscrollDirection::Backward ? -1.0f : 1.0f;
+                autoscroll.arrow_tail_y = autoscroll.anchor_y
+                    + sign * (radius + layout.metrics.overlay_gap * 0.5f);
+                const float unclipped_tip = autoscroll.arrow_tail_y
+                    + sign * length;
+                autoscroll.arrow_tip_y = std::clamp(
+                    unclipped_tip,
+                    layout.viewport.top + autoscroll.arrow_head,
+                    layout.viewport.bottom - autoscroll.arrow_head);
+                if ((sign < 0.0f
+                        && autoscroll.arrow_tip_y >= autoscroll.arrow_tail_y)
+                    || (sign > 0.0f
+                        && autoscroll.arrow_tip_y <= autoscroll.arrow_tail_y)) {
+                    autoscroll.direction = ComicAutoscrollDirection::Stationary;
+                    autoscroll.intensity = 0.0f;
+                }
+            }
+        }
+    }
+    return layout;
 }
 
 inline ComicRenderPlan build_comic_render_plan(
