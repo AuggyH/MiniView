@@ -9,11 +9,18 @@
 namespace mv {
 
 enum class OpenInputRoute {
-    LoadImage,
+    DecodeImage,
     OpenDirectory,
     MissingPath,
     UnsupportedFormat,
     ReadOrDecodeFailed,
+};
+
+enum class ImageLoadResult {
+    Success,
+    DecodeFailed,
+    MaterializeFailed,
+    UploadFailed,
 };
 
 inline bool is_supported_open_extension(std::wstring extension) {
@@ -42,7 +49,19 @@ inline OpenInputRoute classify_open_input(
     if (is_directory) return OpenInputRoute::OpenDirectory;
     if (!is_supported_open_extension(extension))
         return OpenInputRoute::UnsupportedFormat;
-    return OpenInputRoute::LoadImage;
+    return OpenInputRoute::DecodeImage;
+}
+
+template <typename Load>
+inline OpenInputRoute resolve_open_input_route(
+    OpenInputRoute route, Load load) noexcept {
+    if (route != OpenInputRoute::DecodeImage) return route;
+    try {
+        return load() == ImageLoadResult::Success
+            ? OpenInputRoute::DecodeImage : OpenInputRoute::ReadOrDecodeFailed;
+    } catch (...) {
+        return OpenInputRoute::ReadOrDecodeFailed;
+    }
 }
 
 inline const wchar_t* open_input_error_message(OpenInputRoute route) {
@@ -56,6 +75,13 @@ inline const wchar_t* open_input_error_message(OpenInputRoute route) {
     default:
         return L"";
     }
+}
+
+inline bool complete_directory_open(
+    int scan_result, std::wstring& open_error) {
+    if (scan_result < 0) return false;
+    open_error.clear();
+    return true;
 }
 
 } // namespace mv

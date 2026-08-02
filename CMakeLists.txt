@@ -107,13 +107,18 @@ if(BUILD_TESTING)
 
     add_executable(app_state_tests
         tests/app_state_tests.cpp
+        src/decoder.cpp
     )
     target_include_directories(app_state_tests PRIVATE src)
     target_compile_options(app_state_tests PRIVATE /W4 /utf-8)
     if(MINVIEW_WARNINGS_AS_ERRORS)
         target_compile_options(app_state_tests PRIVATE /WX)
     endif()
-    target_compile_definitions(app_state_tests PRIVATE NOMINMAX)
+    target_compile_definitions(app_state_tests PRIVATE
+        NOMINMAX
+        MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(app_state_tests PRIVATE windowscodecs ole32)
     set_target_properties(app_state_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(app_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME app_state.unit COMMAND app_state_tests)

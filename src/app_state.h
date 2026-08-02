@@ -1,5 +1,7 @@
 #pragma once
 
+#include "open_error.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -137,13 +139,6 @@ inline bool run_best_effort_transition_capture(Capture capture) noexcept {
         return false;
     }
 }
-
-enum class ImageLoadResult {
-    Success,
-    DecodeFailed,
-    MaterializeFailed,
-    UploadFailed,
-};
 
 template <typename Decode, typename Materialize, typename Upload>
 inline ImageLoadResult run_image_load_stages(

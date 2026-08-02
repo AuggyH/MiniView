@@ -1,4 +1,5 @@
 #include "app_state.h"
+#include "decoder.h"
 #include "open_error.h"
 
 #include <cmath>
@@ -18,7 +19,7 @@ void expect(bool condition, const char* message) {
     }
 }
 
-bool near(float left, float right, float tolerance = 0.01f) {
+bool nearly_equal(float left, float right, float tolerance = 0.01f) {
     return std::abs(left - right) <= tolerance;
 }
 
@@ -26,13 +27,16 @@ bool near(float left, float right, float tolerance = 0.01f) {
 
 int main() {
     using mv::OpenInputRoute;
+    const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    expect(SUCCEEDED(com_result), "COM must initialize for the corrupt PNG decoder fixture");
+
     const auto missing_file = mv::classify_open_input(
         false, false, ERROR_FILE_NOT_FOUND, L".png");
     const auto missing_parent = mv::classify_open_input(
         false, false, ERROR_PATH_NOT_FOUND, L".png");
     const auto unreadable_file = mv::classify_open_input(
         false, false, ERROR_ACCESS_DENIED, L".png");
-    const auto corrupt_supported_file = mv::classify_open_input(
+    const auto corrupt_png = mv::classify_open_input(
         true, false, ERROR_SUCCESS, L".PnG");
     const auto unsupported_file = mv::classify_open_input(
         true, false, ERROR_SUCCESS, L".avif");
@@ -41,23 +45,111 @@ int main() {
         "missing files and parent paths must share the missing-path route");
     expect(unreadable_file == OpenInputRoute::ReadOrDecodeFailed,
         "permission and attribute failures must use the read/decode route");
-    expect(corrupt_supported_file == OpenInputRoute::LoadImage,
+    expect(corrupt_png == OpenInputRoute::DecodeImage,
         "a supported extension must reach deterministic decoder validation");
     expect(mv::classify_open_input(
-            true, false, ERROR_SUCCESS, L".ico") == OpenInputRoute::LoadImage,
+            true, false, ERROR_SUCCESS, L".ico") == OpenInputRoute::DecodeImage,
         "existing WIC-associated formats must keep their decoder route");
     expect(unsupported_file == OpenInputRoute::UnsupportedFormat,
         "declared deferred formats must fail before decoder or upload work");
     expect(mv::classify_open_input(
             true, true, ERROR_SUCCESS, L"") == OpenInputRoute::OpenDirectory,
         "an existing directory must keep the directory route");
-    expect(std::wstring(mv::open_input_error_message(missing_file))
-                != mv::open_input_error_message(unsupported_file)
-            && std::wstring(mv::open_input_error_message(unsupported_file))
-                != mv::open_input_error_message(unreadable_file)
-            && std::wstring(mv::open_input_error_message(missing_file))
-                != mv::open_input_error_message(unreadable_file),
-        "missing, unsupported, and read/decode failures need distinct Chinese feedback");
+
+    mv::ImageLoadResult corrupt_load_result = mv::ImageLoadResult::DecodeFailed;
+    if (SUCCEEDED(com_result)) {
+        try {
+            mv::Decoder decoder;
+            const std::wstring corrupt_path =
+                std::wstring(MINVIEW_SOURCE_DIR) + L"\\tests\\corrupt_open_input.png";
+            corrupt_load_result = mv::run_image_load_stages(
+                [&]() { return decoder.decode(corrupt_path); },
+                [&](const mv::ComPtr<IWICBitmapSource>& decoded) {
+                    return decoder.materialize(decoded.Get());
+                },
+                [](const mv::ComPtr<IWICBitmapSource>&) { return true; });
+        } catch (...) {
+            expect(false, "the WIC decoder fixture setup must not throw");
+        }
+    }
+    expect(corrupt_load_result == mv::ImageLoadResult::DecodeFailed,
+        "the corrupt PNG fixture must fail the real WIC decode stage");
+
+    auto expect_rejected_open = [&](OpenInputRoute initial_route,
+            mv::ImageLoadResult load_result, const wchar_t* expected_feedback,
+            int expected_load_calls) {
+        bool grid_mode = true;
+        bool from_grid = false;
+        bool animation_started = false;
+        int grid_selection = 0;
+        std::vector<bool> selected = {true, false};
+        int selection_anchor = 0;
+        std::wstring current_path = L"current.png";
+        std::wstring directory = L"C:\\existing";
+        bool has_image = true;
+        std::wstring feedback;
+        int load_calls = 0;
+
+        const bool entered = mv::run_grid_entry(
+            mv::GridEntryRequest{mv::GridEntryTrigger::DoubleClick, 1},
+            mv::GridEntryTransactionState{
+                grid_mode, from_grid, animation_started,
+                grid_selection, selected, selection_anchor},
+            [&](int index) {
+                grid_selection = index;
+                selected = {false, true};
+                selection_anchor = index;
+            },
+            [&](int) {
+                const auto resolved_route = mv::resolve_open_input_route(
+                    initial_route, [&]() {
+                        ++load_calls;
+                        return load_result;
+                    });
+                if (resolved_route != OpenInputRoute::DecodeImage) {
+                    feedback = mv::open_input_error_message(resolved_route);
+                    return false;
+                }
+                current_path = L"changed.png";
+                directory = L"C:\\changed";
+                has_image = false;
+                grid_mode = false;
+                from_grid = true;
+                return true;
+            },
+            [&]() { animation_started = true; });
+
+        expect(!entered && grid_mode && !from_grid && !animation_started,
+            "a rejected open must preserve browsing and animation state");
+        expect(grid_selection == 0
+                && selected == std::vector<bool>({true, false})
+                && selection_anchor == 0,
+            "a rejected open must preserve selection state");
+        expect(current_path == L"current.png"
+                && directory == L"C:\\existing" && has_image,
+            "a rejected open must preserve current image and directory state");
+        expect(feedback == expected_feedback,
+            "a rejected open must map to its exact Chinese feedback");
+        expect(load_calls == expected_load_calls,
+            "only supported inputs may invoke the decoder seam");
+    };
+    expect_rejected_open(
+        missing_file, mv::ImageLoadResult::Success,
+        L"无法打开：文件或路径不存在。", 0);
+    expect_rejected_open(
+        unsupported_file, mv::ImageLoadResult::Success,
+        L"无法打开：暂不支持此文件格式。", 0);
+    expect_rejected_open(
+        corrupt_png, corrupt_load_result,
+        L"无法打开：文件无法读取或图片解码失败。", 1);
+
+    std::wstring directory_error = mv::open_input_error_message(missing_file);
+    expect(!mv::complete_directory_open(-1, directory_error)
+            && directory_error == L"无法打开：文件或路径不存在。",
+        "a failed directory scan must preserve the current open error");
+    expect(mv::complete_directory_open(0, directory_error)
+            && directory_error.empty(),
+        "a successful empty directory open must clear a previous open error");
 
     mv::GridEntryRouteState entry_state;
     entry_state.grid_mode = true;
@@ -137,16 +229,16 @@ int main() {
     geometry.scroll_y = 400;
     const auto source_rect = mv::calculate_grid_transition_rect(geometry);
     expect(source_rect
-            && near((source_rect->left + source_rect->right) * 0.5f, 383.0f)
-            && near((source_rect->top + source_rect->bottom) * 0.5f, 356.0f)
-            && near((source_rect->right - source_rect->left)
+            && nearly_equal((source_rect->left + source_rect->right) * 0.5f, 383.0f)
+            && nearly_equal((source_rect->top + source_rect->bottom) * 0.5f, 356.0f)
+            && nearly_equal((source_rect->right - source_rect->left)
                 / (source_rect->bottom - source_rect->top), 1.5f),
         "transition source must use the exact item geometry and scrolled viewport coordinates");
     geometry.scroll_y = 450;
     const auto scrolled_source_rect = mv::calculate_grid_transition_rect(geometry);
     expect(source_rect && scrolled_source_rect
-            && near(scrolled_source_rect->top, source_rect->top - 50.0f)
-            && near(scrolled_source_rect->bottom, source_rect->bottom - 50.0f),
+            && nearly_equal(scrolled_source_rect->top, source_rect->top - 50.0f)
+            && nearly_equal(scrolled_source_rect->bottom, source_rect->bottom - 50.0f),
         "transition source must move by the exact grid scroll delta");
     geometry.request_index = 0;
     expect(!mv::calculate_grid_transition_rect(geometry),
@@ -490,10 +582,12 @@ int main() {
         "deleting the final item should clear current identity");
 
     if (failures != 0) {
+        if (SUCCEEDED(com_result)) CoUninitialize();
         std::cerr << failures << " assertion(s) failed\n";
         return 1;
     }
 
+    if (SUCCEEDED(com_result)) CoUninitialize();
     std::cout << "app state tests passed\n";
     return 0;
 }

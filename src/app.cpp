@@ -1312,6 +1312,7 @@ void App::open_directory(const std::wstring& path) {
         update_title();
         m_window.invalidate();
     }
+    static_cast<void>(complete_directory_open(result, m_open_error));
 }
 
 bool App::open_image(const std::wstring& path) {
@@ -1326,11 +1327,10 @@ bool App::open_image(const std::wstring& path) {
             && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
         attribute_error, fs::path(path).extension().wstring());
     if (route == OpenInputRoute::OpenDirectory) {
-        m_open_error.clear();
         open_directory(path);
         return true;
     }
-    if (route != OpenInputRoute::LoadImage) {
+    if (route != OpenInputRoute::DecodeImage) {
         show_open_error(route);
         return false;
     }
@@ -1340,7 +1340,8 @@ bool App::open_image(const std::wstring& path) {
         int indexed_position = m_index.index_of(path);
 
         ComPtr<IWICBitmapSource> bitmap;
-        const auto load_result = run_image_load_stages(
+        const auto resolved_route = resolve_open_input_route(route, [&]() {
+            return run_image_load_stages(
                 [this, &path]() {
                     auto decoded = get_preloaded(path);
                     if (!decoded) decoded = m_decoder.decode(path);
@@ -1353,8 +1354,9 @@ bool App::open_image(const std::wstring& path) {
                     bitmap = materialized;
                     return m_renderer.upload_image(bitmap.Get());
                 });
-        if (load_result != ImageLoadResult::Success) {
-            show_open_error(OpenInputRoute::ReadOrDecodeFailed);
+        });
+        if (resolved_route != OpenInputRoute::DecodeImage) {
+            show_open_error(resolved_route);
             return false;
         }
 
