@@ -261,6 +261,34 @@ void test_production_app_binds_virtual_window_and_lru() {
         "production rendering must consume the tested stacked renderer contract");
 }
 
+void test_production_toolbar_forwards_comic_commands() {
+    const std::filesystem::path source_root(MINVIEW_SOURCE_DIR);
+    const std::string app = read_source(source_root / "src" / "app.cpp");
+    const std::size_t toolbar_begin =
+        app.find("void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y)");
+    const std::size_t toolbar_end =
+        app.find("void App::open_in_explorer()", toolbar_begin);
+    expect(toolbar_begin != std::string::npos && toolbar_end != std::string::npos,
+        "production toolbar dispatch must remain discoverable");
+
+    const std::string toolbar =
+        app.substr(toolbar_begin, toolbar_end - toolbar_begin);
+    const std::size_t dispatch = toolbar.find("switch (cmd)");
+    const std::size_t comic = toolbar.find("case IDM_COMIC:", dispatch);
+    const std::size_t seamless =
+        toolbar.find("case IDM_COMIC_SEAMLESS:", dispatch);
+    const std::size_t forward =
+        toolbar.find("SendMessageW(hwnd, WM_COMMAND, cmd, 0)", dispatch);
+    expect(toolbar.find("TPM_RETURNCMD | TPM_NONOTIFY") != std::string::npos,
+        "toolbar regression must exercise the manual command forwarding path");
+    expect(dispatch != std::string::npos && forward != std::string::npos,
+        "toolbar commands must be forwarded through WM_COMMAND");
+    expect(comic < forward,
+        "the comic mode toolbar command must reach WM_COMMAND");
+    expect(seamless < forward,
+        "the seamless toolbar command must reach WM_COMMAND");
+}
+
 } // namespace
 
 int main() {
@@ -273,6 +301,7 @@ int main() {
         test_large_library_materializes_only_request_window();
         test_lru_obeys_comic_and_application_soft_limits();
         test_production_app_binds_virtual_window_and_lru();
+        test_production_toolbar_forwards_comic_commands();
         std::cout << "comic_reader_model_tests: PASS\n";
         return 0;
     } catch (const std::exception& error) {

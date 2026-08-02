@@ -2315,6 +2315,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         return;
 
     switch (cmd) {
+    case IDM_COMIC: case IDM_COMIC_SEAMLESS:
     case IDM_OPEN_FILE: case IDM_OPEN_FOLDER: case IDM_FULLSCREEN: case IDM_RECURSIVE:
     case IDM_THUMB_SQUARE: case IDM_INFO: case IDM_LABELS:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
