@@ -1,5 +1,6 @@
 #include "app_state.h"
 
+#include <Windows.h>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -17,13 +18,61 @@ void expect(bool condition, const char* message) {
     }
 }
 
-bool near(float left, float right, float tolerance = 0.01f) {
+bool nearly_equal(float left, float right, float tolerance = 0.01f) {
     return std::abs(left - right) <= tolerance;
+}
+
+void test_native_owner_menu_state() {
+    HMENU menu = CreatePopupMenu();
+    expect(menu != nullptr, "native owner-menu test must create a popup menu");
+    if (!menu) return;
+
+    constexpr UINT disabled_id = 7001;
+    constexpr UINT enabled_id = 7002;
+    auto insert_owner_item = [&](UINT id, bool disabled) {
+        MENUITEMINFOW item = {sizeof(item)};
+        item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE;
+        item.fType = MFT_OWNERDRAW;
+        item.fState = disabled ? MFS_DISABLED : MFS_ENABLED;
+        item.wID = id;
+        return InsertMenuItemW(
+            menu, GetMenuItemCount(menu), TRUE, &item) != FALSE;
+    };
+
+    expect(insert_owner_item(disabled_id, true),
+        "native menu must accept a disabled owner-draw item");
+    expect(insert_owner_item(enabled_id, false),
+        "native menu must accept an enabled owner-draw item");
+
+    MENUITEMINFOW disabled_state = {sizeof(disabled_state)};
+    disabled_state.fMask = MIIM_STATE;
+    expect(GetMenuItemInfoW(menu, disabled_id, FALSE, &disabled_state) != FALSE
+            && (disabled_state.fState & MFS_DISABLED) == MFS_DISABLED,
+        "disabled owner-draw item must retain MFS_DISABLED in native state");
+    const UINT disabled_flags = GetMenuState(menu, disabled_id, MF_BYCOMMAND);
+    expect(disabled_flags != static_cast<UINT>(-1)
+            && (disabled_flags & (MF_DISABLED | MF_GRAYED))
+                == (MF_DISABLED | MF_GRAYED),
+        "native menu behavior must report the owner-draw item as unavailable");
+
+    MENUITEMINFOW enabled_state = {sizeof(enabled_state)};
+    enabled_state.fMask = MIIM_STATE;
+    expect(GetMenuItemInfoW(menu, enabled_id, FALSE, &enabled_state) != FALSE
+            && (enabled_state.fState & MFS_DISABLED) == 0,
+        "enabled owner-draw item must remain selectable in native state");
+    const UINT enabled_flags = GetMenuState(menu, enabled_id, MF_BYCOMMAND);
+    expect(enabled_flags != static_cast<UINT>(-1)
+            && (enabled_flags & (MF_DISABLED | MF_GRAYED)) == 0,
+        "native menu behavior must report the enabled owner-draw item as available");
+
+    DestroyMenu(menu);
 }
 
 } // namespace
 
 int main() {
+    test_native_owner_menu_state();
+
     mv::GridEntryRouteState entry_state;
     entry_state.grid_mode = true;
     entry_state.selected_index = 1;
@@ -102,16 +151,16 @@ int main() {
     geometry.scroll_y = 400;
     const auto source_rect = mv::calculate_grid_transition_rect(geometry);
     expect(source_rect
-            && near((source_rect->left + source_rect->right) * 0.5f, 383.0f)
-            && near((source_rect->top + source_rect->bottom) * 0.5f, 356.0f)
-            && near((source_rect->right - source_rect->left)
+            && nearly_equal((source_rect->left + source_rect->right) * 0.5f, 383.0f)
+            && nearly_equal((source_rect->top + source_rect->bottom) * 0.5f, 356.0f)
+            && nearly_equal((source_rect->right - source_rect->left)
                 / (source_rect->bottom - source_rect->top), 1.5f),
         "transition source must use the exact item geometry and scrolled viewport coordinates");
     geometry.scroll_y = 450;
     const auto scrolled_source_rect = mv::calculate_grid_transition_rect(geometry);
     expect(source_rect && scrolled_source_rect
-            && near(scrolled_source_rect->top, source_rect->top - 50.0f)
-            && near(scrolled_source_rect->bottom, source_rect->bottom - 50.0f),
+            && nearly_equal(scrolled_source_rect->top, source_rect->top - 50.0f)
+            && nearly_equal(scrolled_source_rect->bottom, source_rect->bottom - 50.0f),
         "transition source must move by the exact grid scroll delta");
     geometry.request_index = 0;
     expect(!mv::calculate_grid_transition_rect(geometry),

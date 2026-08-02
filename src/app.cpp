@@ -276,8 +276,9 @@ static OwnerItemData* AddOwnerItem(HMENU menu, UINT id, const std::wstring& labe
     d->disabled = disabled;
     d->checked  = checked;
     MENUITEMINFOW mii = { sizeof(mii) };
-    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA;
+    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA | MIIM_STATE;
     mii.fType = MFT_OWNERDRAW;
+    mii.fState = disabled ? MFS_DISABLED : MFS_ENABLED;
     mii.wID   = id;
     mii.dwItemData = reinterpret_cast<ULONG_PTR>(d);
     InsertMenuItemW(menu, GetMenuItemCount(menu), TRUE, &mii);

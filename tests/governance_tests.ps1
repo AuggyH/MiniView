@@ -1836,6 +1836,7 @@ Assert-Present $appSourcePath "(?s)case 'I':\s+toggle_info\(\);\s+return 0;" 'I 
 Assert-Present $appSourcePath "(?s)case 'L':\s+return toggle_grid_labels\(\) \? 0 : -1;" 'L must route through the shared grid label command'
 Assert-Present $appSourcePath '(?s)case IDM_LABELS:\s+toggle_grid_labels\(\);\s+return 0;' 'the label menu command must use the shared grid label command'
 Assert-Present $appSourcePath '(?s)AddOwnerItem\(popup,\s*IDM_LABELS,.*?!m_grid_mode,\s*m_show_labels\);' 'the View menu must expose grid labels with disabled and checked state'
+Assert-Present $appSourcePath '(?s)static OwnerItemData\* AddOwnerItem.*?mii\.fMask\s*=\s*MIIM_FTYPE\s*\|\s*MIIM_ID\s*\|\s*MIIM_DATA\s*\|\s*MIIM_STATE;.*?mii\.fState\s*=\s*disabled\s*\?\s*MFS_DISABLED\s*:\s*MFS_ENABLED;' 'owner-draw disabled state must be enforced by the native menu'
 Assert-SwitchCaseActionMutationGuard $appSourceContent `
     'VK_ESCAPE' 'VK_F11' `
     'route_grid_exit\(GridExitTrigger::Escape' 'toggle_grid\(\);' `
