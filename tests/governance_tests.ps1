@@ -1755,6 +1755,7 @@ if ($RegistryConcurrencyWorker) {
 $areaPathLabelPrefix = "$([char]0x533a)$([char]0x57df)$([char]0x8def)$([char]0x5f84)$([char]0x6807)$([char]0x7b7e)$([char]0x7531)"
 $architecturePath = Join-Path $RepositoryRoot 'docs/ARCHITECTURE.md'
 $architectureContent = Get-Content -Raw -Encoding UTF8 -LiteralPath $architecturePath
+$appSourcePath = Join-Path $RepositoryRoot 'src/app.cpp'
 
 Assert-Present (Join-Path $RepositoryRoot 'build.bat') '(?s)copy /Y .*?if errorlevel 1 exit /b 1\s+echo BUILD_OK' 'build.bat must stop before BUILD_OK when the candidate copy fails'
 Assert-Absent (Join-Path $RepositoryRoot '.github/labeler.yml') '(?m)^(documentation|ci|tests):' 'path labeler must not manage type labels'
@@ -1763,6 +1764,12 @@ Assert-Present (Join-Path $RepositoryRoot 'docs/MULTI_FORMAT_RESEARCH.md') 'Prod
 Assert-Present (Join-Path $RepositoryRoot 'docs/MULTI_FORMAT_RESEARCH.md') 'Issue #4' 'format research must preserve the Issue #4 implementation gate'
 Assert-Present (Join-Path $RepositoryRoot 'README.md') '#1A1A1A' 'README must use the authoritative background color'
 Assert-Absent (Join-Path $RepositoryRoot 'README.md') '#1A1A1E|`F2`' 'README must not advertise stale color or F2 behavior'
+Assert-Absent $appSourcePath "(?m)^\s*case 'G':" 'G must remain removed from production key routing'
+Assert-Present $appSourcePath '(?s)case VK_F11:\s+toggle_fullscreen\(hwnd\);\s+return 0;' 'F11 must continue toggling fullscreen'
+Assert-Present $appSourcePath '(?s)case VK_RETURN:.*?toggle_fullscreen\(hwnd\);\s+return 0;' 'Enter must continue toggling fullscreen in browsing modes'
+Assert-Present $appSourcePath "(?s)case 'I':\s+toggle_info\(\);\s+return 0;" 'I must continue toggling the complete information panel'
+Assert-Present $appSourcePath '(?s)case VK_ESCAPE:.*?if \(m_from_grid\).*?toggle_grid\(\);' 'Escape must continue returning big-image mode to the grid'
+Assert-Present $appSourcePath '(?s)case WM_LBUTTONDBLCLK:.*?if \(m_has_image\).*?toggle_grid\(\);' 'big-image double-click must continue returning to the grid'
 Assert-Present $architecturePath '3[^\r\n]*WIC' 'architecture must match the three-entry preload cache'
 Assert-Absent $architecturePath '6[^\r\n]*WIC' 'architecture must not advertise a six-entry preload cache'
 if (-not (Test-NoLegacyMetadataLog $architectureContent)) {

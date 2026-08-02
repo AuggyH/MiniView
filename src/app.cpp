@@ -675,13 +675,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_anim_thumb.Reset();
                 KillTimer(hwnd, 4);
                 m_anim_timer = 0;
-                // Execute pending action
-                switch (m_anim_action) {
-                case ACT_ENTER_IMAGE: open_image(m_index.path_at(m_grid_sel)); break;
-                case ACT_EXIT_GRID:   toggle_grid(); break;
-                case ACT_QUIT:        DestroyWindow(hwnd); return 0;
-                }
-                m_anim_action = ACT_NONE;
             }
             m_window.invalidate();
         }
@@ -1085,11 +1078,18 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDBLCLK:
         if (m_animating) return 0;  // TODO: re-enable interrupt
         if (m_grid_mode) {
-            if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
-                m_from_grid = true;
-                start_transition(hwnd, true);
-                m_anim_action = ACT_ENTER_IMAGE;
-                begin_animation(hwnd);
+            GridEntryRouteState route_state;
+            route_state.grid_mode = true;
+            route_state.animating = m_animating;
+            route_state.selected_index = m_grid_sel;
+            route_state.hit_index = grid_hit_test(
+                GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            route_state.item_count = static_cast<int>(m_index.size());
+            const auto request = route_grid_entry(
+                GridEntryTrigger::DoubleClick, route_state);
+            if (request) {
+                select_item(request->index, false, false);
+                enter_grid_image(hwnd, *request);
             }
             return 0;
         }
@@ -1098,7 +1098,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             start_transition(hwnd, false);
             begin_animation(hwnd);
             toggle_grid();
-            m_anim_action = ACT_NONE;
             return 0;
         }
         return 0;
@@ -1160,31 +1159,33 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 start_transition(hwnd, false);
                 begin_animation(hwnd);
                 toggle_grid();
-                m_anim_action = ACT_NONE;
                 return 0;
             }
             if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
             return 0;
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
-        case VK_SPACE:
+        case VK_SPACE: {
             if (m_animating) return 0;  // TODO: re-enable interrupt
             if (m_from_grid) {
                 m_from_grid = false;
                 start_transition(hwnd, false);
                 begin_animation(hwnd);
                 toggle_grid();
-                m_anim_action = ACT_NONE;
                 return 0;
             }
-            if (m_grid_mode && m_grid_sel >= 0) {
-                start_transition(hwnd, true);
-                m_from_grid = true;
-                m_anim_action = ACT_ENTER_IMAGE;
-                begin_animation(hwnd);
-                m_window.invalidate();
+            GridEntryRouteState route_state;
+            route_state.grid_mode = m_grid_mode;
+            route_state.animating = m_animating;
+            route_state.selected_index = m_grid_sel;
+            route_state.item_count = static_cast<int>(m_index.size());
+            const auto request = route_grid_entry(
+                GridEntryTrigger::Space, route_state);
+            if (request) {
+                enter_grid_image(hwnd, *request);
                 return 0;
             }
             return 0;  // in normal image mode, do nothing
+        }
         case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
         case VK_RETURN:
             if (m_has_image || m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
@@ -2107,6 +2108,22 @@ void App::begin_animation(HWND hwnd) {
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
     m_anim_timer = SetTimer(hwnd, 4, 16, nullptr);
+}
+
+bool App::enter_grid_image(HWND hwnd, const GridEntryRequest& request) {
+    return run_grid_entry(
+        request,
+        [this, hwnd](int index) {
+            m_grid_sel = index;
+            start_transition(hwnd, true);
+        },
+        [this](int index) {
+            return open_image(m_index.path_at(static_cast<size_t>(index)));
+        },
+        [this, hwnd]() {
+            begin_animation(hwnd);
+            m_window.invalidate();
+        });
 }
 
 void App::toggle_fullscreen(HWND hwnd) {

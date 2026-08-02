@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,47 @@ enum class GridRebuildReason {
     Structural,
     BackgroundDimensions,
 };
+
+enum class GridEntryTrigger {
+    Space,
+    DoubleClick,
+};
+
+struct GridEntryRouteState {
+    bool grid_mode = false;
+    bool animating = false;
+    int selected_index = -1;
+    int hit_index = -1;
+    int item_count = 0;
+};
+
+struct GridEntryRequest {
+    GridEntryTrigger trigger = GridEntryTrigger::Space;
+    int index = -1;
+};
+
+inline std::optional<GridEntryRequest> route_grid_entry(
+    GridEntryTrigger trigger, const GridEntryRouteState& state) {
+    if (!state.grid_mode || state.animating || state.item_count <= 0)
+        return std::nullopt;
+    const int index = trigger == GridEntryTrigger::Space
+        ? state.selected_index : state.hit_index;
+    if (index < 0 || index >= state.item_count) return std::nullopt;
+    return GridEntryRequest{trigger, index};
+}
+
+template <typename StartTransition, typename LoadAndCommit, typename BeginAnimation>
+inline bool run_grid_entry(
+    const GridEntryRequest& request,
+    StartTransition start_transition,
+    LoadAndCommit load_and_commit,
+    BeginAnimation begin_animation) {
+    if (request.index < 0) return false;
+    start_transition(request.index);
+    if (!load_and_commit(request.index)) return false;
+    begin_animation();
+    return true;
+}
 
 inline GridRebuildReason classify_grid_rebuild_reason(
     bool layout_dirty, bool width_changed, bool item_count_changed,

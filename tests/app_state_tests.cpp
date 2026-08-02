@@ -18,6 +18,77 @@ void expect(bool condition, const char* message) {
 } // namespace
 
 int main() {
+    mv::GridEntryRouteState entry_state;
+    entry_state.grid_mode = true;
+    entry_state.selected_index = 1;
+    entry_state.hit_index = 1;
+    entry_state.item_count = 3;
+    const auto space_entry = mv::route_grid_entry(
+        mv::GridEntryTrigger::Space, entry_state);
+    const auto double_click_entry = mv::route_grid_entry(
+        mv::GridEntryTrigger::DoubleClick, entry_state);
+    expect(space_entry && double_click_entry
+            && space_entry->index == 1 && double_click_entry->index == 1,
+        "Space and thumbnail double-click must route to the same grid item");
+
+    entry_state.selected_index = -1;
+    expect(!mv::route_grid_entry(mv::GridEntryTrigger::Space, entry_state),
+        "Space without a valid grid selection must fail closed");
+    entry_state.selected_index = 1;
+    entry_state.hit_index = -1;
+    expect(!mv::route_grid_entry(
+            mv::GridEntryTrigger::DoubleClick, entry_state),
+        "double-click outside a thumbnail must fail closed");
+    entry_state.hit_index = 1;
+    entry_state.animating = true;
+    expect(!mv::route_grid_entry(mv::GridEntryTrigger::Space, entry_state)
+            && !mv::route_grid_entry(
+                mv::GridEntryTrigger::DoubleClick, entry_state),
+        "mode-switch inputs during the transition must remain ignored");
+
+    auto expect_successful_entry = [&](const mv::GridEntryRequest& request) {
+        bool grid_mode = true;
+        bool from_grid = false;
+        bool animation_started = false;
+        std::vector<std::string> stages;
+        const bool entered = mv::run_grid_entry(
+            request,
+            [&](int index) {
+                expect(index == 1, "entry transition must bind the requested index");
+                stages.push_back("transition");
+            },
+            [&](int index) {
+                expect(index == 1, "image load must bind the requested index");
+                stages.push_back("load");
+                grid_mode = false;
+                from_grid = true;
+                return true;
+            },
+            [&]() {
+                stages.push_back("animation");
+                animation_started = true;
+            });
+        expect(entered && !grid_mode && from_grid && animation_started,
+            "a successful load must commit big-image mode");
+        expect(stages == std::vector<std::string>(
+                {"transition", "load", "animation"}),
+            "grid entry must commit before the visual animation begins");
+    };
+    expect_successful_entry(*space_entry);
+    expect_successful_entry(*double_click_entry);
+
+    bool failed_grid_mode = true;
+    bool failed_from_grid = false;
+    bool failed_animation_started = false;
+    const bool failed_entry = mv::run_grid_entry(
+        *space_entry,
+        [](int) {},
+        [&](int) { return false; },
+        [&]() { failed_animation_started = true; });
+    expect(!failed_entry && failed_grid_mode && !failed_from_grid
+            && !failed_animation_started,
+        "a failed image load must remain in grid without starting animation");
+
     expect(mv::is_image_zoomed(2.0f, 1.0f),
         "ordinary wheel input should preserve an existing zoomed state");
     expect(!mv::is_image_zoomed(1.01f, 1.0f),

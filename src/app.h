@@ -42,6 +42,7 @@ private:
     void    toggle_fullscreen(HWND hwnd);
     void    start_transition(HWND hwnd, bool forward);
     void    begin_animation(HWND hwnd);
+    bool    enter_grid_image(HWND hwnd, const GridEntryRequest& request);
     void    toggle_recursive();
     void    render_frame();
     bool    synchronize_renderer_generation();
@@ -191,8 +192,6 @@ private:
     D2D1_RECT_F m_anim_dst = {};
     bool  m_anim_forward = true;
     float m_anim_iw = 1, m_anim_ih = 1;  // target image size for animation
-    enum AnimAction { ACT_NONE, ACT_ENTER_IMAGE, ACT_EXIT_GRID, ACT_QUIT };
-    AnimAction m_anim_action = ACT_NONE;
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     int   m_toolbar_h = 28;
