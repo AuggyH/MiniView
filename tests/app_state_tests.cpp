@@ -247,19 +247,22 @@ void test_comic_app_controller() {
                 "advance_middle", "release_capture", "stop_timer", "invalidate"}),
         "a middle boundary tick must release capture before stopping its timer");
 
-    for (const auto trigger : {
-            mv::ComicAppCancelTrigger::LeftButton,
-            mv::ComicAppCancelTrigger::Escape,
-            mv::ComicAppCancelTrigger::KeyboardPage,
-            mv::ComicAppCancelTrigger::MouseWheel,
-            mv::ComicAppCancelTrigger::FocusLost,
-            mv::ComicAppCancelTrigger::ExitMode}) {
+    const std::vector<std::pair<mv::ComicAppCancelTrigger, std::string>>
+        cancellation_cases = {
+            {mv::ComicAppCancelTrigger::LeftButton, "cancel:left"},
+            {mv::ComicAppCancelTrigger::Escape, "cancel:escape"},
+            {mv::ComicAppCancelTrigger::KeyboardPage, "cancel:keyboard"},
+            {mv::ComicAppCancelTrigger::MouseWheel, "cancel:wheel"},
+            {mv::ComicAppCancelTrigger::FocusLost, "cancel:focus"},
+            {mv::ComicAppCancelTrigger::ExitMode, "cancel:exit"}};
+    for (const auto& [trigger, expected_cancel] : cancellation_cases) {
         FakeComicAppPort cancelled;
         cancelled.owner_value = mv::ComicAppAutoOwner::Middle;
         cancelled.timer_value = true;
         expect(mv::ComicAppController::cancel(cancelled, trigger)
                 && cancelled.owner_value == mv::ComicAppAutoOwner::None
                 && cancelled.calls.size() == 5
+                && cancelled.calls[0] == expected_cancel
                 && cancelled.calls[1] == "clear_status"
                 && cancelled.calls[2] == "release_capture"
                 && cancelled.calls[3] == "stop_timer"
