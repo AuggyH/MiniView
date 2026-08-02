@@ -15,6 +15,28 @@ enum class GridRebuildReason {
     BackgroundDimensions,
 };
 
+enum class RecursiveScanAction {
+    KeepView,
+    RefreshGrid,
+    EnterUnselectedGrid,
+    ShowEmptyRoot,
+};
+
+inline bool can_toggle_recursive(
+    bool grid_mode, bool has_image, const std::wstring& root_directory) {
+    return grid_mode || (!has_image && !root_directory.empty());
+}
+
+inline RecursiveScanAction classify_recursive_scan_action(
+    bool was_grid, bool has_image, int scan_result) {
+    if (was_grid && scan_result == 0)
+        return RecursiveScanAction::ShowEmptyRoot;
+    if (was_grid) return RecursiveScanAction::RefreshGrid;
+    if (scan_result > 0 && !has_image)
+        return RecursiveScanAction::EnterUnselectedGrid;
+    return RecursiveScanAction::KeepView;
+}
+
 enum class GridEntryTrigger {
     Space,
     DoubleClick,

@@ -514,7 +514,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case IDM_EXIT: DestroyWindow(hwnd); return 0;
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); return 0;
         case IDM_RECURSIVE:
-            if (m_grid_mode || (!m_has_image && !m_index.directory().empty())) toggle_recursive();
+            if (can_toggle_recursive(
+                    m_grid_mode, m_has_image, m_index.directory()))
+                toggle_recursive();
             return 0;
         case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
         case IDM_INFO:         toggle_info(); return 0;
@@ -1149,7 +1151,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 copy_image_data();
                 return 0;
             case 'R':
-                if (m_grid_mode || (!m_has_image && !m_index.directory().empty())) toggle_recursive();
+                if (can_toggle_recursive(
+                        m_grid_mode, m_has_image, m_index.directory()))
+                    toggle_recursive();
                 return 0;
             }
             return -1;
@@ -1424,6 +1428,8 @@ void App::toggle_recursive() {
 
     int scan_result = m_index.scan(dir, m_recursive);
     save_last_dir(dir);
+    const RecursiveScanAction scan_action = classify_recursive_scan_action(
+        was_grid, m_has_image, scan_result);
 
     // Re-locate current image in new index
     if (!m_current_path.empty()) {
@@ -1431,7 +1437,7 @@ void App::toggle_recursive() {
     }
 
     // Reset grid thumbnails for new file list
-    if (was_grid) {
+    if (scan_action == RecursiveScanAction::RefreshGrid) {
         m_thumbs.clear();
         m_thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
@@ -1447,7 +1453,7 @@ void App::toggle_recursive() {
         m_sel_anchor = m_grid_sel;
         start_thumb_loader();
         if (m_grid_sel >= 0) grid_ensure_visible();
-    } else if (scan_result > 0 && !m_has_image) {
+    } else if (scan_action == RecursiveScanAction::EnterUnselectedGrid) {
         // An empty root can become browsable only after recursive scanning.
         // Enter the grid without manufacturing a default selection.
         m_current_idx = -1;
@@ -1455,6 +1461,21 @@ void App::toggle_recursive() {
         m_grid_saved_idx = -1;
         m_grid_sel = -1;
         m_has_image = false;
+        toggle_grid();
+    } else if (scan_action == RecursiveScanAction::ShowEmptyRoot) {
+        m_from_grid = false;
+        m_has_image = false;
+        m_current_path.clear();
+        m_current_wic.Reset();
+        m_current_idx = -1;
+        m_grid_sel = -1;
+        m_selected.clear();
+        m_sel_anchor = -1;
+        m_thumbs.clear();
+        m_thumb_d2d.clear();
+        m_thumb_d2d_use.clear();
+        m_panel_path.clear();
+        m_grid_scroll_y = 0;
         toggle_grid();
     }
 
@@ -1776,7 +1797,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         }
         AddOwnerSeparator(popup);
         AddOwnerItem(popup, IDM_RECURSIVE, L"递归浏览子文件夹	Ctrl+R",
-            !m_grid_mode && (m_has_image || m_index.directory().empty()), m_recursive);
+            !can_toggle_recursive(m_grid_mode, m_has_image, m_index.directory()),
+            m_recursive);
         AddOwnerItem(popup, IDM_THUMB_SQUARE,
             m_thumb_square ? L"原始比例网格	A" : L"方形缩略图	A", !m_grid_mode);
         AddOwnerItem(popup, IDM_LABELS, L"显示文件名标签	L",

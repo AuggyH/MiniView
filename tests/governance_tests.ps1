@@ -1837,6 +1837,11 @@ Assert-Present $appSourcePath "(?s)case 'L':\s+return toggle_grid_labels\(\) \? 
 Assert-Present $appSourcePath '(?s)case IDM_LABELS:\s+toggle_grid_labels\(\);\s+return 0;' 'the label menu command must use the shared grid label command'
 Assert-Present $appSourcePath '(?s)AddOwnerItem\(popup,\s*IDM_LABELS,.*?!m_grid_mode,\s*m_show_labels\);' 'the View menu must expose grid labels with disabled and checked state'
 Assert-Present $appSourcePath '(?s)static OwnerItemData\* AddOwnerItem.*?mii\.fMask\s*=\s*MIIM_FTYPE\s*\|\s*MIIM_ID\s*\|\s*MIIM_DATA\s*\|\s*MIIM_STATE;.*?mii\.fState\s*=\s*disabled\s*\?\s*MFS_DISABLED\s*:\s*MFS_ENABLED;' 'owner-draw disabled state must be enforced by the native menu'
+Assert-Present $appSourcePath '(?s)case IDM_OPEN_FOLDER:.*?SHBrowseForFolderW\(&bi\).*?SHGetPathFromIDListW\(pidl, dir\)\) open_directory\(dir\);' 'the folder picker must pass its exact selected directory to open_directory'
+Assert-Present $appSourcePath '(?s)case IDM_RECURSIVE:\s+if \(can_toggle_recursive\(.*?\)\)\s+toggle_recursive\(\);' 'the recursive menu command must use the shared availability contract'
+Assert-Present $appSourcePath "(?s)case 'R':\s+if \(can_toggle_recursive\(.*?\)\)\s+toggle_recursive\(\);" 'Ctrl+R must use the shared recursive availability contract'
+Assert-Present $appSourcePath '(?s)AddOwnerItem\(popup, IDM_RECURSIVE,.*?!can_toggle_recursive\(' 'the View menu must expose the shared recursive availability state'
+Assert-Present $appSourcePath '(?s)scan_action == RecursiveScanAction::ShowEmptyRoot.*?m_current_path\.clear\(\);.*?m_grid_sel = -1;.*?toggle_grid\(\);' 'an empty recursive rescan must leave the grid without preserving stale image state'
 Assert-SwitchCaseActionMutationGuard $appSourceContent `
     'VK_ESCAPE' 'VK_F11' `
     'route_grid_exit\(GridExitTrigger::Escape' 'toggle_grid\(\);' `
