@@ -4,6 +4,7 @@
 #include <dxgi.h>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -169,6 +170,72 @@ void test_clip_boundaries() {
         "168 DPI render plan must keep a 21 px background gap");
 }
 
+void test_non_finite_geometry_fails_closed() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float infinity = std::numeric_limits<float>::infinity();
+    const float maximum = std::numeric_limits<float>::max();
+    const std::vector<mv::ComicPageRenderInput> valid_page = {
+        {{0, 0.0f, 0.0f, 100.0f, 100.0f, false},
+            mv::ComicPageVisual::Bitmap}};
+
+    const auto expect_empty_viewport = [&valid_page](
+        mv::ComicRenderViewport viewport, const char* message) {
+        const mv::ComicRenderPlan plan =
+            mv::build_comic_render_plan(valid_page, viewport);
+        expect(plan.viewport.empty() && plan.pages.empty(), message);
+    };
+    expect_empty_viewport(
+        {nan, 0.0f, 100.0f, 100.0f, 0.0f, 96.0f, false},
+        "NaN viewport left must fail closed");
+    expect_empty_viewport(
+        {0.0f, infinity, 100.0f, 100.0f, 0.0f, 96.0f, false},
+        "positive-infinite viewport top must fail closed");
+    expect_empty_viewport(
+        {-infinity, 0.0f, 100.0f, 100.0f, 0.0f, 96.0f, false},
+        "negative-infinite viewport left must fail closed");
+    expect_empty_viewport(
+        {0.0f, 0.0f, infinity, 100.0f, 0.0f, 96.0f, false},
+        "infinite viewport width must fail closed");
+    expect_empty_viewport(
+        {0.0f, 0.0f, 100.0f, 100.0f, nan, 96.0f, false},
+        "NaN scroll offset must fail closed");
+    expect_empty_viewport(
+        {0.0f, 0.0f, 100.0f, 100.0f, -infinity, 96.0f, false},
+        "negative-infinite scroll offset must fail closed");
+    expect_empty_viewport(
+        {maximum, 0.0f, maximum, 100.0f, 0.0f, 96.0f, false},
+        "finite viewport right overflow must fail closed");
+    expect_empty_viewport(
+        {0.0f, maximum, 100.0f, maximum, 0.0f, 96.0f, false},
+        "finite viewport bottom overflow must fail closed");
+
+    expect(mv::ComicRenderRect{nan, 0.0f, 1.0f, 1.0f}.empty(),
+        "rectangles with NaN boundaries must be empty");
+    expect(mv::ComicRenderRect{0.0f, 0.0f, infinity, 1.0f}.empty(),
+        "rectangles with infinite boundaries must be empty");
+
+    const std::vector<mv::ComicPageRenderInput> overflowing_pages = {
+        {{0, maximum, 0.0f, maximum, 100.0f, false},
+            mv::ComicPageVisual::Bitmap},
+        {{1, 0.0f, maximum, 100.0f, maximum, false},
+            mv::ComicPageVisual::Error}};
+    const mv::ComicRenderPlan page_overflow = mv::build_comic_render_plan(
+        overflowing_pages,
+        {0.0f, 0.0f, 500.0f, 500.0f, 0.0f, 96.0f, false});
+    expect(page_overflow.pages.empty(),
+        "derived page boundary overflow must be culled before D2D");
+
+    const float large = maximum / 4.0f;
+    const std::vector<mv::ComicPageRenderInput> large_page = {
+        {{0, 0.0f, 0.0f, large, 100.0f, false},
+            mv::ComicPageVisual::Bitmap}};
+    const mv::ComicRenderPlan finite_large = mv::build_comic_render_plan(
+        large_page,
+        {large, 0.0f, large, 100.0f, 0.0f, 96.0f, false});
+    expect(finite_large.pages.size() == 1,
+        "large finite coordinates with finite derived bounds must remain valid");
+}
+
 } // namespace
 
 int main() {
@@ -192,6 +259,7 @@ int main() {
     test_narrow_viewport_and_error_card();
     test_wide_viewport_and_seamless_gap();
     test_clip_boundaries();
+    test_non_finite_geometry_fails_closed();
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";
