@@ -720,30 +720,95 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     // Toast notification
     if (toast && !toast->empty()) {
-        float toast_tw = w - pad * 2 - 20.0f * dpi_s;
-        float toast_th = label_height(*toast, toast_tw, 11.0f) + 14.0f * dpi_s;
-        float toast_y = y_off + h - pad - toast_th;
-        D2D1_RECT_F tr = {x + pad, toast_y, x + w - pad, toast_y + toast_th};
-        ComPtr<ID2D1SolidColorBrush> toast_bg;
-        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.15f, 0.15f, 0.18f, 0.92f), &toast_bg);
-        D2D1_ROUNDED_RECT trr = {tr, 4.0f * dpi_s, 4.0f * dpi_s};
-        m_d2d_context->FillRoundedRectangle(&trr, toast_bg.Get());
-        ComPtr<ID2D1SolidColorBrush> toast_txt;
-        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.85f, 0.88f, 1.0f), &toast_txt);
-        float tw = measure_text(*toast, 11.0f);
-        float toast_pad = 10.0f * dpi_s;
-        float tx, text_w;
-        if (tw < toast_tw) {
-            // Single line: center with tight width
-            tx = x + (w - tw) * 0.5f;
-            text_w = tw + 4.0f * dpi_s;
-        } else {
-            // Multi-line: left-align within toast width
-            tx = x + pad + toast_pad;
-            text_w = toast_tw;
+        PanelToastLayoutInput layout_input;
+        layout_input.panel_x = x;
+        layout_input.panel_y = y_off;
+        layout_input.panel_width = w;
+        layout_input.panel_height = h;
+        layout_input.dpi = m_dpi_y;
+        const auto constraints = calculate_panel_toast_layout(layout_input);
+
+        if (constraints.maximum_text_width > 0.0f
+            && constraints.maximum_text_height > 0.0f) {
+            ComPtr<IDWriteTextFormat> toast_format;
+            m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
+                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, 11.0f * dpi_s, L"zh-CN",
+                &toast_format);
+            if (toast_format) {
+                toast_format->SetWordWrapping(
+                    DWRITE_WORD_WRAPPING_EMERGENCY_BREAK);
+                auto create_layout = [&](float max_width, float max_height) {
+                    ComPtr<IDWriteTextLayout> layout;
+                    m_dwrite_factory->CreateTextLayout(toast->c_str(),
+                        static_cast<uint32_t>(toast->size()), toast_format.Get(),
+                        max_width, max_height, &layout);
+                    return layout;
+                };
+
+                auto unwrapped_layout = create_layout(
+                    100000.0f * dpi_s, 100000.0f * dpi_s);
+                if (unwrapped_layout) {
+                    unwrapped_layout->SetWordWrapping(
+                        DWRITE_WORD_WRAPPING_NO_WRAP);
+                }
+                DWRITE_TEXT_METRICS unwrapped_metrics = {};
+                if (unwrapped_layout && SUCCEEDED(
+                        unwrapped_layout->GetMetrics(&unwrapped_metrics))) {
+                    layout_input.measured_text_width =
+                        unwrapped_metrics.widthIncludingTrailingWhitespace;
+                }
+
+                const auto width_layout =
+                    calculate_panel_toast_layout(layout_input);
+                const float text_width = std::max(1.0f,
+                    width_layout.text_bounds.right
+                        - width_layout.text_bounds.left);
+                auto text_layout = create_layout(text_width,
+                    constraints.maximum_text_height);
+                DWRITE_TEXT_METRICS metrics = {};
+                if (text_layout && SUCCEEDED(text_layout->GetMetrics(&metrics))) {
+                    layout_input.measured_text_height = metrics.height;
+                    layout_input.line_count = metrics.lineCount;
+                    const auto layout =
+                        calculate_panel_toast_layout(layout_input);
+
+                    text_layout->SetMaxWidth(std::max(1.0f,
+                        layout.text_bounds.right - layout.text_bounds.left));
+                    text_layout->SetMaxHeight(std::max(1.0f,
+                        layout.text_bounds.bottom - layout.text_bounds.top));
+                    text_layout->SetTextAlignment(layout.single_line
+                        ? DWRITE_TEXT_ALIGNMENT_CENTER
+                        : DWRITE_TEXT_ALIGNMENT_LEADING);
+
+                    ComPtr<ID2D1SolidColorBrush> toast_bg;
+                    ComPtr<ID2D1SolidColorBrush> toast_txt;
+                    m_d2d_context->CreateSolidColorBrush(
+                        D2D1::ColorF(0.15f, 0.15f, 0.18f, 0.92f), &toast_bg);
+                    m_d2d_context->CreateSolidColorBrush(
+                        D2D1::ColorF(0.85f, 0.85f, 0.88f, 1.0f), &toast_txt);
+                    if (toast_bg && toast_txt) {
+                        const D2D1_RECT_F bounds = {
+                            layout.bounds.left, layout.bounds.top,
+                            layout.bounds.right, layout.bounds.bottom};
+                        const D2D1_ROUNDED_RECT rounded = {
+                            bounds, layout.corner_radius, layout.corner_radius};
+                        m_d2d_context->FillRoundedRectangle(
+                            &rounded, toast_bg.Get());
+
+                        const D2D1_RECT_F text_bounds = {
+                            layout.text_bounds.left, layout.text_bounds.top,
+                            layout.text_bounds.right, layout.text_bounds.bottom};
+                        m_d2d_context->PushAxisAlignedClip(
+                            &text_bounds, D2D1_ANTIALIAS_MODE_ALIASED);
+                        m_d2d_context->DrawTextLayout(
+                            {text_bounds.left, text_bounds.top},
+                            text_layout.Get(), toast_txt.Get());
+                        m_d2d_context->PopAxisAlignedClip();
+                    }
+                }
+            }
         }
-        draw_text_line(tx, toast_y + 7.0f * dpi_s,
-                       text_w, *toast, toast_txt.Get(), 11.0f);
     }
 
     // Pop panel clip
