@@ -27,7 +27,11 @@ struct ComicRenderRect {
 
     float width() const noexcept { return std::max(0.0f, right - left); }
     float height() const noexcept { return std::max(0.0f, bottom - top); }
-    bool empty() const noexcept { return right <= left || bottom <= top; }
+    bool empty() const noexcept {
+        return !std::isfinite(left) || !std::isfinite(top)
+            || !std::isfinite(right) || !std::isfinite(bottom)
+            || right <= left || bottom <= top;
+    }
 };
 
 struct ComicRenderViewport {
@@ -92,6 +96,7 @@ inline ComicRenderMetrics comic_render_metrics(
 
 inline ComicRenderRect intersect_render_rects(
     ComicRenderRect first, ComicRenderRect second) noexcept {
+    if (first.empty() || second.empty()) return {};
     ComicRenderRect result{
         std::max(first.left, second.left),
         std::max(first.top, second.top),
@@ -103,20 +108,23 @@ inline ComicRenderRect intersect_render_rects(
 inline ComicRenderPlan build_comic_render_plan(
     std::span<const ComicPageRenderInput> inputs,
     ComicRenderViewport viewport) {
-    viewport.width = std::isfinite(viewport.width)
-        ? std::max(0.0f, viewport.width) : 0.0f;
-    viewport.height = std::isfinite(viewport.height)
-        ? std::max(0.0f, viewport.height) : 0.0f;
-    viewport.scroll_y = std::isfinite(viewport.scroll_y)
-        ? viewport.scroll_y : 0.0f;
-
     ComicRenderPlan plan;
+    plan.metrics = comic_render_metrics(viewport.dpi, viewport.seamless);
+    if (!std::isfinite(viewport.left) || !std::isfinite(viewport.top)
+        || !std::isfinite(viewport.width) || !std::isfinite(viewport.height)
+        || !std::isfinite(viewport.scroll_y)
+        || viewport.width <= 0.0f || viewport.height <= 0.0f) return plan;
+
+    const float viewport_right = viewport.left + viewport.width;
+    const float viewport_bottom = viewport.top + viewport.height;
+    if (!std::isfinite(viewport_right) || !std::isfinite(viewport_bottom)) {
+        return plan;
+    }
     plan.viewport = {
         viewport.left,
         viewport.top,
-        viewport.left + viewport.width,
-        viewport.top + viewport.height};
-    plan.metrics = comic_render_metrics(viewport.dpi, viewport.seamless);
+        viewport_right,
+        viewport_bottom};
     if (plan.viewport.empty()) return plan;
 
     plan.pages.reserve(inputs.size());
@@ -129,8 +137,11 @@ inline ComicRenderPlan build_comic_render_plan(
 
         const float left = viewport.left + geometry.left;
         const float top = viewport.top + geometry.top - viewport.scroll_y;
+        const float right = left + geometry.width;
+        const float bottom = top + geometry.height;
         const ComicRenderRect destination{
-            left, top, left + geometry.width, top + geometry.height};
+            left, top, right, bottom};
+        if (destination.empty()) continue;
         const ComicRenderRect clip = intersect_render_rects(
             destination, plan.viewport);
         if (clip.empty()) continue;
