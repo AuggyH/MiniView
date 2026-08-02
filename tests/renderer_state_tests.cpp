@@ -447,9 +447,66 @@ void test_comic_autoscroll_graphic() {
     expect(backward.autoscroll.arrow_tip_y < backward.autoscroll.arrow_tail_y,
         "backward autoscroll arrow must point upward");
 
-    input.autoscroll_anchor_x = 795.0f;
+    input.autoscroll_anchor_x = input.content_viewport.left + 1.0f;
+    input.autoscroll_anchor_y = 400.0f;
+    input.autoscroll_pointer_y = input.autoscroll_anchor_y + 240.0f;
+    const mv::ComicControlsLayout near_left =
+        mv::build_comic_controls_layout(input);
+    expect(near_left.autoscroll.visible
+            && near_left.autoscroll.direction
+                == mv::ComicAutoscrollDirection::Forward
+            && std::isfinite(near_left.autoscroll.arrow_tip_y),
+        "anchor center near left edge must remain visible and directional");
+    expect(near_left.autoscroll.anchor_x
+            - near_left.autoscroll.dead_zone_radius
+            < near_left.viewport.left,
+        "near-left graphic must rely on the existing viewport clip");
+
+    input.autoscroll_anchor_x = 400.0f;
+    input.autoscroll_anchor_y = input.content_viewport.top + 1.0f;
+    input.autoscroll_pointer_y = input.autoscroll_anchor_y + 240.0f;
+    const mv::ComicControlsLayout near_top =
+        mv::build_comic_controls_layout(input);
+    expect(near_top.autoscroll.visible
+            && near_top.autoscroll.direction
+                == mv::ComicAutoscrollDirection::Forward
+            && std::isfinite(near_top.autoscroll.arrow_tip_y),
+        "anchor center near top edge must remain visible and directional");
+    expect(near_top.autoscroll.anchor_y
+            - near_top.autoscroll.dead_zone_radius
+            < near_top.viewport.top,
+        "near-top graphic must rely on the existing viewport clip");
+
+    input.autoscroll_anchor_y = input.content_viewport.bottom - 1.0f;
+    input.autoscroll_pointer_y = input.autoscroll_anchor_y - 240.0f;
+    const mv::ComicControlsLayout near_bottom =
+        mv::build_comic_controls_layout(input);
+    expect(near_bottom.autoscroll.visible
+            && near_bottom.autoscroll.direction
+                == mv::ComicAutoscrollDirection::Backward
+            && std::isfinite(near_bottom.autoscroll.arrow_tip_y),
+        "anchor center near bottom edge must remain visible and directional");
+    expect(near_bottom.autoscroll.anchor_y
+            + near_bottom.autoscroll.dead_zone_radius
+            > near_bottom.viewport.bottom,
+        "near-bottom graphic must rely on the existing viewport clip");
+
+    const float usable_right = forward.scrollbar.hit_bounds.left;
+    input.autoscroll_anchor_x = usable_right - 1.0f;
+    input.autoscroll_anchor_y = 400.0f;
+    input.autoscroll_pointer_y = input.autoscroll_anchor_y + 240.0f;
+    const mv::ComicControlsLayout near_right =
+        mv::build_comic_controls_layout(input);
+    expect(near_right.autoscroll.visible
+            && near_right.autoscroll.direction
+                == mv::ComicAutoscrollDirection::Forward
+            && std::isfinite(near_right.autoscroll.arrow_tail_y)
+            && std::isfinite(near_right.autoscroll.arrow_tip_y),
+        "anchor center near usable right edge must remain visible and finite");
+
+    input.autoscroll_anchor_x = usable_right;
     expect(!mv::build_comic_controls_layout(input).autoscroll.visible,
-        "autoscroll anchor overlapping scrollbar must fail closed");
+        "anchor center in scrollbar hit zone must retain precedence and fail closed");
 }
 
 void test_comic_controls_invalid_input_fails_closed() {

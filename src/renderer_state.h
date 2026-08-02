@@ -469,10 +469,10 @@ inline ComicControlsLayout build_comic_controls_layout(
         const float safe_right = layout.scrollbar.visible
             ? layout.scrollbar.hit_bounds.left : layout.viewport.right;
         const float radius = layout.metrics.autoscroll_dead_zone_radius;
-        if (input.autoscroll_anchor_x - radius >= layout.viewport.left
-            && input.autoscroll_anchor_x + radius <= safe_right
-            && input.autoscroll_anchor_y - radius >= layout.viewport.top
-            && input.autoscroll_anchor_y + radius <= layout.viewport.bottom) {
+        if (input.autoscroll_anchor_x >= layout.viewport.left
+            && input.autoscroll_anchor_x < safe_right
+            && input.autoscroll_anchor_y >= layout.viewport.top
+            && input.autoscroll_anchor_y <= layout.viewport.bottom) {
             ComicAutoscrollLayout& autoscroll = layout.autoscroll;
             autoscroll.visible = true;
             autoscroll.anchor_x = input.autoscroll_anchor_x;
