@@ -118,6 +118,19 @@ if(BUILD_TESTING)
     target_link_options(app_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME app_state.unit COMMAND app_state_tests)
 
+    add_executable(comic_reader_model_tests
+        tests/comic_reader_model_tests.cpp
+    )
+    target_include_directories(comic_reader_model_tests PRIVATE src)
+    target_compile_options(comic_reader_model_tests PRIVATE /W4 /utf-8)
+    if(MINVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(comic_reader_model_tests PRIVATE /WX)
+    endif()
+    target_compile_definitions(comic_reader_model_tests PRIVATE NOMINMAX)
+    set_target_properties(comic_reader_model_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_options(comic_reader_model_tests PRIVATE /SUBSYSTEM:CONSOLE)
+    add_test(NAME comic_reader_model.unit COMMAND comic_reader_model_tests)
+
     add_executable(metadata_tests
         tests/metadata_tests.cpp
         src/metadata.cpp
