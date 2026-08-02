@@ -49,6 +49,9 @@ struct GridEntryTransactionState {
     bool& grid_mode;
     bool& from_grid;
     bool& animating;
+    int& grid_selection;
+    std::vector<bool>& selected;
+    int& selection_anchor;
 };
 
 struct GridTransitionGeometry {
@@ -135,15 +138,33 @@ inline bool run_best_effort_transition_capture(Capture capture) noexcept {
     }
 }
 
+enum class ImageLoadResult {
+    Success,
+    DecodeFailed,
+    MaterializeFailed,
+    UploadFailed,
+};
+
 template <typename Decode, typename Materialize, typename Upload>
-inline bool run_image_load_stages(
+inline ImageLoadResult run_image_load_stages(
     Decode decode, Materialize materialize, Upload upload) noexcept {
     try {
         auto decoded = decode();
-        auto materialized = materialize(decoded);
-        return upload(materialized);
+        if (!decoded) return ImageLoadResult::DecodeFailed;
+        try {
+            auto materialized = materialize(decoded);
+            if (!materialized) return ImageLoadResult::MaterializeFailed;
+            try {
+                return upload(materialized)
+                    ? ImageLoadResult::Success : ImageLoadResult::UploadFailed;
+            } catch (...) {
+                return ImageLoadResult::UploadFailed;
+            }
+        } catch (...) {
+            return ImageLoadResult::MaterializeFailed;
+        }
     } catch (...) {
-        return false;
+        return ImageLoadResult::DecodeFailed;
     }
 }
 
@@ -158,6 +179,9 @@ inline bool run_grid_entry(
     const bool initial_grid_mode = state.grid_mode;
     const bool initial_from_grid = state.from_grid;
     const bool initial_animating = state.animating;
+    const int initial_grid_selection = state.grid_selection;
+    const std::vector<bool> initial_selected = state.selected;
+    const int initial_selection_anchor = state.selection_anchor;
 
     (void)run_best_effort_transition_capture(
         [&]() { start_transition(request.index); });
@@ -172,6 +196,9 @@ inline bool run_grid_entry(
         state.grid_mode = initial_grid_mode;
         state.from_grid = initial_from_grid;
         state.animating = initial_animating;
+        state.grid_selection = initial_grid_selection;
+        state.selected = initial_selected;
+        state.selection_anchor = initial_selection_anchor;
         return false;
     }
     begin_animation();

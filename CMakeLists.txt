@@ -31,6 +31,7 @@ set(HEADERS
     src/window.h
     src/renderer.h
     src/renderer_state.h
+    src/open_error.h
     src/decoder.h
     src/viewer.h
     src/app.h

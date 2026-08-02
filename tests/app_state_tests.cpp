@@ -1,4 +1,5 @@
 #include "app_state.h"
+#include "open_error.h"
 
 #include <cmath>
 #include <iostream>
@@ -24,6 +25,40 @@ bool near(float left, float right, float tolerance = 0.01f) {
 } // namespace
 
 int main() {
+    using mv::OpenInputRoute;
+    const auto missing_file = mv::classify_open_input(
+        false, false, ERROR_FILE_NOT_FOUND, L".png");
+    const auto missing_parent = mv::classify_open_input(
+        false, false, ERROR_PATH_NOT_FOUND, L".png");
+    const auto unreadable_file = mv::classify_open_input(
+        false, false, ERROR_ACCESS_DENIED, L".png");
+    const auto corrupt_supported_file = mv::classify_open_input(
+        true, false, ERROR_SUCCESS, L".PnG");
+    const auto unsupported_file = mv::classify_open_input(
+        true, false, ERROR_SUCCESS, L".avif");
+    expect(missing_file == OpenInputRoute::MissingPath
+            && missing_parent == OpenInputRoute::MissingPath,
+        "missing files and parent paths must share the missing-path route");
+    expect(unreadable_file == OpenInputRoute::ReadOrDecodeFailed,
+        "permission and attribute failures must use the read/decode route");
+    expect(corrupt_supported_file == OpenInputRoute::LoadImage,
+        "a supported extension must reach deterministic decoder validation");
+    expect(mv::classify_open_input(
+            true, false, ERROR_SUCCESS, L".ico") == OpenInputRoute::LoadImage,
+        "existing WIC-associated formats must keep their decoder route");
+    expect(unsupported_file == OpenInputRoute::UnsupportedFormat,
+        "declared deferred formats must fail before decoder or upload work");
+    expect(mv::classify_open_input(
+            true, true, ERROR_SUCCESS, L"") == OpenInputRoute::OpenDirectory,
+        "an existing directory must keep the directory route");
+    expect(std::wstring(mv::open_input_error_message(missing_file))
+                != mv::open_input_error_message(unsupported_file)
+            && std::wstring(mv::open_input_error_message(unsupported_file))
+                != mv::open_input_error_message(unreadable_file)
+            && std::wstring(mv::open_input_error_message(missing_file))
+                != mv::open_input_error_message(unreadable_file),
+        "missing, unsupported, and read/decode failures need distinct Chinese feedback");
+
     mv::GridEntryRouteState entry_state;
     entry_state.grid_mode = true;
     entry_state.selected_index = 1;
@@ -126,11 +161,15 @@ int main() {
         bool grid_mode = true;
         bool from_grid = false;
         bool animation_started = false;
+        int transaction_selection = 1;
+        std::vector<bool> transaction_selected = {false, true, false};
+        int transaction_anchor = 1;
         std::vector<std::string> stages;
         const bool entered = mv::run_grid_entry(
             request,
             mv::GridEntryTransactionState{
-                grid_mode, from_grid, animation_started},
+                grid_mode, from_grid, animation_started,
+                transaction_selection, transaction_selected, transaction_anchor},
             [&](int index) {
                 expect(index == 1, "entry transition must bind the requested index");
                 stages.push_back("capture");
@@ -139,7 +178,7 @@ int main() {
             },
             [&](int index) {
                 expect(index == 1, "image load must bind the requested index");
-                const bool loaded = mv::run_image_load_stages(
+                const auto load_result = mv::run_image_load_stages(
                     [&]() {
                         stages.push_back("decode");
                         return 1;
@@ -152,6 +191,7 @@ int main() {
                         stages.push_back("upload");
                         return materialized == 2;
                     });
+                const bool loaded = load_result == mv::ImageLoadResult::Success;
                 if (loaded) {
                     stages.push_back("commit");
                     grid_mode = false;
@@ -180,16 +220,25 @@ int main() {
         bool grid_mode = true;
         bool from_grid = false;
         bool animation_started = false;
+        int transaction_selection = 0;
+        std::vector<bool> transaction_selected = {true, false, false};
+        int transaction_anchor = 0;
         int decode_calls = 0;
         int materialize_calls = 0;
         int upload_calls = 0;
+        mv::ImageLoadResult observed_result = mv::ImageLoadResult::Success;
         const bool entered = mv::run_grid_entry(
             *space_entry,
             mv::GridEntryTransactionState{
-                grid_mode, from_grid, animation_started},
-            [](int) {},
+                grid_mode, from_grid, animation_started,
+                transaction_selection, transaction_selected, transaction_anchor},
+            [&](int index) {
+                transaction_selection = index;
+                transaction_selected = {false, true, false};
+                transaction_anchor = index;
+            },
             [&](int) {
-                const bool loaded = mv::run_image_load_stages(
+                observed_result = mv::run_image_load_stages(
                     [&]() {
                         ++decode_calls;
                         if (fault == LoadFault::Decode)
@@ -206,6 +255,7 @@ int main() {
                         ++upload_calls;
                         return fault != LoadFault::Upload;
                     });
+                const bool loaded = observed_result == mv::ImageLoadResult::Success;
                 if (loaded) {
                     grid_mode = false;
                     from_grid = true;
@@ -215,10 +265,21 @@ int main() {
             [&]() { animation_started = true; });
         expect(!entered && grid_mode && !from_grid && !animation_started,
             "each formal load-stage failure must preserve real grid transaction state");
+        expect(transaction_selection == 0
+                && transaction_selected == std::vector<bool>({true, false, false})
+                && transaction_anchor == 0,
+            "a failed entry must restore selection and its anchor");
         expect(decode_calls == 1
                 && materialize_calls == (fault == LoadFault::Decode ? 0 : 1)
                 && upload_calls == (fault == LoadFault::Upload ? 1 : 0),
             "fault injection must stop at the exact failing production load stage");
+        const auto expected_result = fault == LoadFault::Decode
+            ? mv::ImageLoadResult::DecodeFailed
+            : (fault == LoadFault::Materialize
+                ? mv::ImageLoadResult::MaterializeFailed
+                : mv::ImageLoadResult::UploadFailed);
+        expect(observed_result == expected_result,
+            "load failures must retain their exact stage without retrying");
     };
     expect_failed_load(LoadFault::Decode);
     expect_failed_load(LoadFault::Materialize);
@@ -227,10 +288,14 @@ int main() {
     bool restored_grid_mode = true;
     bool restored_from_grid = false;
     bool restored_animation = false;
+    int restored_selection = 0;
+    std::vector<bool> restored_selected = {true, false, false};
+    int restored_anchor = 0;
     const bool partial_commit = mv::run_grid_entry(
         *space_entry,
         mv::GridEntryTransactionState{
-            restored_grid_mode, restored_from_grid, restored_animation},
+            restored_grid_mode, restored_from_grid, restored_animation,
+            restored_selection, restored_selected, restored_anchor},
         [](int) {},
         [&](int) {
             restored_grid_mode = false;
