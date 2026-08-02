@@ -20,6 +20,8 @@
 
 namespace mv {
 
+class AppComicPort;
+
 class App : private DeleteCompositionHost {
 public:
     App();
@@ -36,6 +38,8 @@ public:
     };
 
 private:
+    friend class AppComicPort;
+
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     bool    open_image(const std::wstring& path);
     void    open_directory(const std::wstring& path);
@@ -95,15 +99,17 @@ private:
     void    adjust_comic_width(float delta);
     void    sync_comic_current();
     ComicControlsRenderInput comic_controls_snapshot() const;
-    void    toggle_comic_cruise();
-    void    set_comic_cruise_speed(int index);
-    void    change_comic_cruise_speed(int delta);
-    void    cancel_comic_auto_scroll(ComicAutoScrollCancelReason reason);
-    void    reset_comic_controls(ComicAutoScrollCancelReason reason);
-    void    ensure_comic_timer();
-    void    stop_comic_timer_if_idle();
+    bool    dispatch_comic_command(ComicAppCommand command);
+    bool    start_comic_middle(
+                float anchor_x, float anchor_y,
+                float pointer_x, float pointer_y, bool anchor_visible);
+    void    cancel_comic_auto_scroll(ComicAppCancelTrigger trigger);
+    void    reset_comic_controls(ComicAppCancelTrigger trigger);
+    bool    start_comic_timer();
+    void    stop_comic_timer();
     void    handle_comic_timer(HWND hwnd);
-    void    show_comic_status(const std::wstring& text);
+    void    clear_comic_transient();
+    void    revalidate_comic_middle_anchor();
     void    finish_comic_scrollbar_drag();
     void    request_comic_pages();
     void    apply_comic_results();
@@ -210,7 +216,10 @@ private:
     ComicTransientOverlayKind m_comic_transient_kind =
         ComicTransientOverlayKind::None;
     std::wstring m_comic_current_filename;
-    std::wstring m_comic_transient_status;
+    std::wstring m_comic_page_badge;
+    std::wstring m_comic_transient_text;
+    int m_comic_cached_page_index = -1;
+    int m_comic_cached_total_pages = 0;
     bool m_comic_scrollbar_dragging = false;
     bool m_comic_scrollbar_hover = false;
     float m_comic_scrollbar_grab_offset_y = 0.0f;

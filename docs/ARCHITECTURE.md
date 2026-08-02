@@ -29,7 +29,7 @@ wWinMain
 ## 状态与并发
 
 - UI 状态主要由 `App` 持有并在窗口线程修改。
-- 漫画恒速巡航与中键自动滚动共享一个 UI 线程定时推进源，但保持互斥的滚动 owner。`App` 持有单调时钟、滚动条拖动、鼠标捕获、锚定页变化和约 1000 ms 瞬时提示生命周期；`ComicReaderModel` 限制异常停顿后的单帧 elapsed 增量；Renderer 只消费无状态快照并绘制，不持有 timer、scroll 或当前索引。
+- 漫画恒速巡航与中键自动滚动共享一个 UI 线程定时推进源，但保持互斥的滚动 owner。`ComicAppController` 是 App 实际调用的可测试生产状态转换接缝，统一 P/菜单、调速、timer tick、中键捕获与取消清理的副作用顺序；`App` 施加 Win32 timer/capture/cursor 副作用并持有单调时钟。锚定页码与瞬时提示预格式化为稳定字符串，仅在页码、总页数或瞬时事件变化时更新，再以借用 view 同步交给 Renderer；`ComicReaderModel` 提供不复制 key 的锚定索引并限制异常停顿后的单帧 elapsed 增量；Renderer 只消费无状态快照并绘制，不持有 timer、scroll、文本或当前索引。
 - 相邻大图预加载使用 1 个后台线程，队列和最多 3 项的 WIC 缓存由 mutex 保护。
 - 网格缩略图使用 4 个后台线程；WIC 缓存受 mutex 保护，D2D bitmap 只在主线程创建和使用。
 - 生成信息由 1 个 `metadata worker` 在 UI 线程外解析；请求、结果和 ready 状态由 mutex/condition variable 保护，通过 `WM_METADATA_READY` 回到窗口线程，并按当前面板 path 丢弃过期结果。
@@ -43,7 +43,7 @@ wWinMain
 CTest 当前注册八项自动化测试：
 
 - `indexer.unit`：扫描、过滤、排序、相对路径、Windows invariant path identity 和批量移除。
-- `app_state.unit`：缩放/拖动状态、滚动夹紧、布局重建选择可见性和删除后 current identity 事务。
+- `app_state.unit`：缩放/拖动状态、滚动夹紧、布局重建选择可见性、删除后 current identity 事务，以及 App 生产使用的漫画命令、timer、capture、取消与视口变化状态转换。
 - `comic_reader_model.unit`：漫画模式虚拟布局、锚点恢复、方向预读范围、LRU 软上限、四档恒速与 elapsed-time 推进、末页停止、手动输入暂停、锚定页变化事件、Renderer 映射后滚动值的业务夹紧与按视口 page-step，以及中键 dead-zone/方向/封顶曲线和非有限输入 fail-closed。
 - `comic_reader_loader.unit`：方向请求替换、generation 与陈旧结果丢弃、去重、失败语义、WIC 显示尺寸解码、8 B/px 与 512 MiB LRU 预算，以及 stop/destructor 线程清理。
 - `metadata.unit`：正常、恶意长度、截断和超预算 PNG tEXt 输入。
@@ -51,7 +51,7 @@ CTest 当前注册八项自动化测试：
 - `file_operation.unit`：删除后磁盘存在性与 Shell 完成/取消/部分完成判定。
 - `governance.unit`：构建失败传播、标签边界和权威文档约束。
 
-生产绑定测试还必须直接覆盖“查看”菜单与 `P`/`[`/`]` handler、定时推进、漫画滚动条命中与鼠标捕获、`WM_MBUTTONDOWN`/`WM_MOUSEMOVE`/失焦取消，以及锚定页变化后约 1000 ms 提示生命周期。Windows CI 还验证所有目标能在 MSVC x64 Release、`/W4 /WX` 下构建。这些窄接口测试不启动窗口，也不替代下列人工 QA。
+生产绑定测试通过 App 实际消费的 `ComicAppController` 直接驱动“查看”菜单与 `P`/`[`/`]` 的共享命令、定时推进、中键捕获、重复中键/左键/键盘/滚轮/失焦/退出取消、timer/cursor 清理顺序，以及工具栏或面板改变视口后锚点失效的原子取消。Renderer 与 Model 的 focused tests 分别直接覆盖滚动条命中/拖动、借用文本布局、锚定页变化和约 1000 ms 提示所依赖的事件语义；不得以读取 `app.cpp` 后搜索源码字符串代替生产路径测试。Windows CI 还验证所有目标能在 MSVC x64 Release、`/W4 /WX` 下构建。这些窄接口测试不启动窗口，也不替代下列人工 QA。
 
 以下行为仍需手工 QA 或未来通过更窄接口增加测试：
 
