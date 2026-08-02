@@ -83,10 +83,13 @@ public:
     }
 
     void set_viewport(ComicViewport viewport) {
-        const ComicAnchor anchor = capture_anchor();
         viewport.width = std::max(1.0f, viewport.width);
         viewport.height = std::max(1.0f, viewport.height);
         viewport.dpi_scale = std::max(0.01f, viewport.dpi_scale);
+        if (viewport.width == m_viewport.width
+            && viewport.height == m_viewport.height
+            && viewport.dpi_scale == m_viewport.dpi_scale) return;
+        const ComicAnchor anchor = capture_anchor();
         m_viewport = viewport;
         rebuild_layout();
         if (m_enabled && anchor.valid()) restore_anchor(anchor);
@@ -131,6 +134,10 @@ public:
     }
 
     void scroll_by(float delta) { set_scroll(m_scroll + delta); }
+    void scroll_to_page(int index) {
+        if (index < 0 || index >= static_cast<int>(m_pages.size())) return;
+        set_scroll(m_page_tops[static_cast<std::size_t>(index)]);
+    }
     void page_up() { scroll_by(-m_viewport.height); }
     void page_down() { scroll_by(m_viewport.height); }
     void home() { set_scroll(0.0f); }
@@ -150,6 +157,19 @@ public:
         if (m_seamless == seamless) return;
         const ComicAnchor anchor = capture_anchor();
         m_seamless = seamless;
+        rebuild_layout();
+        if (m_enabled && anchor.valid()) restore_anchor(anchor);
+    }
+
+    void update_page(
+        int index, std::uint32_t width, std::uint32_t height,
+        bool decode_failed) {
+        if (index < 0 || index >= static_cast<int>(m_pages.size())) return;
+        const ComicAnchor anchor = capture_anchor();
+        ComicPageSource& page = m_pages[static_cast<std::size_t>(index)];
+        page.width = width;
+        page.height = height;
+        page.decode_failed = decode_failed;
         rebuild_layout();
         if (m_enabled && anchor.valid()) restore_anchor(anchor);
     }
@@ -334,6 +354,19 @@ public:
 
     bool contains(int index) const { return m_entries.contains(index); }
     std::size_t resident_bytes() const noexcept { return m_resident_bytes; }
+
+    void erase(int index) {
+        const auto found = m_entries.find(index);
+        if (found == m_entries.end()) return;
+        m_resident_bytes -= found->second.bytes;
+        m_entries.erase(found);
+    }
+
+    void clear() {
+        m_entries.clear();
+        m_resident_bytes = 0;
+        m_clock = 0;
+    }
 
     std::size_t allowed_bytes(std::size_t other_private_bytes) const noexcept {
         const std::size_t remaining = other_private_bytes >= m_application_soft_limit

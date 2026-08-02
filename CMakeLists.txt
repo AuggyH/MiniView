@@ -20,6 +20,7 @@ set(SOURCES
     src/decoder.cpp
     src/viewer.cpp
     src/app.cpp
+    src/comic_reader_loader.cpp
     src/file_operation.cpp
     src/file_operation_windows.cpp
     src/indexer.cpp
@@ -35,6 +36,8 @@ set(HEADERS
     src/viewer.h
     src/app.h
     src/app_state.h
+    src/comic_reader_loader.h
+    src/comic_reader_model.h
     src/file_operation.h
     src/indexer.h
     src/metadata.h
@@ -58,6 +61,7 @@ target_link_libraries(MinView
     shlwapi
     dwmapi
     uxtheme
+    psapi
 )
 
 # MSVC warnings
@@ -127,6 +131,9 @@ if(BUILD_TESTING)
         target_compile_options(comic_reader_model_tests PRIVATE /WX)
     endif()
     target_compile_definitions(comic_reader_model_tests PRIVATE NOMINMAX)
+    target_compile_definitions(comic_reader_model_tests PRIVATE
+        MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
+    )
     set_target_properties(comic_reader_model_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(comic_reader_model_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME comic_reader_model.unit COMMAND comic_reader_model_tests)

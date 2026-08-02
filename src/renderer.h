@@ -60,6 +60,8 @@ public:
     // Grid mode drawing
     void draw_grid_placeholder(float x, float y, float w, float h, D2D1_COLOR_F color);
     void draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitmap1* thumb, bool square = false);
+    void draw_comic_page(ID2D1Bitmap1* bitmap, D2D1_RECT_F destination);
+    void draw_comic_card(D2D1_RECT_F destination, bool failed);
     void draw_selection_border(D2D1_RECT_F rc);
     void draw_label(float x, float y, float w, const std::wstring& text, float font_size,
         float r = 0.82f, float g = 0.82f, float b = 0.85f);

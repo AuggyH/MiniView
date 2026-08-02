@@ -6,6 +6,7 @@
 #include <dxgi1_2.h>
 #include <stdexcept>
 #include <algorithm>
+#include <iterator>
 #include <string>
 
 namespace mv {
@@ -516,6 +517,44 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     if (square) {
         m_d2d_context->PopAxisAlignedClip();
     }
+}
+
+void Renderer::draw_comic_page(
+    ID2D1Bitmap1* bitmap, D2D1_RECT_F destination) {
+    if (!m_d2d_context || !bitmap) return;
+    if (destination.right <= destination.left
+        || destination.bottom <= destination.top) return;
+    m_d2d_context->DrawBitmap(
+        bitmap, &destination, 1.0f,
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+}
+
+void Renderer::draw_comic_card(D2D1_RECT_F destination, bool failed) {
+    if (!m_d2d_context || destination.right <= destination.left
+        || destination.bottom <= destination.top) return;
+    ComPtr<ID2D1SolidColorBrush> background;
+    m_d2d_context->CreateSolidColorBrush(
+        failed ? D2D1::ColorF(0.20f, 0.12f, 0.12f, 1.0f)
+               : D2D1::ColorF(0.16f, 0.16f, 0.18f, 1.0f),
+        &background);
+    m_d2d_context->FillRectangle(&destination, background.Get());
+    if (!failed || !m_dwrite_factory) return;
+
+    ComPtr<ID2D1SolidColorBrush> text;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.88f, 0.72f, 0.72f, 1.0f), &text);
+    ComPtr<IDWriteTextFormat> format;
+    m_dwrite_factory->CreateTextFormat(
+        L"Microsoft YaHei", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        14.0f * m_dpi_y / 96.0f, L"zh-CN", &format);
+    if (!format) return;
+    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    constexpr wchar_t message[] = L"图片加载失败";
+    m_d2d_context->DrawText(
+        message, static_cast<UINT32>(std::size(message) - 1),
+        format.Get(), &destination, text.Get());
 }
 
 void Renderer::draw_selection_border(D2D1_RECT_F rc) {
