@@ -113,6 +113,40 @@ inline bool route_grid_exit(
     return state.from_grid;
 }
 
+class GridScrollPause {
+public:
+    bool active() const noexcept { return m_active; }
+    std::uintptr_t timer() const noexcept { return m_timer; }
+
+    template <typename CancelTimer, typename StartTimer>
+    void begin(CancelTimer cancel_timer, StartTimer start_timer) {
+        finish(cancel_timer);
+        m_active = true;
+        m_timer = static_cast<std::uintptr_t>(start_timer());
+        if (m_timer == 0) m_active = false;
+    }
+
+    template <typename CancelTimer>
+    void finish(CancelTimer cancel_timer) {
+        if (m_timer != 0) cancel_timer(m_timer);
+        m_timer = 0;
+        m_active = false;
+    }
+
+    template <typename RequestThumbnail>
+    void request_visible(
+        bool loader_running, int first, int last,
+        RequestThumbnail request_thumbnail) const {
+        if (m_active || !loader_running) return;
+        for (int index = first; index < last; ++index)
+            request_thumbnail(index);
+    }
+
+private:
+    bool m_active = false;
+    std::uintptr_t m_timer = 0;
+};
+
 inline std::optional<GridTransitionRect> calculate_grid_transition_rect(
     const GridTransitionGeometry& geometry) {
     if (geometry.request_index < 0

@@ -1,9 +1,11 @@
 #include "file_operation.h"
 #include "decoder.h"
+#include "app_state.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -137,6 +139,8 @@ bool request_has_silent_shell_flags(const mv::DeleteShellRequest& request) {
 
 struct FakeDeleteHost final : mv::DeleteCompositionHost {
     mv::DeleteCompositionState state;
+    mv::GridScrollPause grid_scroll_pause;
+    std::vector<std::uintptr_t> cancelled_grid_timers;
     bool open_successor_result = true;
     int remove_calls = 0;
     int open_successor_calls = 0;
@@ -191,6 +195,11 @@ struct FakeDeleteHost final : mv::DeleteCompositionHost {
         bool grid_mode, int grid_selection, const std::vector<bool>& selected,
         int selection_anchor) override {
         ++set_grid_calls;
+        if (state.grid_mode && !grid_mode) {
+            grid_scroll_pause.finish([this](std::uintptr_t timer) {
+                cancelled_grid_timers.push_back(timer);
+            });
+        }
         state.grid_mode = grid_mode;
         state.grid_selection = grid_selection;
         state.selected = selected;
@@ -584,6 +593,52 @@ void test_app_raw_delete_forwarding_contract(const fs::path& source_root) {
             "m_delete_composition->handle_command(DeleteCommandEntry::ContextMenu,static_cast<UINT>(cmd))")
             != std::string::npos,
         "App must forward the raw context-menu ID to the shared delete seam");
+    expect(app_source.find(
+            "returnstatic_cast<std::uintptr_t>(SetTimer(hwnd,1,80,nullptr));")
+            != std::string::npos
+            && app_source.find("m_grid_scroll_pause.begin(") != std::string::npos,
+        "App wheel routing must use the injectable scroll lifecycle around SetTimer");
+    expect(app_source.find(
+            "if(m_grid_mode&&!grid_mode)finish_grid_scroll();")
+            != std::string::npos,
+        "App last-item delete transition must finish the active grid scroll lifecycle");
+    expect(app_source.find(
+            "m_grid_scroll_pause.request_visible(loader_running,row.start_idx,row.end_idx,")
+            != std::string::npos,
+        "App grid rendering must request visible thumbnails through the lifecycle seam");
+}
+
+void test_last_grid_delete_finishes_scroll(const std::wstring& only_path) {
+    FakeDeleteHost host;
+    host.state.index_paths = {only_path};
+    host.state.current_path = only_path;
+    host.state.current_index = 0;
+    host.state.has_image = true;
+    host.state.grid_mode = true;
+    host.state.grid_selection = 0;
+    host.state.selected = {true};
+    host.state.selection_anchor = 0;
+    host.state.loader_running = true;
+    host.grid_scroll_pause.begin(
+        [](std::uintptr_t) {}, [] { return std::uintptr_t{31}; });
+
+    FakeDeletePorts fake;
+    fake.shell_result.missing_targets = {only_path};
+    auto composition = mv::make_delete_composition(host, fake.make_ports());
+
+    expect(composition->handle_command(
+            mv::DeleteCommandEntry::WindowCommand, mv::IDM_DELETE),
+        "last-item delete must enter the production grid composition");
+    expect(host.state.index_paths.empty() && !host.state.grid_mode
+            && !host.state.has_image && host.state.current_path.empty(),
+        "last-item delete must transition the production state to an empty grid");
+    expect(!host.grid_scroll_pause.active()
+            && host.grid_scroll_pause.timer() == 0
+            && host.cancelled_grid_timers == std::vector<std::uintptr_t>{31},
+        "scroll then delete-last must cancel the timer and resume thumbnail scheduling");
+    expect(host.clear_thumbnails_calls == 1 && host.update_title_calls == 1
+            && host.invalidate_calls == 1,
+        "the empty-grid transition must retain its existing cleanup and repaint contract");
 }
 
 void test_keyboard_guards(
@@ -940,6 +995,7 @@ int main(int argc, char** argv) {
         && std::string_view(argv[1]) == "--snapshot-only";
     if (!snapshot_only) {
         test_app_raw_delete_forwarding_contract(source_root);
+        test_last_grid_delete_finishes_scroll(first);
         test_keyboard_guards(first, second, third);
         test_current_keyboard_paths(first, second, third);
         test_command_id_entry_matrix(first, second, third);
