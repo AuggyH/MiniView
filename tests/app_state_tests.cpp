@@ -24,6 +24,22 @@ bool near(float left, float right, float tolerance = 0.01f) {
 } // namespace
 
 int main() {
+    using mv::RecursiveScanAction;
+    expect(!mv::can_toggle_recursive(false, false, L"")
+            && mv::can_toggle_recursive(false, false, L"C:\\空根目录")
+            && mv::can_toggle_recursive(true, false, L"C:\\空根目录")
+            && !mv::can_toggle_recursive(false, true, L"C:\\图片目录"),
+        "recursive commands must be available for a bound empty root and grid only");
+    expect(mv::classify_recursive_scan_action(false, false, 2)
+            == RecursiveScanAction::EnterUnselectedGrid,
+        "recursive descendants from an empty root must enter an unselected grid");
+    expect(mv::classify_recursive_scan_action(false, false, 0)
+            == RecursiveScanAction::KeepView,
+        "an empty recursive result must retain the explicit empty-root view");
+    expect(mv::classify_recursive_scan_action(true, true, 0)
+            == RecursiveScanAction::ShowEmptyRoot,
+        "turning recursion off with no direct images must leave the blank grid");
+
     mv::GridEntryRouteState entry_state;
     entry_state.grid_mode = true;
     entry_state.selected_index = 1;
