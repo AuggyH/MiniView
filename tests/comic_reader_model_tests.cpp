@@ -652,6 +652,73 @@ void test_production_app_binds_virtual_window_and_lru() {
         "production rendering must consume the tested stacked renderer contract");
 }
 
+void test_production_app_binds_comic_controls() {
+    const std::filesystem::path source_root(MINVIEW_SOURCE_DIR);
+    const std::string app = read_source(source_root / "src" / "app.cpp");
+    const auto require_binding = [&app](const char* text, const char* message) {
+        expect(app.find(text) != std::string::npos, message);
+    };
+
+    require_binding("case 'P':",
+        "production keyboard routing must bind P to comic cruise");
+    require_binding("case VK_OEM_4:",
+        "production keyboard routing must bind left bracket speed-down");
+    require_binding("case VK_OEM_6:",
+        "production keyboard routing must bind right bracket speed-up");
+    require_binding("m_comic_reader.advance_cruise(elapsed)",
+        "the UI timer must advance cruise using monotonic elapsed time");
+    require_binding("m_comic_reader.advance_middle_autoscroll(",
+        "the UI timer must advance middle autoscroll through the model");
+    require_binding("GetTickCount64()",
+        "comic control timing must use a monotonic Windows clock");
+    require_binding("kComicTransientDurationMs = 1000",
+        "the page-change transient must remain approximately one second");
+    require_binding("m_comic_reader.take_page_change_event()",
+        "production page toast must consume the anchored page-change event");
+    require_binding("build_comic_controls_layout(comic_controls_snapshot())",
+        "production input must reuse the Renderer control layout snapshot");
+    require_binding("hit_test_comic_scrollbar(",
+        "production scrollbar input must use the Renderer hit-test helper");
+    require_binding("map_comic_scrollbar_drag(",
+        "production thumb dragging must use the Renderer mapping helper");
+    require_binding("case WM_MBUTTONDOWN:",
+        "production input must bind the middle-button autoscroll anchor");
+    require_binding("case WM_MBUTTONDBLCLK:",
+        "a repeated middle click must remain cancellable with CS_DBLCLKS");
+    require_binding("case WM_KILLFOCUS:",
+        "production lifecycle must cancel comic autoscroll on focus loss");
+    require_binding("ComicAutoScrollCancelReason::FocusLost",
+        "focus loss must reach the model with its precise cancellation reason");
+    require_binding("reset_comic_controls(ComicAutoScrollCancelReason::ExitMode)",
+        "production exit paths must clean timers and pointer capture");
+
+    const std::size_t middle_begin = app.find("case WM_MBUTTONDOWN:");
+    const std::size_t middle_end = app.find("case WM_NCMOUSEMOVE:", middle_begin);
+    expect(middle_begin != std::string::npos && middle_end != std::string::npos,
+        "middle-button production handler must remain discoverable");
+    const std::string middle = app.substr(
+        middle_begin, middle_end - middle_begin);
+    expect(middle.find("SetCapture(hwnd)") != std::string::npos,
+        "middle autoscroll must capture the pointer after accepting an anchor");
+    expect(middle.find("build_comic_controls_layout(prospective)")
+            != std::string::npos,
+        "middle anchor acceptance must use Renderer-owned viewport geometry");
+
+    const std::size_t render_begin =
+        app.find("void App::render_comic_reader(float content_top)");
+    const std::size_t render_end = app.find("//", render_begin + 1);
+    expect(render_begin != std::string::npos && render_end != std::string::npos,
+        "comic production render function must remain discoverable");
+    const std::string render = app.substr(
+        render_begin, render_end - render_begin);
+    const std::size_t pages = render.find("m_renderer.draw_comic_pages(");
+    const std::size_t controls =
+        render.find("m_renderer.draw_comic_controls(comic_controls_snapshot())");
+    const std::size_t panel = render.find("draw_panel(", controls);
+    expect(pages < controls && controls < panel,
+        "comic frame order must remain pages, controls, then side panel");
+}
+
 void test_production_toolbar_forwards_comic_commands() {
     const std::filesystem::path source_root(MINVIEW_SOURCE_DIR);
     const std::string app = read_source(source_root / "src" / "app.cpp");
@@ -668,6 +735,16 @@ void test_production_toolbar_forwards_comic_commands() {
     const std::size_t comic = toolbar.find("case IDM_COMIC:", dispatch);
     const std::size_t seamless =
         toolbar.find("case IDM_COMIC_SEAMLESS:", dispatch);
+    const std::size_t autoscroll =
+        toolbar.find("case IDM_COMIC_AUTOSCROLL:", dispatch);
+    const std::size_t speed_05 =
+        toolbar.find("case IDM_COMIC_SPEED_05:", dispatch);
+    const std::size_t speed_10 =
+        toolbar.find("case IDM_COMIC_SPEED_10:", dispatch);
+    const std::size_t speed_15 =
+        toolbar.find("case IDM_COMIC_SPEED_15:", dispatch);
+    const std::size_t speed_20 =
+        toolbar.find("case IDM_COMIC_SPEED_20:", dispatch);
     const std::size_t forward =
         toolbar.find("SendMessageW(hwnd, WM_COMMAND, cmd, 0)", dispatch);
     expect(toolbar.find("TPM_RETURNCMD | TPM_NONOTIFY") != std::string::npos,
@@ -678,6 +755,11 @@ void test_production_toolbar_forwards_comic_commands() {
         "the comic mode toolbar command must reach WM_COMMAND");
     expect(seamless < forward,
         "the seamless toolbar command must reach WM_COMMAND");
+    expect(autoscroll < forward,
+        "the comic autoscroll toolbar command must reach WM_COMMAND");
+    expect(speed_05 < forward && speed_10 < forward
+            && speed_15 < forward && speed_20 < forward,
+        "all four comic cruise speed commands must reach WM_COMMAND");
 }
 
 } // namespace
@@ -697,6 +779,7 @@ int main() {
         test_large_library_materializes_only_request_window();
         test_lru_obeys_comic_and_application_soft_limits();
         test_production_app_binds_virtual_window_and_lru();
+        test_production_app_binds_comic_controls();
         test_production_toolbar_forwards_comic_commands();
         std::cout << "comic_reader_model_tests: PASS\n";
         return 0;
