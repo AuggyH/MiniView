@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +33,47 @@ struct GridEntryRequest {
     int index = -1;
 };
 
+enum class GridExitTrigger {
+    Space,
+    Escape,
+    DoubleClick,
+};
+
+struct GridExitRouteState {
+    bool animating = false;
+    bool from_grid = false;
+    bool has_image = false;
+};
+
+struct GridEntryTransactionState {
+    bool& grid_mode;
+    bool& from_grid;
+    bool& animating;
+};
+
+struct GridTransitionGeometry {
+    int request_index = -1;
+    int item_count = 0;
+    int row_start_index = 0;
+    int row_end_index = 0;
+    int row_y = 0;
+    int row_height = 0;
+    float item_x = 0.0f;
+    float item_width = 0.0f;
+    uint32_t image_width = 0;
+    uint32_t image_height = 0;
+    int thumb_padding = 0;
+    int toolbar_height = 0;
+    int scroll_y = 0;
+};
+
+struct GridTransitionRect {
+    float left = 0.0f;
+    float top = 0.0f;
+    float right = 0.0f;
+    float bottom = 0.0f;
+};
+
 inline std::optional<GridEntryRequest> route_grid_entry(
     GridEntryTrigger trigger, const GridEntryRouteState& state) {
     if (!state.grid_mode || state.animating || state.item_count <= 0)
@@ -41,17 +84,98 @@ inline std::optional<GridEntryRequest> route_grid_entry(
     return GridEntryRequest{trigger, index};
 }
 
+inline bool route_grid_exit(
+    GridExitTrigger trigger, const GridExitRouteState& state) {
+    if (state.animating) return false;
+    if (trigger == GridExitTrigger::DoubleClick) return state.has_image;
+    return state.from_grid;
+}
+
+inline std::optional<GridTransitionRect> calculate_grid_transition_rect(
+    const GridTransitionGeometry& geometry) {
+    if (geometry.request_index < 0
+        || geometry.request_index >= geometry.item_count
+        || geometry.request_index < geometry.row_start_index
+        || geometry.request_index >= geometry.row_end_index
+        || geometry.row_height <= 0 || geometry.item_width <= 0.0f) {
+        return std::nullopt;
+    }
+
+    const float image_width = geometry.image_width == 0
+        ? 1.0f : static_cast<float>(geometry.image_width);
+    const float image_height = geometry.image_height == 0
+        ? 1.0f : static_cast<float>(geometry.image_height);
+    const float center_x = geometry.item_x + geometry.thumb_padding
+        + geometry.item_width * 0.5f;
+    const float center_y = static_cast<float>(geometry.toolbar_height
+        + geometry.row_y - geometry.scroll_y)
+        + geometry.row_height * 0.5f;
+    const float source_height = std::sqrt(
+        geometry.item_width * geometry.row_height / (image_width / image_height));
+    const float source_width = source_height * image_width / image_height;
+    if (!std::isfinite(source_width) || !std::isfinite(source_height)
+        || source_width <= 0.0f || source_height <= 0.0f) {
+        return std::nullopt;
+    }
+
+    return GridTransitionRect{
+        center_x - source_width * 0.5f,
+        center_y - source_height * 0.5f,
+        center_x + source_width * 0.5f,
+        center_y + source_height * 0.5f};
+}
+
+template <typename Capture>
+inline bool run_best_effort_transition_capture(Capture capture) noexcept {
+    try {
+        capture();
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+template <typename Decode, typename Materialize, typename Upload>
+inline bool run_image_load_stages(
+    Decode decode, Materialize materialize, Upload upload) noexcept {
+    try {
+        auto decoded = decode();
+        auto materialized = materialize(decoded);
+        return upload(materialized);
+    } catch (...) {
+        return false;
+    }
+}
+
 template <typename StartTransition, typename LoadAndCommit, typename BeginAnimation>
 inline bool run_grid_entry(
     const GridEntryRequest& request,
+    GridEntryTransactionState state,
     StartTransition start_transition,
     LoadAndCommit load_and_commit,
     BeginAnimation begin_animation) {
-    if (request.index < 0) return false;
-    start_transition(request.index);
-    if (!load_and_commit(request.index)) return false;
+    if (request.index < 0 || !state.grid_mode || state.animating) return false;
+    const bool initial_grid_mode = state.grid_mode;
+    const bool initial_from_grid = state.from_grid;
+    const bool initial_animating = state.animating;
+
+    (void)run_best_effort_transition_capture(
+        [&]() { start_transition(request.index); });
+
+    bool loaded = false;
+    try {
+        loaded = load_and_commit(request.index);
+    } catch (...) {
+        loaded = false;
+    }
+    if (!loaded || state.grid_mode || !state.from_grid) {
+        state.grid_mode = initial_grid_mode;
+        state.from_grid = initial_from_grid;
+        state.animating = initial_animating;
+        return false;
+    }
     begin_animation();
-    return true;
+    return !state.grid_mode && state.from_grid && state.animating;
 }
 
 inline GridRebuildReason classify_grid_rebuild_reason(

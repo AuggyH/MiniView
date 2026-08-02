@@ -40,7 +40,7 @@ private:
     void    fit_to_window();
     void    zoom_at_center(float factor);
     void    toggle_fullscreen(HWND hwnd);
-    void    start_transition(HWND hwnd, bool forward);
+    void    start_transition(HWND hwnd, bool forward, int request_index = -1);
     void    begin_animation(HWND hwnd);
     bool    enter_grid_image(HWND hwnd, const GridEntryRequest& request);
     void    toggle_recursive();
@@ -108,6 +108,8 @@ private:
     void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
     void    clamp_grid_scroll();
+    std::optional<GridTransitionRect> grid_transition_source_rect(int index) const;
+    bool    capture_grid_transition_source(int index);
     void    rebuild_grid_layout(int grid_area_width, GridRebuildReason reason);
     void    grid_render();
     void    handle_scrollbar_click(HWND hwnd, int mx, int my);
