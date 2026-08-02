@@ -444,6 +444,24 @@ int App::run(const std::wstring& initial_path) {
     return ret;
 }
 
+void App::begin_grid_scroll(HWND hwnd) {
+    m_grid_scroll_pause.begin(
+        [hwnd](std::uintptr_t timer) {
+            KillTimer(hwnd, static_cast<UINT_PTR>(timer));
+        },
+        [hwnd] {
+            return static_cast<std::uintptr_t>(
+                SetTimer(hwnd, 1, 80, nullptr));
+        });
+}
+
+void App::finish_grid_scroll() {
+    HWND hwnd = m_window.handle();
+    m_grid_scroll_pause.finish([hwnd](std::uintptr_t timer) {
+        KillTimer(hwnd, static_cast<UINT_PTR>(timer));
+    });
+}
+
 // ── Message handler ──────────────────────────────────────────
 
 LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -646,9 +664,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
-            finish_grid_scroll_pause(m_scroll_active);
-            KillTimer(hwnd, 1);
-            m_grid_timer = 0;
+            finish_grid_scroll();
             m_window.invalidate();
         }
         if (wp == 2) {
@@ -763,9 +779,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
             int max_scroll = std::max(0, m_grid_total_h - (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h));
             if (m_grid_scroll_y > max_scroll) m_grid_scroll_y = max_scroll;
-            m_scroll_active = true;
-            if (m_grid_timer) KillTimer(hwnd, m_grid_timer);
-            m_grid_timer = SetTimer(hwnd, 1, 80, nullptr);
+            begin_grid_scroll(hwnd);
             m_window.invalidate();
             return 0;
         }
@@ -1266,11 +1280,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 void App::open_directory(const std::wstring& path) {
     if (path.empty()) return;
     if (m_thumb_running) stop_thumb_loader();
-    if (m_grid_timer) {
-        KillTimer(m_window.handle(), m_grid_timer);
-        m_grid_timer = 0;
-    }
-    finish_grid_scroll_pause(m_scroll_active);
+    finish_grid_scroll();
 
     m_grid_mode = false;
     m_from_grid = false;
@@ -1353,8 +1363,7 @@ bool App::open_image(const std::wstring& path) {
             m_grid_saved_idx = m_grid_sel;
             m_grid_mode = false;
             m_from_grid = true;  // Esc/Space will return to grid
-            if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
-            finish_grid_scroll_pause(m_scroll_active);
+            finish_grid_scroll();
             stop_thumb_loader();
         }
         update_content_viewport(false);
@@ -1603,6 +1612,7 @@ void App::set_delete_current_identity(
 void App::set_delete_grid_state(
     bool grid_mode, int grid_selection, const std::vector<bool>& selected,
     int selection_anchor) {
+    if (m_grid_mode && !grid_mode) finish_grid_scroll();
     m_grid_mode = grid_mode;
     m_grid_sel = grid_selection;
     m_selected = selected;
@@ -2617,8 +2627,7 @@ void App::toggle_grid() {
         // Exit grid — save state but keep thumb cache
         m_grid_scroll_saved = m_grid_scroll_y;
         m_grid_saved_idx = m_grid_sel;
-        if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
-        finish_grid_scroll_pause(m_scroll_active);
+        finish_grid_scroll();
         // Don't stop thumb loader or clear cache — reuse on re-entry
         update_title();
     }
@@ -3094,10 +3103,13 @@ void App::grid_render() {
     int bottom_row = bottom_it == rows.begin() ? -1
         : static_cast<int>(bottom_it - rows.begin()) - 1;
 
-    if (!m_scroll_active) {
-        for (int r = top_row; r <= bottom_row; ++r)
-            for (int i = rows[static_cast<size_t>(r)].start_idx;
-                 i < rows[static_cast<size_t>(r)].end_idx; ++i) request_thumb(i);
+    const bool loader_running =
+        m_thumb_running.load(std::memory_order_relaxed);
+    for (int r = top_row; r <= bottom_row; ++r) {
+        const auto& row = rows[static_cast<size_t>(r)];
+        m_grid_scroll_pause.request_visible(
+            loader_running, row.start_idx, row.end_idx,
+            [this](int index) { request_thumb(index); });
     }
 
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
