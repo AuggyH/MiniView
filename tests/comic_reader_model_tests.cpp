@@ -215,17 +215,18 @@ void test_page_status_and_change_event() {
     expect(!model.take_page_change_event().has_value(),
         "scrolling within one anchored page must not publish an event");
     model.scroll_to_page(1);
+    model.scroll_to_page(2);
     model.set_pages(make_pages(4));
     const auto changed = model.take_page_change_event();
-    expect(changed.has_value() && changed->previous_index == 0
-            && changed->current_index == 1 && changed->total_pages == 4,
-        "an anchored index change must publish one event with the latest total");
+    expect(changed.has_value() && changed->previous_index == 1
+            && changed->current_index == 2 && changed->total_pages == 4,
+        "unconsumed page changes must retain only the latest transition and total");
     expect(!model.take_page_change_event().has_value(),
         "consuming a page event must clear it instead of queueing duplicates");
 
     model.set_pages(make_pages(5));
     const mv::ComicPageStatus status = model.page_status();
-    expect(status.anchored_index == 1 && status.total_pages == 5,
+    expect(status.anchored_index == 2 && status.total_pages == 5,
         "page status must report the restored zero-based anchor and total pages");
     expect(!model.take_page_change_event().has_value(),
         "a total-page change without an index change must not publish an event");
@@ -241,6 +242,33 @@ void test_cruise_speed_elapsed_cap_and_boundaries() {
     expect(model.cruise_speed_index() == 1
             && model.cruise_speed_multiplier() == 1.0f,
         "cruise must default to the 1.0x tier");
+    struct CruiseTierCase {
+        int index;
+        float multiplier;
+    };
+    constexpr CruiseTierCase tiers[] = {
+        {0, 0.5f},
+        {1, 1.0f},
+        {2, 1.5f},
+        {3, 2.0f},
+    };
+    for (const CruiseTierCase& tier : tiers) {
+        model.set_scroll_from_scrollbar(0.0f);
+        model.set_cruise_speed_index(tier.index);
+        expect_near(model.cruise_speed_multiplier(), tier.multiplier, 0.0f,
+            "each cruise tier must expose its exact multiplier");
+        expect(model.start_cruise(),
+            "each cruise tier must start on a scrollable book");
+        const float before = model.scroll();
+        const float expected_delta = mv::kComicCruiseBaseSpeedDipPerSecond
+            * tier.multiplier * 1.75f * 0.05f;
+        const float applied = model.advance_cruise(0.05f);
+        expect_near(applied, expected_delta, 0.001f,
+            "each cruise tier must apply its exact elapsed-time distance");
+        expect_near(model.scroll() - before, applied, 0.001f,
+            "cruise advance must return the signed applied pixel delta");
+        model.cancel_auto_scroll(mv::ComicAutoScrollCancelReason::ToggleOff);
+    }
     model.set_cruise_speed_index(-20);
     expect(model.cruise_speed_index() == 0
             && model.cruise_speed_multiplier() == 0.5f,
@@ -347,6 +375,17 @@ void test_autoscroll_ownership_and_middle_curve() {
         "middle autoscroll must start for elapsed-time advancement");
     expect(model.advance_middle_autoscroll(152.0f, 0.05f) > 0.0f,
         "middle autoscroll must advance from pointer distance and elapsed time");
+    model.set_scroll_from_scrollbar(1000.0f);
+    expect(model.start_middle_autoscroll(100.0f),
+        "middle autoscroll must start from an interior canvas position");
+    const float before_upward = model.scroll();
+    const float upward_applied = model.advance_middle_autoscroll(48.0f, 0.05f);
+    expect(upward_applied < 0.0f,
+        "an upward pointer offset from the interior must return a negative delta");
+    expect_near(upward_applied, -8.0f, 0.001f,
+        "middle upward distance must include the 2x DPI scale and elapsed time");
+    expect_near(model.scroll() - before_upward, upward_applied, 0.001f,
+        "middle advance must return the signed applied physical-pixel delta");
     model.set_scroll_from_scrollbar(0.0f);
     expect(model.start_middle_autoscroll(100.0f),
         "middle autoscroll must start at the top boundary");
@@ -375,6 +414,105 @@ void test_autoscroll_ownership_and_middle_curve() {
         "generic model scrolling after cancellation must preserve the precise reason");
 }
 
+void test_autoscroll_cancel_reason_matrix() {
+    const auto make_reader = [] {
+        mv::ComicReaderModel model;
+        model.set_viewport({1000.0f, 500.0f, 1.0f});
+        model.set_pages(make_pages(5));
+        expect(model.enter(0), "cancel matrix reader must enter a book");
+        return model;
+    };
+
+    enum class CancelAction {
+        ToggleOff,
+        Scrollbar,
+        ExitMode,
+        EmptyBook,
+        InvalidInput,
+        CruiseBoundary,
+        MiddleBoundary,
+    };
+    struct CancelCase {
+        CancelAction action;
+        mv::ComicAutoScrollCancelReason expected;
+    };
+    constexpr CancelCase cancel_cases[] = {
+        {CancelAction::ToggleOff, mv::ComicAutoScrollCancelReason::ToggleOff},
+        {CancelAction::Scrollbar, mv::ComicAutoScrollCancelReason::Scrollbar},
+        {CancelAction::ExitMode, mv::ComicAutoScrollCancelReason::ExitMode},
+        {CancelAction::EmptyBook, mv::ComicAutoScrollCancelReason::EmptyBook},
+        {CancelAction::InvalidInput, mv::ComicAutoScrollCancelReason::InvalidInput},
+        {CancelAction::CruiseBoundary, mv::ComicAutoScrollCancelReason::Boundary},
+        {CancelAction::MiddleBoundary, mv::ComicAutoScrollCancelReason::Boundary},
+    };
+    for (const CancelCase& cancel_case : cancel_cases) {
+        mv::ComicReaderModel model = make_reader();
+        switch (cancel_case.action) {
+        case CancelAction::ToggleOff:
+            expect(model.start_cruise(), "toggle cancellation requires active cruise");
+            model.toggle_cruise();
+            break;
+        case CancelAction::Scrollbar:
+            expect(model.start_cruise(), "scrollbar cancellation requires active cruise");
+            model.set_scroll_from_scrollbar(1.0f);
+            break;
+        case CancelAction::ExitMode:
+            expect(model.start_cruise(), "exit cancellation requires active cruise");
+            model.exit_current_index();
+            break;
+        case CancelAction::EmptyBook:
+            expect(model.start_cruise(), "empty-book cancellation requires active cruise");
+            model.set_pages({});
+            break;
+        case CancelAction::InvalidInput:
+            expect(model.start_middle_autoscroll(100.0f),
+                "invalid-input cancellation requires active middle autoscroll");
+            model.advance_middle_autoscroll(
+                std::numeric_limits<float>::infinity(), 0.01f);
+            break;
+        case CancelAction::CruiseBoundary: {
+            const float maximum = model.scroll_metrics().max_scroll;
+            model.set_scroll_from_scrollbar(maximum - 1.0f);
+            expect(model.start_cruise(),
+                "cruise boundary cancellation requires active cruise");
+            model.advance_cruise(0.1f);
+            break;
+        }
+        case CancelAction::MiddleBoundary:
+            expect(model.start_middle_autoscroll(100.0f),
+                "middle boundary cancellation requires active middle autoscroll");
+            model.advance_middle_autoscroll(0.0f, 0.05f);
+            break;
+        }
+        expect(model.auto_scroll_owner() == mv::ComicAutoScrollOwner::None
+                && model.last_auto_scroll_cancel_reason() == cancel_case.expected,
+            "each active cancellation path must report its exact reason");
+        model.scroll_by(1.0f);
+        model.page_down();
+        expect(model.last_auto_scroll_cancel_reason() == cancel_case.expected,
+            "generic operations with no owner must not overwrite a precise reason");
+    }
+
+    constexpr mv::ComicAutoScrollCancelReason precise_reasons[] = {
+        mv::ComicAutoScrollCancelReason::LeftButton,
+        mv::ComicAutoScrollCancelReason::Escape,
+        mv::ComicAutoScrollCancelReason::KeyboardPage,
+        mv::ComicAutoScrollCancelReason::MouseWheel,
+        mv::ComicAutoScrollCancelReason::FocusLost,
+    };
+    for (const mv::ComicAutoScrollCancelReason reason : precise_reasons) {
+        mv::ComicReaderModel model = make_reader();
+        expect(model.start_cruise(),
+            "precise cancellation reason requires an active owner");
+        model.cancel_auto_scroll(reason);
+        model.scroll_by(1.0f);
+        model.page_down();
+        expect(model.auto_scroll_owner() == mv::ComicAutoScrollOwner::None
+                && model.last_auto_scroll_cancel_reason() == reason,
+            "precise input cancellation must survive later generic operations");
+    }
+}
+
 void test_scroll_metrics_page_step_and_finite_overflow() {
     const mv::ComicScrollMetrics empty =
         mv::normalize_comic_scroll_metrics(0.0f, 600.0f, 0.0f);
@@ -399,11 +537,29 @@ void test_scroll_metrics_page_step_and_finite_overflow() {
         1000.0f, 500.0f,
         std::numeric_limits<float>::quiet_NaN()).is_valid,
         "NaN scroll metrics must fail closed");
+    const float unsafe_finite = std::nextafter(
+        mv::kComicMaxFiniteCoordinate,
+        std::numeric_limits<float>::infinity());
+    expect(std::isfinite(unsafe_finite)
+            && !mv::normalize_comic_scroll_metrics(
+                unsafe_finite, 500.0f, 0.0f).is_valid,
+        "a finite coordinate just above the safety threshold must fail closed");
+    expect(!mv::normalize_comic_scroll_metrics(-1.0f, 500.0f, 0.0f).is_valid
+            && !mv::normalize_comic_scroll_metrics(
+                1000.0f, -1.0f, 0.0f).is_valid,
+        "negative total and viewport metrics must fail closed");
 
     mv::ComicReaderModel model;
     model.set_viewport({1000.0f, 500.0f, 1.0f});
     model.set_pages(make_pages(5));
     expect(model.enter(0), "scroll business model must enter a long canvas");
+    model.set_scroll_from_scrollbar(-100.0f);
+    expect_near(model.scroll(), 0.0f, 0.0f,
+        "a mapped scroll below the canvas must clamp to zero");
+    const float maximum = model.scroll_metrics().max_scroll;
+    model.set_scroll_from_scrollbar(maximum + 1000.0f);
+    expect_near(model.scroll(), maximum, 0.001f,
+        "a mapped scroll above the canvas must clamp to max scroll");
     model.set_scroll_from_scrollbar(750.0f);
     model.scrollbar_page_step(mv::ComicScrollDirection::Forward);
     expect_near(model.scroll(), 1250.0f, 0.001f,
@@ -536,6 +692,7 @@ int main() {
         test_page_status_and_change_event();
         test_cruise_speed_elapsed_cap_and_boundaries();
         test_autoscroll_ownership_and_middle_curve();
+        test_autoscroll_cancel_reason_matrix();
         test_scroll_metrics_page_step_and_finite_overflow();
         test_large_library_materializes_only_request_window();
         test_lru_obeys_comic_and_application_soft_limits();
