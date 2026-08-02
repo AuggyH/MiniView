@@ -207,7 +207,7 @@ void test_comic_app_controller() {
             && middle.owner_value == mv::ComicAppAutoOwner::None
             && middle.calls == std::vector<std::string>({
                 "cancel:repeated", "clear_status", "release_capture",
-                "stop_timer", "invalidate"}),
+                "stop_timer", "cursor:off", "invalidate"}),
         "a repeated middle click must cancel capture and timer in production order");
 
     FakeComicAppPort outside;
@@ -224,7 +224,7 @@ void test_comic_app_controller() {
             && capture_failure.calls == std::vector<std::string>({
                 "start_middle:10,20,10,20", "clear_status", "begin_clock",
                 "acquire_capture", "cancel:invalid", "clear_status",
-                "release_capture", "stop_timer", "invalidate"}),
+                "release_capture", "stop_timer", "cursor:off", "invalidate"}),
         "capture failure must roll back the active middle owner before returning");
 
     FakeComicAppPort cruise_tick;
@@ -244,7 +244,8 @@ void test_comic_app_controller() {
     expect(mv::ComicAppController::timer_tick(
             middle_boundary, 0.016f, false)
             && middle_boundary.calls == std::vector<std::string>({
-                "advance_middle", "release_capture", "stop_timer", "invalidate"}),
+                "advance_middle", "release_capture", "stop_timer",
+                "cursor:off", "invalidate"}),
         "a middle boundary tick must release capture before stopping its timer");
 
     const std::vector<std::pair<mv::ComicAppCancelTrigger, std::string>>
@@ -261,26 +262,74 @@ void test_comic_app_controller() {
         cancelled.timer_value = true;
         expect(mv::ComicAppController::cancel(cancelled, trigger)
                 && cancelled.owner_value == mv::ComicAppAutoOwner::None
-                && cancelled.calls.size() == 5
+                && cancelled.calls.size() == 6
                 && cancelled.calls[0] == expected_cancel
                 && cancelled.calls[1] == "clear_status"
                 && cancelled.calls[2] == "release_capture"
                 && cancelled.calls[3] == "stop_timer"
-                && cancelled.calls[4] == "invalidate",
+                && cancelled.calls[4] == "cursor:off"
+                && cancelled.calls[5] == "invalidate",
             "each manual/focus/exit cancellation must share atomic cleanup order");
     }
 
-    FakeComicAppPort viewport;
-    viewport.owner_value = mv::ComicAppAutoOwner::Middle;
-    viewport.timer_value = true;
-    expect(!mv::ComicAppController::viewport_changed(viewport, true)
-            && viewport.calls.empty(),
-        "a still-visible middle anchor must survive an equivalent viewport");
-    expect(mv::ComicAppController::viewport_changed(viewport, false)
-            && viewport.calls == std::vector<std::string>({
-                "cancel:viewport", "clear_status", "release_capture",
-                "stop_timer", "invalidate"}),
-        "toolbar or panel viewport changes must cancel an invisible anchor atomically");
+    struct ViewportRect {
+        float left;
+        float top;
+        float right;
+        float bottom;
+    };
+    const ViewportRect before{0.0f, 0.0f, 1000.0f, 800.0f};
+    struct ViewportCase {
+        const char* name;
+        ViewportRect after;
+        bool expect_visible;
+        bool old_top_width_gate;
+    };
+    const std::vector<ViewportCase> viewport_cases = {
+        {"same", {0.0f, 0.0f, 1000.0f, 800.0f}, true, false},
+        {"top-only", {0.0f, 100.0f, 1000.0f, 800.0f}, true, true},
+        {"right-only", {0.0f, 0.0f, 900.0f, 800.0f}, true, true},
+        {"bottom-only", {0.0f, 0.0f, 1000.0f, 600.0f}, false, false}};
+    constexpr float anchor_x = 500.0f;
+    constexpr float anchor_y = 700.0f;
+    for (const ViewportCase& item : viewport_cases) {
+        const bool old_gate = before.top != item.after.top
+            || (before.right - before.left)
+                != (item.after.right - item.after.left);
+        expect(old_gate == item.old_top_width_gate,
+            "the discriminating table must reproduce the old subset gate");
+        const bool anchor_visible = anchor_x >= item.after.left
+            && anchor_x < item.after.right
+            && anchor_y >= item.after.top
+            && anchor_y < item.after.bottom;
+        expect(anchor_visible == item.expect_visible,
+            "the viewport table must classify the post-update anchor");
+
+        FakeComicAppPort viewport;
+        viewport.owner_value = mv::ComicAppAutoOwner::Middle;
+        viewport.timer_value = true;
+        const bool cancelled = mv::ComicAppController::viewport_changed(
+            viewport, anchor_visible);
+        if (anchor_visible) {
+            expect(!cancelled && viewport.calls.empty(),
+                "same/top/right updates with a visible anchor must be no-ops");
+        } else {
+            expect(cancelled
+                    && std::string(item.name) == "bottom-only"
+                    && !old_gate
+                    && viewport.owner_value == mv::ComicAppAutoOwner::None
+                    && viewport.calls == std::vector<std::string>({
+                        "cancel:viewport", "clear_status", "release_capture",
+                        "stop_timer", "cursor:off", "invalidate"}),
+                "height-only shrink must bypass the old gate and clean up atomically");
+        }
+    }
+
+    FakeComicAppPort inactive_viewport;
+    inactive_viewport.timer_value = false;
+    expect(!mv::ComicAppController::viewport_changed(inactive_viewport, false)
+            && inactive_viewport.calls.empty(),
+        "every viewport update must remain a cheap no-op without a middle owner");
 
     FakeComicAppPort timer_failure;
     timer_failure.owner_value = mv::ComicAppAutoOwner::Middle;
@@ -290,7 +339,7 @@ void test_comic_app_controller() {
             && timer_failure.owner_value == mv::ComicAppAutoOwner::None
             && timer_failure.calls == std::vector<std::string>({
                 "start_timer", "clear_transient", "cancel:invalid",
-                "release_capture", "stop_timer", "invalidate"}),
+                "release_capture", "stop_timer", "cursor:off", "invalidate"}),
         "timer creation failure must clear transient and middle resources together");
 
     FakeComicAppPort expired;

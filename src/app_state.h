@@ -68,6 +68,7 @@ public:
             if (previous == ComicAppAutoOwner::Middle
                 && port.owner() != ComicAppAutoOwner::Middle) {
                 port.release_middle_capture();
+                port.set_middle_cursor(false);
             }
             if (active) {
                 port.begin_tick_clock();
@@ -133,6 +134,9 @@ public:
             port.release_middle_capture();
         }
         stop_timer_if_idle(port);
+        if (previous == ComicAppAutoOwner::Middle) {
+            port.set_middle_cursor(false);
+        }
         port.invalidate();
         return true;
     }
@@ -153,8 +157,9 @@ public:
             port.request_pages();
             redraw = true;
         }
-        if (previous == ComicAppAutoOwner::Middle
-            && port.owner() != ComicAppAutoOwner::Middle) {
+        const bool middle_stopped = previous == ComicAppAutoOwner::Middle
+            && port.owner() != ComicAppAutoOwner::Middle;
+        if (middle_stopped) {
             port.release_middle_capture();
             redraw = true;
         }
@@ -163,6 +168,7 @@ public:
             redraw = true;
         }
         stop_timer_if_idle(port);
+        if (middle_stopped) port.set_middle_cursor(false);
         if (redraw) port.invalidate();
         return redraw;
     }
@@ -205,6 +211,9 @@ private:
             port.release_middle_capture();
         }
         port.stop_timer();
+        if (previous == ComicAppAutoOwner::Middle) {
+            port.set_middle_cursor(false);
+        }
         port.invalidate();
         return false;
     }

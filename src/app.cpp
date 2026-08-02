@@ -2085,7 +2085,6 @@ public:
     void release_middle_capture() {
         HWND hwnd = m_app.m_window.handle();
         if (hwnd && GetCapture() == hwnd) ReleaseCapture();
-        SetCursor(LoadCursor(nullptr, IDC_ARROW));
     }
 
     void set_middle_cursor(bool active) {
@@ -3712,18 +3711,13 @@ int App::visible_panel_width() const {
 }
 
 void App::update_content_viewport(bool refit) {
-    const float previous_top = m_renderer.content_top();
-    const float previous_width = m_renderer.content_width();
     float top = toolbar_visible() ? static_cast<float>(m_toolbar_h) : 0.0f;
     float right = m_grid_mode ? 0.0f : static_cast<float>(visible_panel_width());
     m_renderer.set_content_viewport(top, right);
     if (m_comic_reader.enabled()) {
         if (!m_comic_scrollbar_dragging) m_comic_scrollbar_hover = false;
         update_comic_viewport();
-        if (previous_top != m_renderer.content_top()
-            || previous_width != m_renderer.content_width()) {
-            revalidate_comic_middle_anchor();
-        }
+        revalidate_comic_middle_anchor();
     } else if (refit) {
         fit_to_window();
     }
