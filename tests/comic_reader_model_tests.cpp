@@ -2,7 +2,10 @@
 
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -24,6 +27,14 @@ std::vector<mv::ComicPageSource> make_pages(int count) {
         pages.push_back({L"page-" + std::to_wstring(index), 1000, 1000, false});
     }
     return pages;
+}
+
+std::string read_source(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("failed to open production source");
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    return contents.str();
 }
 
 void test_width_gap_and_failure_geometry() {
@@ -152,6 +163,36 @@ void test_scroll_commands_and_directional_request_window() {
     model.end();
     expect_near(model.scroll(), model.total_height() - 500.0f, 0.01f,
         "End must reach the final viewport");
+
+    model.scroll_to_page(10);
+    expect(model.capture_anchor(0.0f).index == 10,
+        "direct navigation must place the requested page at the viewport start");
+}
+
+void test_decode_update_preserves_anchor() {
+    mv::ComicReaderModel model;
+    model.set_viewport({1000.0f, 600.0f, 1.0f});
+    model.set_pages(make_pages(6));
+    expect(model.enter(3), "reader must enter before a decoded size update");
+    model.scroll_by(250.0f);
+    const mv::ComicAnchor before = model.capture_anchor();
+
+    model.update_page(1, 1000, 3000, false);
+    const mv::ComicAnchor after_other_page = model.capture_anchor();
+    expect(after_other_page.key == before.key,
+        "a decoded size update before the viewport must preserve the page anchor");
+    expect_near(after_other_page.page_fraction, before.page_fraction, 0.002f,
+        "a decoded size update must preserve the page-relative anchor");
+
+    model.update_page(before.index, 1000, 2500, true);
+    const mv::ComicAnchor after_anchor_page = model.capture_anchor();
+    expect(after_anchor_page.key == before.key,
+        "updating the anchored page must preserve its stable key");
+    expect_near(after_anchor_page.page_fraction, before.page_fraction, 0.002f,
+        "updating the anchored page must preserve its relative position");
+    const auto geometry = model.geometry(before.index);
+    expect(geometry.has_value() && geometry->decode_failed,
+        "a failed decode update must reach the production geometry state");
 }
 
 void test_large_library_materializes_only_request_window() {
@@ -189,6 +230,33 @@ void test_lru_obeys_comic_and_application_soft_limits() {
         "a protected visible page may remain under the soft-limit contract");
     expect(lru.allowed_bytes(400 * mib) == 112 * mib,
         "comic cache allowance must be capped by remaining application budget");
+
+    lru.erase(1);
+    expect(!lru.contains(1) && lru.resident_bytes() == 0,
+        "erasing a decoded page must release its accounted cache bytes");
+    lru.touch(4, 20 * mib);
+    lru.clear();
+    expect(!lru.contains(4) && lru.resident_bytes() == 0,
+        "generation changes must clear all comic cache accounting");
+}
+
+void test_production_app_binds_virtual_window_and_lru() {
+    const std::filesystem::path source_root(MINVIEW_SOURCE_DIR);
+    const std::string app = read_source(source_root / "src" / "app.cpp");
+    const auto require_binding = [&app](const char* text, const char* message) {
+        expect(app.find(text) != std::string::npos, message);
+    };
+
+    require_binding("m_comic_reader.request_range()",
+        "production loading must use the model's directional request window");
+    require_binding("m_comic_loader.replace_requests(std::move(loads))",
+        "production loading must replace work with the bounded request set");
+    require_binding("result.generation != m_comic_generation",
+        "production result handling must reject stale generations");
+    require_binding("m_comic_lru.evict_to_budget(",
+        "production cache trimming must enforce the shared soft limit");
+    require_binding("m_comic_reader.materialize(visible)",
+        "production rendering must materialize only visible page geometry");
 }
 
 } // namespace
@@ -199,8 +267,10 @@ int main() {
         test_anchor_survives_width_viewport_and_reordering();
         test_removed_anchor_selects_successor_and_empty_disables();
         test_scroll_commands_and_directional_request_window();
+        test_decode_update_preserves_anchor();
         test_large_library_materializes_only_request_window();
         test_lru_obeys_comic_and_application_soft_limits();
+        test_production_app_binds_virtual_window_and_lru();
         std::cout << "comic_reader_model_tests: PASS\n";
         return 0;
     } catch (const std::exception& error) {
