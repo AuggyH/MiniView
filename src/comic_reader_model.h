@@ -98,6 +98,7 @@ enum class ComicAutoScrollCancelReason {
     KeyboardPage,
     MouseWheel,
     FocusLost,
+    ViewportChanged,
     ExitMode,
     EmptyBook,
     Boundary,
@@ -225,7 +226,10 @@ public:
             current_page_index(), static_cast<int>(m_pages.size())};
     }
 
-    int current_page_index() const { return capture_anchor().index; }
+    int current_page_index() const {
+        if (m_pages.empty() || m_page_tops.empty()) return -1;
+        return page_at(anchor_position(0.5f));
+    }
     int total_pages() const noexcept { return static_cast<int>(m_pages.size()); }
 
     std::optional<ComicPageChangeEvent> take_page_change_event() noexcept {
@@ -463,10 +467,7 @@ public:
         if (m_pages.empty() || m_page_tops.empty()) return anchor;
         anchor.viewport_fraction = std::isfinite(viewport_fraction)
             ? std::clamp(viewport_fraction, 0.0f, 1.0f) : 0.5f;
-        const float position = safe_sum(
-            m_scroll, safe_product(
-                m_viewport.height, anchor.viewport_fraction, 0.0f),
-            m_scroll);
+        const float position = anchor_position(anchor.viewport_fraction);
         const int index = page_at(position);
         if (index < 0) return anchor;
         const std::size_t offset = static_cast<std::size_t>(index);
@@ -559,6 +560,15 @@ private:
         return static_cast<float>(std::clamp(
             sum, -static_cast<double>(kComicMaxFiniteCoordinate),
             static_cast<double>(kComicMaxFiniteCoordinate)));
+    }
+
+    float anchor_position(float viewport_fraction) const noexcept {
+        const float fraction = std::isfinite(viewport_fraction)
+            ? std::clamp(viewport_fraction, 0.0f, 1.0f) : 0.5f;
+        return safe_sum(
+            m_scroll,
+            safe_product(m_viewport.height, fraction, 0.0f),
+            m_scroll);
     }
 
     void restore_anchor_impl(const ComicAnchor& anchor) {
