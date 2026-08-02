@@ -778,7 +778,7 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         const float text_height = std::max(1.0f, overlay.bounds.height());
         ComPtr<IDWriteTextLayout> text_layout;
         m_dwrite_factory->CreateTextLayout(
-            overlay.text.c_str(), static_cast<UINT32>(overlay.text.size()),
+            overlay.text.data(), static_cast<UINT32>(overlay.text.size()),
             format.Get(), text_width, text_height, &text_layout);
         if (!text_layout) return;
         DWRITE_TRIMMING trimming = {};
