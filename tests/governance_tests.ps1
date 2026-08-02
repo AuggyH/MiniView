@@ -1833,6 +1833,11 @@ Assert-Absent $appSourcePath "(?m)^\s*case 'G':" 'G must remain removed from pro
 Assert-Present $appSourcePath '(?s)case VK_F11:\s+toggle_fullscreen\(hwnd\);\s+return 0;' 'F11 must continue toggling fullscreen'
 Assert-Present $appSourcePath '(?s)case VK_RETURN:.*?toggle_fullscreen\(hwnd\);\s+return 0;' 'Enter must continue toggling fullscreen in browsing modes'
 Assert-Present $appSourcePath "(?s)case 'I':\s+toggle_info\(\);\s+return 0;" 'I must continue toggling the complete information panel'
+Assert-Present $appSourcePath '(?s)case IDM_OPEN_FOLDER:.*?SHBrowseForFolderW\(&bi\).*?SHGetPathFromIDListW\(pidl, dir\)\) open_directory\(dir\);' 'the folder picker must pass its exact selected directory to open_directory'
+Assert-Present $appSourcePath '(?s)case IDM_RECURSIVE:\s+if \(can_toggle_recursive\(.*?\)\)\s+toggle_recursive\(\);' 'the recursive menu command must use the shared availability contract'
+Assert-Present $appSourcePath "(?s)case 'R':\s+if \(can_toggle_recursive\(.*?\)\)\s+toggle_recursive\(\);" 'Ctrl+R must use the shared recursive availability contract'
+Assert-Present $appSourcePath '(?s)AddOwnerItem\(popup, IDM_RECURSIVE,.*?!can_toggle_recursive\(' 'the View menu must expose the shared recursive availability state'
+Assert-Present $appSourcePath '(?s)scan_action == RecursiveScanAction::ShowEmptyRoot.*?m_current_path\.clear\(\);.*?m_grid_sel = -1;.*?toggle_grid\(\);' 'an empty recursive rescan must leave the grid without preserving stale image state'
 Assert-SwitchCaseActionMutationGuard $appSourceContent `
     'VK_ESCAPE' 'VK_F11' `
     'route_grid_exit\(GridExitTrigger::Escape' 'toggle_grid\(\);' `
