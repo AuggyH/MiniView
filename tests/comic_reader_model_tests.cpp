@@ -2,14 +2,49 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace {
+
+bool g_track_allocations = false;
+std::size_t g_allocation_count = 0;
+
+} // namespace
+
+void* operator new(std::size_t size) {
+    if (g_track_allocations) ++g_allocation_count;
+    if (void* allocation = std::malloc(size)) return allocation;
+    throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) {
+    return ::operator new(size);
+}
+
+void operator delete(void* allocation) noexcept {
+    std::free(allocation);
+}
+
+void operator delete[](void* allocation) noexcept {
+    ::operator delete(allocation);
+}
+
+void operator delete(void* allocation, std::size_t) noexcept {
+    std::free(allocation);
+}
+
+void operator delete[](void* allocation, std::size_t) noexcept {
+    ::operator delete(allocation);
+}
 
 namespace {
 
@@ -31,6 +66,25 @@ std::vector<mv::ComicPageSource> make_pages(int count) {
         pages.push_back({L"page-" + std::to_wstring(index), 1000, 1000, false});
     }
     return pages;
+}
+
+void test_page_status_query_does_not_copy_key() {
+    mv::ComicReaderModel model;
+    model.set_viewport({1000.0f, 500.0f, 1.0f});
+    model.set_pages({{std::wstring(4096, L'k'), 1000, 1000, false}});
+    expect(model.enter(0), "allocation test reader must enter its page");
+
+    g_allocation_count = 0;
+    g_track_allocations = true;
+    const int current_page = model.current_page_index();
+    const mv::ComicPageStatus status = model.page_status();
+    g_track_allocations = false;
+
+    expect(current_page == 0 && status.anchored_index == 0
+            && status.total_pages == 1,
+        "page queries must report the current anchored page");
+    expect(g_allocation_count == 0,
+        "per-paint page queries must not allocate or copy a page key");
 }
 
 std::string read_source(const std::filesystem::path& path) {
@@ -513,6 +567,40 @@ void test_autoscroll_cancel_reason_matrix() {
     }
 }
 
+void test_viewport_change_cancels_both_autoscroll_owners() {
+    constexpr mv::ComicAutoScrollOwner owners[] = {
+        mv::ComicAutoScrollOwner::Cruise,
+        mv::ComicAutoScrollOwner::Middle,
+    };
+    for (const mv::ComicAutoScrollOwner owner : owners) {
+        mv::ComicReaderModel model;
+        model.set_viewport({1000.0f, 500.0f, 1.0f});
+        model.set_pages(make_pages(5));
+        expect(model.enter(0),
+            "viewport cancellation reader must enter a book");
+        if (owner == mv::ComicAutoScrollOwner::Cruise) {
+            expect(model.start_cruise(),
+                "viewport cancellation must start cruise");
+        } else {
+            expect(model.start_middle_autoscroll(100.0f),
+                "viewport cancellation must start middle autoscroll");
+        }
+
+        model.cancel_auto_scroll(
+            mv::ComicAutoScrollCancelReason::ViewportChanged);
+        expect(model.auto_scroll_owner() == mv::ComicAutoScrollOwner::None
+                && model.last_auto_scroll_cancel_reason()
+                    == mv::ComicAutoScrollCancelReason::ViewportChanged,
+            "viewport changes must cancel either active autoscroll owner");
+
+        model.scroll_by(1.0f);
+        model.page_down();
+        expect(model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::ViewportChanged,
+            "no-owner operations must preserve viewport cancellation");
+    }
+}
+
 void test_scroll_metrics_page_step_and_finite_overflow() {
     const mv::ComicScrollMetrics empty =
         mv::normalize_comic_scroll_metrics(0.0f, 600.0f, 0.0f);
@@ -766,6 +854,7 @@ void test_production_toolbar_forwards_comic_commands() {
 
 int main() {
     try {
+        test_page_status_query_does_not_copy_key();
         test_width_gap_and_failure_geometry();
         test_anchor_survives_width_viewport_and_reordering();
         test_removed_anchor_selects_successor_and_empty_disables();
@@ -775,6 +864,7 @@ int main() {
         test_cruise_speed_elapsed_cap_and_boundaries();
         test_autoscroll_ownership_and_middle_curve();
         test_autoscroll_cancel_reason_matrix();
+        test_viewport_change_cancels_both_autoscroll_owners();
         test_scroll_metrics_page_step_and_finite_overflow();
         test_large_library_materializes_only_request_window();
         test_lru_obeys_comic_and_application_soft_limits();
