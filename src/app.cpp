@@ -155,6 +155,7 @@ enum {
     IDM_RECURSIVE    = 1012,
     IDM_THUMB_SQUARE = 1013,
     IDM_INFO         = 1014,
+    IDM_LABELS       = 1015,
     IDM_SORT_NAME    = 1020,
     IDM_SORT_DATE    = 1021,
     IDM_SORT_SIZE    = 1022,
@@ -275,8 +276,9 @@ static OwnerItemData* AddOwnerItem(HMENU menu, UINT id, const std::wstring& labe
     d->disabled = disabled;
     d->checked  = checked;
     MENUITEMINFOW mii = { sizeof(mii) };
-    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA;
+    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA | MIIM_STATE;
     mii.fType = MFT_OWNERDRAW;
+    mii.fState = disabled ? MFS_DISABLED : MFS_ENABLED;
     mii.wID   = id;
     mii.dwItemData = reinterpret_cast<ULONG_PTR>(d);
     InsertMenuItemW(menu, GetMenuItemCount(menu), TRUE, &mii);
@@ -518,6 +520,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
         case IDM_INFO:         toggle_info(); return 0;
+        case IDM_LABELS:       toggle_grid_labels(); return 0;
         case IDM_SORT_NAME:   if (m_grid_mode) set_sort_mode(SortMode::Name);   return 0;
         case IDM_SORT_DATE:   if (m_grid_mode) set_sort_mode(SortMode::Date);   return 0;
         case IDM_SORT_SIZE:   if (m_grid_mode) set_sort_mode(SortMode::Size);   return 0;
@@ -1201,8 +1204,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_mode) { toggle_thumb_square(); return 0; }
             return -1;
         case 'L':
-            if (m_grid_mode) { m_show_labels = !m_show_labels; m_grid_layout_dirty = true; m_window.invalidate(); return 0; }
-            return -1;
+            return toggle_grid_labels() ? 0 : -1;
         case 'I':
             toggle_info(); return 0;
         case 'N':
@@ -1799,6 +1801,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
             m_recursive);
         AddOwnerItem(popup, IDM_THUMB_SQUARE,
             m_thumb_square ? L"原始比例网格	A" : L"方形缩略图	A", !m_grid_mode);
+        AddOwnerItem(popup, IDM_LABELS, L"显示文件名标签	L",
+            !m_grid_mode, m_show_labels);
         AddOwnerSeparator(popup);
         AddOwnerItem(popup, IDM_INFO, L"展开/收起信息面板	I", false, m_panel_expanded);
         break;
@@ -1925,7 +1929,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     switch (cmd) {
     case IDM_OPEN_FILE: case IDM_OPEN_FOLDER: case IDM_FULLSCREEN: case IDM_RECURSIVE:
-    case IDM_THUMB_SQUARE: case IDM_INFO:
+    case IDM_THUMB_SQUARE: case IDM_INFO: case IDM_LABELS:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
     case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
     case IDM_COPY_IMAGE: case IDM_COPY_PATH: case IDM_CREATE_COPY:
@@ -2949,6 +2953,15 @@ void App::toggle_thumb_square() {
     m_thumb_square = !m_thumb_square;
     m_grid_layout_dirty = true;
     m_window.invalidate();
+}
+
+bool App::toggle_grid_labels() {
+    if (!apply_grid_label_toggle(
+            m_grid_mode, m_show_labels, m_grid_layout_dirty)) {
+        return false;
+    }
+    m_window.invalidate();
+    return true;
 }
 
 // ── Multi-select helpers ─────────────────────────────────
