@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -149,6 +150,52 @@ int main() {
             && !mv::route_grid_exit(mv::GridExitTrigger::Escape, exit_state)
             && !mv::route_grid_exit(mv::GridExitTrigger::DoubleClick, exit_state),
         "all mode-switch inputs must remain ignored during animation");
+
+    mv::GridScrollPause scroll_pause;
+    std::vector<std::uintptr_t> cancelled_timers;
+    const auto cancel_timer = [&cancelled_timers](std::uintptr_t timer) {
+        cancelled_timers.push_back(timer);
+    };
+    scroll_pause.begin(cancel_timer, [] { return std::uintptr_t{17}; });
+    expect(scroll_pause.active() && scroll_pause.timer() == 17,
+        "a created scroll timer must pause visible thumbnail requests");
+    std::vector<int> requested_thumbnails;
+    scroll_pause.request_visible(
+        true, 40, 44, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails.empty(),
+        "active scrolling must continue suppressing visible thumbnail requests");
+
+    scroll_pause.begin(cancel_timer, [] { return std::uintptr_t{0}; });
+    expect(!scroll_pause.active() && scroll_pause.timer() == 0
+            && cancelled_timers == std::vector<std::uintptr_t>{17},
+        "SetTimer failure must cancel the prior timer and immediately resume scheduling");
+    scroll_pause.request_visible(
+        true, 40, 44, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails == std::vector<int>({40, 41, 42, 43}),
+        "SetTimer failure must make the exact visible range requestable");
+
+    requested_thumbnails.clear();
+    scroll_pause.begin(cancel_timer, [] { return std::uintptr_t{23}; });
+    scroll_pause.finish(cancel_timer);
+    expect(!scroll_pause.active() && scroll_pause.timer() == 0
+            && cancelled_timers == std::vector<std::uintptr_t>({17, 23}),
+        "grid exit must cancel its timer and end the scroll pause");
+    scroll_pause.request_visible(
+        false, 50, 53, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails.empty(),
+        "a stopped loader must not accumulate visible requests");
+    scroll_pause.request_visible(
+        true, 50, 53, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails == std::vector<int>({50, 51, 52}),
+        "a restarted loader must receive the exact visible range after grid exit");
 
     mv::GridTransitionGeometry geometry;
     geometry.request_index = 2;
