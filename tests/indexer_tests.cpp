@@ -100,6 +100,29 @@ int main() {
     expect(index.relpath_at(static_cast<size_t>(nested_index)) == L"nested\\c.GIF",
         "relative path should be rooted at the scanned directory");
 
+    {
+        TempDirectory empty_root_fixture;
+        const fs::path empty_root =
+            empty_root_fixture.path() / L"中文空根目录";
+        const fs::path child_image = empty_root / L"子目录甲" / L"图片甲.png";
+        const fs::path grandchild_image =
+            empty_root / L"子目录乙" / L"孙目录" / L"图片乙.jpg";
+        fs::create_directories(child_image.parent_path());
+        fs::create_directories(grandchild_image.parent_path());
+        write_file(child_image, 4);
+        write_file(grandchild_image, 5);
+
+        mv::ImageIndex empty_root_index;
+        expect(empty_root_index.scan(empty_root.wstring(), false) == 0
+                && empty_root_index.directory() == empty_root.wstring(),
+            "a non-recursive empty root must remain bound as the browse root");
+        expect(empty_root_index.scan(empty_root.wstring(), true) == 2
+                && empty_root_index.directory() == empty_root.wstring()
+                && empty_root_index.index_of(child_image.wstring()) >= 0
+                && empty_root_index.index_of(grandchild_image.wstring()) >= 0,
+            "recursive scanning must find Chinese child and grandchild images under the same root");
+    }
+
     index.sort_by(mv::SortMode::Size);
     expect(filename_at(index, 0) == L"B.JPG" && filename_at(index, 2) == L"a.png",
         "size sort should order largest first");
