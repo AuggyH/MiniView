@@ -1841,6 +1841,10 @@ Assert-SwitchCaseActionMutationGuard $appSourceContent `
     'WM_LBUTTONDBLCLK' 'WM_IME_STARTCOMPOSITION' `
     'route_grid_exit\(GridExitTrigger::DoubleClick' 'toggle_grid\(\);' `
     'big-image double-click case must continue returning to the grid'
+Assert-SwitchCaseActionMutationGuard $appSourceContent `
+    'VK_SPACE' 'VK_BACK' `
+    'route_grid_exit\(GridExitTrigger::Space' 'toggle_grid\(\);' `
+    'Space case must continue returning big-image mode to the grid'
 Assert-Present $architecturePath '3[^\r\n]*WIC' 'architecture must match the three-entry preload cache'
 Assert-Absent $architecturePath '6[^\r\n]*WIC' 'architecture must not advertise a six-entry preload cache'
 if (-not (Test-NoLegacyMetadataLog $architectureContent)) {
