@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -17,7 +18,10 @@ void expect(bool condition, const char* message) {
 }
 
 void expect_near(float actual, float expected, float tolerance, const char* message) {
-    if (std::fabs(actual - expected) > tolerance) throw std::runtime_error(message);
+    if (!std::isfinite(actual) || !std::isfinite(expected)
+        || std::fabs(actual - expected) > tolerance) {
+        throw std::runtime_error(message);
+    }
 }
 
 std::vector<mv::ComicPageSource> make_pages(int count) {
@@ -195,6 +199,237 @@ void test_decode_update_preserves_anchor() {
         "a failed decode update must reach the production geometry state");
 }
 
+void test_page_status_and_change_event() {
+    mv::ComicReaderModel model;
+    model.set_viewport({1000.0f, 400.0f, 1.0f});
+    model.set_pages(make_pages(3));
+    const auto initial = model.take_page_change_event();
+    expect(initial.has_value() && initial->previous_index == -1
+            && initial->current_index == 0 && initial->total_pages == 3,
+        "adding the first book must publish its initial anchored page");
+    expect(model.enter(0), "page event model must enter its first page");
+    expect(!model.take_page_change_event().has_value(),
+        "entering the already anchored page must not duplicate an event");
+
+    model.scroll_by(100.0f);
+    expect(!model.take_page_change_event().has_value(),
+        "scrolling within one anchored page must not publish an event");
+    model.scroll_to_page(1);
+    model.set_pages(make_pages(4));
+    const auto changed = model.take_page_change_event();
+    expect(changed.has_value() && changed->previous_index == 0
+            && changed->current_index == 1 && changed->total_pages == 4,
+        "an anchored index change must publish one event with the latest total");
+    expect(!model.take_page_change_event().has_value(),
+        "consuming a page event must clear it instead of queueing duplicates");
+
+    model.set_pages(make_pages(5));
+    const mv::ComicPageStatus status = model.page_status();
+    expect(status.anchored_index == 1 && status.total_pages == 5,
+        "page status must report the restored zero-based anchor and total pages");
+    expect(!model.take_page_change_event().has_value(),
+        "a total-page change without an index change must not publish an event");
+}
+
+void test_cruise_speed_elapsed_cap_and_boundaries() {
+    mv::ComicReaderModel model;
+    model.set_viewport({1000.0f, 400.0f, 1.75f});
+    model.set_pages(make_pages(5));
+    expect(model.enter(0), "cruise model must enter a scrollable book");
+    model.take_page_change_event();
+
+    expect(model.cruise_speed_index() == 1
+            && model.cruise_speed_multiplier() == 1.0f,
+        "cruise must default to the 1.0x tier");
+    model.set_cruise_speed_index(-20);
+    expect(model.cruise_speed_index() == 0
+            && model.cruise_speed_multiplier() == 0.5f,
+        "cruise speed must clamp below the four tiers");
+    model.change_cruise_speed(1);
+    expect(model.cruise_speed_index() == 1,
+        "speed increment must advance exactly one tier");
+    model.set_cruise_speed_index(99);
+    model.change_cruise_speed(99);
+    expect(model.cruise_speed_index() == 3
+            && model.cruise_speed_multiplier() == 2.0f,
+        "cruise speed must clamp above the four tiers");
+    model.set_cruise_speed_index(1);
+
+    expect(model.start_cruise(), "cruise must start on a scrollable book");
+    expect_near(model.advance_cruise(0.05f), 10.5f, 0.001f,
+        "elapsed seconds must advance at 120 DIP/s times the DPI scale");
+    expect_near(model.advance_cruise(5.0f), 21.0f, 0.001f,
+        "a stalled frame must advance by no more than the 100 ms dt cap");
+    const float before_invalid_elapsed = model.scroll();
+    expect_near(model.advance_cruise(
+        std::numeric_limits<float>::quiet_NaN()), 0.0f, 0.0f,
+        "NaN elapsed time must fail closed");
+    expect_near(model.scroll(), before_invalid_elapsed, 0.0f,
+        "invalid elapsed time must not move the canvas");
+
+    model.scroll_by(1.0f);
+    expect(model.auto_scroll_owner() == mv::ComicAutoScrollOwner::None
+            && model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::ManualInput,
+        "manual scrolling must pause cruise ownership");
+
+    const mv::ComicScrollMetrics metrics = model.scroll_metrics();
+    model.set_scroll_from_scrollbar(metrics.max_scroll - 1.0f);
+    expect(model.start_cruise(), "cruise must restart immediately before the end");
+    expect_near(model.advance_cruise(0.1f), 1.0f, 0.001f,
+        "cruise must clamp its final advance to the canvas end");
+    expect(model.auto_scroll_owner() == mv::ComicAutoScrollOwner::None
+            && model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::Boundary,
+        "reaching the final canvas boundary must stop cruise");
+
+    model.set_scroll_from_scrollbar(0.0f);
+    expect(model.start_cruise(),
+        "cruise must restart before the current book becomes empty");
+    model.set_pages({});
+    expect(!model.enabled()
+            && model.auto_scroll_owner() == mv::ComicAutoScrollOwner::None
+            && model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::EmptyBook,
+        "an empty current book must disable the reader and stop cruise");
+}
+
+void test_autoscroll_ownership_and_middle_curve() {
+    constexpr float dpi_scales[] = {1.0f, 1.75f, 2.0f};
+    for (const float scale : dpi_scales) {
+        const float dead_zone = mv::kComicMiddleDeadZoneDip * scale;
+        expect_near(mv::ComicReaderModel::middle_autoscroll_velocity_from_offset(
+            dead_zone, scale), 0.0f, 0.0f,
+            "the 96/168/192 DPI dead zone must suppress pointer jitter");
+        const float downward =
+            mv::ComicReaderModel::middle_autoscroll_velocity_from_offset(
+                dead_zone + 10.0f * scale, scale);
+        const float farther =
+            mv::ComicReaderModel::middle_autoscroll_velocity_from_offset(
+                dead_zone + 20.0f * scale, scale);
+        const float upward =
+            mv::ComicReaderModel::middle_autoscroll_velocity_from_offset(
+                -dead_zone - 10.0f * scale, scale);
+        expect(downward > 0.0f && farther > downward && upward < 0.0f,
+            "middle autoscroll must preserve direction and increase continuously");
+        expect_near(
+            mv::ComicReaderModel::middle_autoscroll_velocity_from_offset(
+                mv::kComicMaxFiniteCoordinate, scale),
+            mv::kComicMiddleMaxSpeedDipPerSecond * scale, 0.1f,
+            "middle autoscroll speed must cap in physical pixels per second");
+    }
+    expect_near(mv::ComicReaderModel::middle_autoscroll_velocity_from_offset(
+        std::numeric_limits<float>::infinity(), 1.0f), 0.0f, 0.0f,
+        "non-finite middle offsets must fail closed");
+
+    mv::ComicReaderModel model;
+    model.set_viewport({1000.0f, 500.0f, 2.0f});
+    model.set_pages(make_pages(5));
+    expect(model.enter(0), "middle autoscroll model must enter a book");
+    expect(model.start_cruise(), "cruise must own scrolling before replacement");
+    expect(model.start_middle_autoscroll(100.0f)
+            && model.auto_scroll_owner() == mv::ComicAutoScrollOwner::Middle
+            && model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::ReplacedByMiddle,
+        "starting middle autoscroll must replace cruise ownership");
+    expect(!model.start_middle_autoscroll(100.0f)
+            && model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::RepeatedMiddleClick,
+        "a repeated middle click must cancel middle autoscroll");
+    expect(model.start_middle_autoscroll(100.0f),
+        "middle autoscroll must restart after cancellation");
+    expect(model.start_cruise()
+            && model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::ReplacedByCruise,
+        "starting cruise must replace middle ownership");
+
+    expect(model.start_middle_autoscroll(100.0f),
+        "middle autoscroll must start for elapsed-time advancement");
+    expect(model.advance_middle_autoscroll(152.0f, 0.05f) > 0.0f,
+        "middle autoscroll must advance from pointer distance and elapsed time");
+    model.set_scroll_from_scrollbar(0.0f);
+    expect(model.start_middle_autoscroll(100.0f),
+        "middle autoscroll must start at the top boundary");
+    expect_near(model.advance_middle_autoscroll(0.0f, 0.05f), 0.0f, 0.0f,
+        "upward middle autoscroll must clamp at the top boundary");
+    expect(model.last_auto_scroll_cancel_reason()
+            == mv::ComicAutoScrollCancelReason::Boundary,
+        "reaching the directional boundary must cancel middle autoscroll");
+
+    expect(model.start_middle_autoscroll(100.0f),
+        "middle autoscroll must restart before invalid input");
+    model.advance_middle_autoscroll(
+        std::numeric_limits<float>::infinity(), 0.01f);
+    expect(model.last_auto_scroll_cancel_reason()
+            == mv::ComicAutoScrollCancelReason::InvalidInput,
+        "non-finite pointer input must cancel middle autoscroll fail-closed");
+
+    expect(model.start_cruise(),
+        "cruise must restart before a precise manual cancellation");
+    model.cancel_auto_scroll(mv::ComicAutoScrollCancelReason::MouseWheel);
+    model.scroll_by(10.0f);
+    model.page_down();
+    expect(model.auto_scroll_owner() == mv::ComicAutoScrollOwner::None
+            && model.last_auto_scroll_cancel_reason()
+                == mv::ComicAutoScrollCancelReason::MouseWheel,
+        "generic model scrolling after cancellation must preserve the precise reason");
+}
+
+void test_scroll_metrics_page_step_and_finite_overflow() {
+    const mv::ComicScrollMetrics empty =
+        mv::normalize_comic_scroll_metrics(0.0f, 600.0f, 0.0f);
+    expect(empty.is_valid && !empty.scrollable()
+            && empty.max_scroll == 0.0f && empty.scroll == 0.0f,
+        "a zero canvas must normalize to a finite non-scrollable state");
+    const mv::ComicScrollMetrics short_canvas =
+        mv::normalize_comic_scroll_metrics(400.0f, 600.0f, 200.0f);
+    expect(short_canvas.is_valid && !short_canvas.scrollable()
+            && short_canvas.scroll == 0.0f,
+        "a short canvas must clamp scroll to zero");
+    const mv::ComicScrollMetrics long_canvas =
+        mv::normalize_comic_scroll_metrics(1.0e30f, 1000.0f, 5.0e29f);
+    expect(long_canvas.is_valid && long_canvas.scrollable()
+            && std::isfinite(long_canvas.max_scroll)
+            && std::isfinite(long_canvas.scroll),
+        "a very long finite canvas must normalize without overflow");
+    expect(!mv::normalize_comic_scroll_metrics(
+        std::numeric_limits<float>::infinity(), 1.0f, 0.0f).is_valid,
+        "infinite scroll metrics must fail closed");
+    expect(!mv::normalize_comic_scroll_metrics(
+        1000.0f, 500.0f,
+        std::numeric_limits<float>::quiet_NaN()).is_valid,
+        "NaN scroll metrics must fail closed");
+
+    mv::ComicReaderModel model;
+    model.set_viewport({1000.0f, 500.0f, 1.0f});
+    model.set_pages(make_pages(5));
+    expect(model.enter(0), "scroll business model must enter a long canvas");
+    model.set_scroll_from_scrollbar(750.0f);
+    model.scrollbar_page_step(mv::ComicScrollDirection::Forward);
+    expect_near(model.scroll(), 1250.0f, 0.001f,
+        "track-after business input must step exactly one viewport");
+    model.scrollbar_page_step(mv::ComicScrollDirection::Backward);
+    expect_near(model.scroll(), 750.0f, 0.001f,
+        "track-before business input must step exactly one viewport");
+
+    const float before_invalid = model.scroll();
+    model.set_scroll_from_scrollbar(std::numeric_limits<float>::infinity());
+    expect_near(model.scroll(), before_invalid, 0.0f,
+        "a non-finite renderer mapping must leave model scroll unchanged");
+
+    model.set_viewport({
+        mv::kComicMaxFiniteCoordinate,
+        mv::kComicMaxFiniteCoordinate,
+        mv::kComicMaxFiniteCoordinate});
+    model.set_pages({
+        {L"overflow", 1, std::numeric_limits<std::uint32_t>::max(), false}});
+    const auto page = model.geometry(0);
+    expect(page.has_value() && std::isfinite(page->left)
+            && std::isfinite(page->width) && std::isfinite(page->height)
+            && std::isfinite(model.total_height()),
+        "finite arithmetic overflow must saturate to finite model geometry");
+}
+
 void test_large_library_materializes_only_request_window() {
     mv::ComicReaderModel model;
     model.set_viewport({1000.0f, 500.0f, 1.0f});
@@ -298,6 +533,10 @@ int main() {
         test_removed_anchor_selects_successor_and_empty_disables();
         test_scroll_commands_and_directional_request_window();
         test_decode_update_preserves_anchor();
+        test_page_status_and_change_event();
+        test_cruise_speed_elapsed_cap_and_boundaries();
+        test_autoscroll_ownership_and_middle_curve();
+        test_scroll_metrics_page_step_and_finite_overflow();
         test_large_library_materializes_only_request_window();
         test_lru_obeys_comic_and_application_soft_limits();
         test_production_app_binds_virtual_window_and_lru();
