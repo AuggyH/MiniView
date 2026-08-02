@@ -675,13 +675,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_anim_thumb.Reset();
                 KillTimer(hwnd, 4);
                 m_anim_timer = 0;
-                // Execute pending action
-                switch (m_anim_action) {
-                case ACT_ENTER_IMAGE: open_image(m_index.path_at(m_grid_sel)); break;
-                case ACT_EXIT_GRID:   toggle_grid(); break;
-                case ACT_QUIT:        DestroyWindow(hwnd); return 0;
-                }
-                m_anim_action = ACT_NONE;
             }
             m_window.invalidate();
         }
@@ -1085,20 +1078,27 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDBLCLK:
         if (m_animating) return 0;  // TODO: re-enable interrupt
         if (m_grid_mode) {
-            if (grid_click(GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false, false)) {
-                m_from_grid = true;
-                start_transition(hwnd, true);
-                m_anim_action = ACT_ENTER_IMAGE;
-                begin_animation(hwnd);
+            GridEntryRouteState route_state;
+            route_state.grid_mode = true;
+            route_state.animating = m_animating;
+            route_state.selected_index = m_grid_sel;
+            route_state.hit_index = grid_hit_test(
+                GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            route_state.item_count = static_cast<int>(m_index.size());
+            const auto request = route_grid_entry(
+                GridEntryTrigger::DoubleClick, route_state);
+            if (request) {
+                select_item(request->index, false, false);
+                enter_grid_image(hwnd, *request);
             }
             return 0;
         }
-        if (m_has_image) {
+        if (route_grid_exit(GridExitTrigger::DoubleClick,
+                GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
             m_from_grid = false;
             start_transition(hwnd, false);
             begin_animation(hwnd);
             toggle_grid();
-            m_anim_action = ACT_NONE;
             return 0;
         }
         return 0;
@@ -1155,36 +1155,40 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         switch (wp) {
         case VK_ESCAPE:
             if (m_animating) return 0;  // TODO: re-enable interrupt
-            if (m_from_grid) {
+            if (route_grid_exit(GridExitTrigger::Escape,
+                    GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
                 m_from_grid = false;
                 start_transition(hwnd, false);
                 begin_animation(hwnd);
                 toggle_grid();
-                m_anim_action = ACT_NONE;
                 return 0;
             }
             if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
             return 0;
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
-        case VK_SPACE:
+        case VK_SPACE: {
             if (m_animating) return 0;  // TODO: re-enable interrupt
-            if (m_from_grid) {
+            if (route_grid_exit(GridExitTrigger::Space,
+                    GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
                 m_from_grid = false;
                 start_transition(hwnd, false);
                 begin_animation(hwnd);
                 toggle_grid();
-                m_anim_action = ACT_NONE;
                 return 0;
             }
-            if (m_grid_mode && m_grid_sel >= 0) {
-                start_transition(hwnd, true);
-                m_from_grid = true;
-                m_anim_action = ACT_ENTER_IMAGE;
-                begin_animation(hwnd);
-                m_window.invalidate();
+            GridEntryRouteState route_state;
+            route_state.grid_mode = m_grid_mode;
+            route_state.animating = m_animating;
+            route_state.selected_index = m_grid_sel;
+            route_state.item_count = static_cast<int>(m_index.size());
+            const auto request = route_grid_entry(
+                GridEntryTrigger::Space, route_state);
+            if (request) {
+                enter_grid_image(hwnd, *request);
                 return 0;
             }
             return 0;  // in normal image mode, do nothing
+        }
         case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
         case VK_RETURN:
             if (m_has_image || m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
@@ -1324,10 +1328,23 @@ bool App::open_image(const std::wstring& path) {
         // that root index intact when opening one of its existing entries.
         int indexed_position = m_index.index_of(path);
 
-        auto bitmap = get_preloaded(path);
-        if (!bitmap) bitmap = m_decoder.decode(path);
-        bitmap = m_decoder.materialize(bitmap.Get());
-        if (!m_renderer.upload_image(bitmap.Get())) return false;
+        ComPtr<IWICBitmapSource> bitmap;
+        if (!run_image_load_stages(
+                [this, &path]() {
+                    auto decoded = get_preloaded(path);
+                    if (!decoded) decoded = m_decoder.decode(path);
+                    return decoded;
+                },
+                [this](const ComPtr<IWICBitmapSource>& decoded) {
+                    return m_decoder.materialize(decoded.Get());
+                },
+                [this, &bitmap](const ComPtr<IWICBitmapSource>& materialized) {
+                    bitmap = materialized;
+                    return m_renderer.upload_image(bitmap.Get());
+                })) {
+            update_title();
+            return false;
+        }
 
         // Exit grid mode if active (file dialog, drag-drop, IPC)
         if (m_grid_mode) {
@@ -2059,26 +2076,102 @@ void App::create_file_copies() {
 
 // ── Fullscreen ───────────────────────────────────────────────
 
-void App::start_transition(HWND /*hwnd*/, bool forward) {
+std::optional<GridTransitionRect> App::grid_transition_source_rect(int index) const {
+    const int total = static_cast<int>(m_index.size());
+    if (index < 0 || index >= total
+        || static_cast<size_t>(index) >= m_grid_dims.size()
+        || static_cast<size_t>(index) >= m_grid_item_x.size()
+        || static_cast<size_t>(index) >= m_grid_item_w.size()) {
+        return std::nullopt;
+    }
+
+    const auto row = std::find_if(m_grid_rows.begin(), m_grid_rows.end(),
+        [index](const GridRow& candidate) {
+            return index >= candidate.start_idx && index < candidate.end_idx;
+        });
+    if (row == m_grid_rows.end()) return std::nullopt;
+
+    const auto [image_width, image_height] =
+        m_grid_dims[static_cast<size_t>(index)];
+    GridTransitionGeometry geometry;
+    geometry.request_index = index;
+    geometry.item_count = total;
+    geometry.row_start_index = row->start_idx;
+    geometry.row_end_index = row->end_idx;
+    geometry.row_y = row->row_y;
+    geometry.row_height = row->row_h;
+    geometry.item_x = m_grid_item_x[static_cast<size_t>(index)];
+    geometry.item_width = m_grid_item_w[static_cast<size_t>(index)];
+    geometry.image_width = image_width;
+    geometry.image_height = image_height;
+    geometry.thumb_padding = m_thumb_pad;
+    geometry.toolbar_height = m_toolbar_h;
+    geometry.scroll_y = m_grid_scroll_y;
+    return calculate_grid_transition_rect(geometry);
+}
+
+bool App::capture_grid_transition_source(int index) {
+    m_anim_src = {};
+    m_anim_dst = {};
+    if (!m_grid_mode || index < 0
+        || index >= static_cast<int>(m_index.size())) {
+        return false;
+    }
+
+    const float dpi_scale =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+    const int grid_area_width = std::max(1,
+        static_cast<int>(m_renderer.target_size().width)
+            - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+    const uint64_t dimension_generation =
+        m_thumb_dimension_generation.load(std::memory_order_relaxed);
+    const GridRebuildReason rebuild_reason = classify_grid_rebuild_reason(
+        m_grid_layout_dirty, m_grid_layout_width != grid_area_width,
+        m_grid_dims.size() != m_index.size(),
+        dimension_generation != m_grid_layout_generation);
+    if (rebuild_reason != GridRebuildReason::None)
+        rebuild_grid_layout(grid_area_width, rebuild_reason);
+
+    const auto rect = grid_transition_source_rect(index);
+    if (!rect) return false;
+    m_anim_src = {rect->left, rect->top, rect->right, rect->bottom};
+    return true;
+}
+
+void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
     if (m_animating) return;
     m_anim_forward = forward;
     m_anim_thumb.Reset();
+    m_anim_iw = 0.0f;
+    m_anim_ih = 0.0f;
     m_last_cached_sel = -1;  // force m_anim_src recalculation on next grid_render
 
-    int thumb_idx = forward
-        ? ((m_grid_sel >= 0) ? m_grid_sel : m_grid_saved_idx)
-        : ((m_current_idx >= 0) ? m_current_idx : m_grid_saved_idx);
-    auto it = m_thumb_d2d.find(thumb_idx);
-    if (it != m_thumb_d2d.end()) {
-        m_anim_thumb = it->second;
-    } else if (thumb_idx >= 0 && thumb_idx < static_cast<int>(m_index.size())) {
-        auto wic = m_decoder.decode_scaled(m_index.path_at(thumb_idx), m_thumb_size);
-        if (wic) {
-            ComPtr<ID2D1Bitmap1> d2d;
-            if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d)) && d2d)
-                m_anim_thumb = d2d;
-        }
+    bool source_captured = !forward;
+    if (forward) {
+        (void)run_best_effort_transition_capture(
+            [this, request_index, &source_captured]() {
+                source_captured = capture_grid_transition_source(request_index);
+            });
     }
+
+    int thumb_idx = forward
+        ? request_index
+        : ((m_current_idx >= 0) ? m_current_idx : m_grid_saved_idx);
+    (void)run_best_effort_transition_capture([this, thumb_idx]() {
+        auto it = m_thumb_d2d.find(thumb_idx);
+        if (it != m_thumb_d2d.end()) {
+            m_anim_thumb = it->second;
+        } else if (thumb_idx >= 0 && thumb_idx < static_cast<int>(m_index.size())) {
+            auto wic = m_decoder.decode_scaled(m_index.path_at(thumb_idx), m_thumb_size);
+            if (wic) {
+                ComPtr<ID2D1Bitmap1> d2d;
+                if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d)) && d2d)
+                    m_anim_thumb = d2d;
+            }
+        }
+    });
+    if (!source_captured) m_anim_thumb.Reset();
 
     // Pre-store target image size from thumbnail metadata (avoids stale image_size())
     if (forward && thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
@@ -2107,6 +2200,23 @@ void App::begin_animation(HWND hwnd) {
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
     m_anim_timer = SetTimer(hwnd, 4, 16, nullptr);
+}
+
+bool App::enter_grid_image(HWND hwnd, const GridEntryRequest& request) {
+    return run_grid_entry(
+        request,
+        GridEntryTransactionState{m_grid_mode, m_from_grid, m_animating},
+        [this, hwnd](int index) {
+            m_grid_sel = index;
+            start_transition(hwnd, true, index);
+        },
+        [this](int index) {
+            return open_image(m_index.path_at(static_cast<size_t>(index)));
+        },
+        [this, hwnd]() {
+            begin_animation(hwnd);
+            m_window.invalidate();
+        });
 }
 
 void App::toggle_fullscreen(HWND hwnd) {
@@ -3028,24 +3138,10 @@ void App::grid_render() {
 
     if (m_animating || (m_grid_sel >= 0 && m_grid_sel != m_last_cached_sel)) {
         m_last_cached_sel = m_grid_sel;
-        if (m_grid_sel >= 0 && m_grid_sel < total && m_grid_cols > 0) {
-            int row_index = m_grid_sel / m_grid_cols;
-            if (row_index < static_cast<int>(rows.size())) {
-                const auto& row = rows[static_cast<size_t>(row_index)];
-                float width = m_grid_item_w[static_cast<size_t>(m_grid_sel)];
-                float center_x = m_grid_item_x[static_cast<size_t>(m_grid_sel)]
-                    + m_thumb_pad + width * 0.5f;
-                float center_y = static_cast<float>(m_toolbar_h + row.row_y
-                    - m_grid_scroll_y) + row.row_h * 0.5f;
-                auto [raw_w, raw_h] = m_grid_dims[static_cast<size_t>(m_grid_sel)];
-                float image_w = raw_w == 0 ? 1.0f : static_cast<float>(raw_w);
-                float image_h = raw_h == 0 ? 1.0f : static_cast<float>(raw_h);
-                float source_h = std::sqrt(width * row.row_h / (image_w / image_h));
-                float source_w = source_h * image_w / image_h;
-                m_anim_src = {center_x - source_w * 0.5f, center_y - source_h * 0.5f,
-                    center_x + source_w * 0.5f, center_y + source_h * 0.5f};
-            }
-        }
+        const auto rect = grid_transition_source_rect(m_grid_sel);
+        m_anim_src = rect
+            ? D2D1_RECT_F{rect->left, rect->top, rect->right, rect->bottom}
+            : D2D1_RECT_F{};
     }
 
     float target_width = static_cast<float>(m_renderer.target_size().width);
