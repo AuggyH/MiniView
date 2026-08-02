@@ -40,8 +40,9 @@ private:
     void    fit_to_window();
     void    zoom_at_center(float factor);
     void    toggle_fullscreen(HWND hwnd);
-    void    start_transition(HWND hwnd, bool forward);
+    void    start_transition(HWND hwnd, bool forward, int request_index = -1);
     void    begin_animation(HWND hwnd);
+    bool    enter_grid_image(HWND hwnd, const GridEntryRequest& request);
     void    toggle_recursive();
     void    render_frame();
     bool    synchronize_renderer_generation();
@@ -107,6 +108,8 @@ private:
     void    grid_navigate(int dir, bool shift);
     void    grid_ensure_visible();
     void    clamp_grid_scroll();
+    std::optional<GridTransitionRect> grid_transition_source_rect(int index) const;
+    bool    capture_grid_transition_source(int index);
     void    rebuild_grid_layout(int grid_area_width, GridRebuildReason reason);
     void    grid_render();
     void    handle_scrollbar_click(HWND hwnd, int mx, int my);
@@ -191,8 +194,6 @@ private:
     D2D1_RECT_F m_anim_dst = {};
     bool  m_anim_forward = true;
     float m_anim_iw = 1, m_anim_ih = 1;  // target image size for animation
-    enum AnimAction { ACT_NONE, ACT_ENTER_IMAGE, ACT_EXIT_GRID, ACT_QUIT };
-    AnimAction m_anim_action = ACT_NONE;
     int   m_panel_width = 280;
     UINT_PTR m_grid_timer = 0;
     int   m_toolbar_h = 28;
