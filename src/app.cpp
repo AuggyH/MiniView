@@ -2173,7 +2173,7 @@ ComicControlsRenderInput App::comic_controls_snapshot() const {
         m_comic_scrollbar_dragging,
         page.anchored_index,
         page.total_pages,
-        m_comic_current_filename,
+        m_comic_page_badge,
         transient,
         m_comic_transient_text,
         m_comic_reader.middle_autoscroll_active(),
