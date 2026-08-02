@@ -91,6 +91,10 @@ inline bool route_grid_exit(
     return state.from_grid;
 }
 
+inline void finish_grid_scroll_pause(bool& scroll_active) noexcept {
+    scroll_active = false;
+}
+
 inline std::optional<GridTransitionRect> calculate_grid_transition_rect(
     const GridTransitionGeometry& geometry) {
     if (geometry.request_index < 0

@@ -86,6 +86,14 @@ int main() {
             && !mv::route_grid_exit(mv::GridExitTrigger::DoubleClick, exit_state),
         "all mode-switch inputs must remain ignored during animation");
 
+    bool scroll_active = true;
+    mv::finish_grid_scroll_pause(scroll_active);
+    expect(!scroll_active,
+        "cancelling the grid scroll timer must resume visible thumbnail scheduling");
+    mv::finish_grid_scroll_pause(scroll_active);
+    expect(!scroll_active,
+        "finishing an already idle scroll pause must be idempotent");
+
     mv::GridTransitionGeometry geometry;
     geometry.request_index = 2;
     geometry.item_count = 3;

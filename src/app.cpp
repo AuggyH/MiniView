@@ -646,7 +646,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
-            m_scroll_active = false;
+            finish_grid_scroll_pause(m_scroll_active);
             KillTimer(hwnd, 1);
             m_grid_timer = 0;
             m_window.invalidate();
@@ -1270,6 +1270,7 @@ void App::open_directory(const std::wstring& path) {
         KillTimer(m_window.handle(), m_grid_timer);
         m_grid_timer = 0;
     }
+    finish_grid_scroll_pause(m_scroll_active);
 
     m_grid_mode = false;
     m_from_grid = false;
@@ -1353,6 +1354,7 @@ bool App::open_image(const std::wstring& path) {
             m_grid_mode = false;
             m_from_grid = true;  // Esc/Space will return to grid
             if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
+            finish_grid_scroll_pause(m_scroll_active);
             stop_thumb_loader();
         }
         update_content_viewport(false);
@@ -2616,6 +2618,7 @@ void App::toggle_grid() {
         m_grid_scroll_saved = m_grid_scroll_y;
         m_grid_saved_idx = m_grid_sel;
         if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
+        finish_grid_scroll_pause(m_scroll_active);
         // Don't stop thumb loader or clear cache — reuse on re-entry
         update_title();
     }
