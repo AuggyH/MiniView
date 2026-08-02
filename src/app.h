@@ -87,6 +87,7 @@ private:
     void    toggle_grid();
     void    set_sort_mode(SortMode mode);
     void    toggle_thumb_square();
+    bool    toggle_grid_labels();
     void    toggle_info();
     bool    toolbar_visible() const;
     int     visible_panel_width() const;

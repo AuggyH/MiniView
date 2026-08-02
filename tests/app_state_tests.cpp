@@ -324,6 +324,23 @@ int main() {
             == GridRebuildReason::BackgroundDimensions,
         "dimension generation alone should be a background rebuild");
 
+    bool show_labels = true;
+    bool label_layout_dirty = false;
+    expect(mv::apply_grid_label_toggle(
+            true, show_labels, label_layout_dirty)
+            && !show_labels && label_layout_dirty,
+        "grid label toggle must hide labels and request a structural rebuild");
+    label_layout_dirty = false;
+    expect(mv::apply_grid_label_toggle(
+            true, show_labels, label_layout_dirty)
+            && show_labels && label_layout_dirty,
+        "a second grid label toggle must restore labels and rebuild layout");
+    label_layout_dirty = false;
+    expect(!mv::apply_grid_label_toggle(
+            false, show_labels, label_layout_dirty)
+            && show_labels && !label_layout_dirty,
+        "big-image mode must ignore the label toggle without changing layout state");
+
     int background_scroll = mv::reconcile_grid_scroll_after_rebuild(
         GridRebuildReason::BackgroundDimensions, 900, true,
         100, 220, 2000, 500);

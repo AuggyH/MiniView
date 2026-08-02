@@ -1833,6 +1833,9 @@ Assert-Absent $appSourcePath "(?m)^\s*case 'G':" 'G must remain removed from pro
 Assert-Present $appSourcePath '(?s)case VK_F11:\s+toggle_fullscreen\(hwnd\);\s+return 0;' 'F11 must continue toggling fullscreen'
 Assert-Present $appSourcePath '(?s)case VK_RETURN:.*?toggle_fullscreen\(hwnd\);\s+return 0;' 'Enter must continue toggling fullscreen in browsing modes'
 Assert-Present $appSourcePath "(?s)case 'I':\s+toggle_info\(\);\s+return 0;" 'I must continue toggling the complete information panel'
+Assert-Present $appSourcePath "(?s)case 'L':\s+return toggle_grid_labels\(\) \? 0 : -1;" 'L must route through the shared grid label command'
+Assert-Present $appSourcePath '(?s)case IDM_LABELS:\s+toggle_grid_labels\(\);\s+return 0;' 'the label menu command must use the shared grid label command'
+Assert-Present $appSourcePath '(?s)AddOwnerItem\(popup,\s*IDM_LABELS,.*?!m_grid_mode,\s*m_show_labels\);' 'the View menu must expose grid labels with disabled and checked state'
 Assert-SwitchCaseActionMutationGuard $appSourceContent `
     'VK_ESCAPE' 'VK_F11' `
     'route_grid_exit\(GridExitTrigger::Escape' 'toggle_grid\(\);' `

@@ -188,6 +188,14 @@ inline GridRebuildReason classify_grid_rebuild_reason(
     return GridRebuildReason::None;
 }
 
+inline bool apply_grid_label_toggle(
+    bool grid_mode, bool& show_labels, bool& layout_dirty) {
+    if (!grid_mode) return false;
+    show_labels = !show_labels;
+    layout_dirty = true;
+    return true;
+}
+
 inline bool is_image_zoomed(float scale, float fit_scale) {
     return fit_scale > 0.0f && scale > fit_scale * 1.02f;
 }
