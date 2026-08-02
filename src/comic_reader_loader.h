@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -38,7 +39,10 @@ struct ComicLoadResult {
 
 class ComicReaderLoader {
 public:
-    ComicReaderLoader() = default;
+    using DecodeFunction =
+        std::function<ComicLoadResult(const ComicLoadRequest&)>;
+
+    explicit ComicReaderLoader(DecodeFunction decode = {});
     ~ComicReaderLoader();
 
     ComicReaderLoader(const ComicReaderLoader&) = delete;
@@ -48,13 +52,16 @@ public:
     void stop();
     void replace_requests(std::vector<ComicLoadRequest> requests);
     std::vector<ComicLoadResult> take_ready();
+    static std::size_t estimated_cache_bytes(
+        std::uint32_t width, std::uint32_t height) noexcept;
     bool running() const noexcept {
-        return m_running.load(std::memory_order_relaxed);
+        return m_running.load(std::memory_order_acquire);
     }
 
 private:
     static bool same_request(
         const ComicLoadRequest& left, const ComicLoadRequest& right) noexcept;
+    bool requested_locked(const ComicLoadRequest& request) const;
     void worker();
 
     HWND m_owner = nullptr;
@@ -63,9 +70,12 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::deque<ComicLoadRequest> m_queue;
+    std::vector<ComicLoadRequest> m_requested;
     std::vector<ComicLoadResult> m_ready;
     ComicLoadRequest m_inflight;
     bool m_has_inflight = false;
+    std::uint64_t m_latest_generation = 0;
+    DecodeFunction m_decode;
     std::atomic<bool> m_running{false};
 };
 
