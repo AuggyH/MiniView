@@ -432,6 +432,70 @@ function Assert-Absent {
     if ($content -match $Pattern) { $failures.Add($FailureMessage) }
 }
 
+function Get-SwitchCaseBlock {
+    param(
+        [string]$Content,
+        [string]$CaseLabel,
+        [string]$NextCaseLabel
+    )
+    $pattern = '(?ms)^\s*case\s+' + [regex]::Escape($CaseLabel) +
+        '\s*:\s*(?<Body>.*?)(?=^\s*case\s+' +
+        [regex]::Escape($NextCaseLabel) + '\s*:)'
+    return [regex]::Match($Content, $pattern)
+}
+
+function Test-SwitchCaseAction {
+    param(
+        [string]$Content,
+        [string]$CaseLabel,
+        [string]$NextCaseLabel,
+        [string]$RoutePattern,
+        [string]$ActionPattern
+    )
+    $caseMatch = Get-SwitchCaseBlock $Content $CaseLabel $NextCaseLabel
+    if (-not $caseMatch.Success) { return $false }
+    $body = $caseMatch.Groups['Body'].Value
+    return [regex]::IsMatch($body, $RoutePattern) -and
+        [regex]::IsMatch($body, $ActionPattern)
+}
+
+function Assert-SwitchCaseActionMutationGuard {
+    param(
+        [string]$Content,
+        [string]$CaseLabel,
+        [string]$NextCaseLabel,
+        [string]$RoutePattern,
+        [string]$ActionPattern,
+        [string]$FailureMessage
+    )
+    $caseMatch = Get-SwitchCaseBlock $Content $CaseLabel $NextCaseLabel
+    if (-not $caseMatch.Success) {
+        $failures.Add("$FailureMessage (case block missing)")
+        return
+    }
+    if (-not (Test-SwitchCaseAction $Content $CaseLabel $NextCaseLabel `
+            $RoutePattern $ActionPattern)) {
+        $failures.Add($FailureMessage)
+        return
+    }
+
+    $bodyGroup = $caseMatch.Groups['Body']
+    $actionMatch = [regex]::Match($bodyGroup.Value, $ActionPattern)
+    if (-not $actionMatch.Success) {
+        $failures.Add("$FailureMessage (mutation target missing)")
+        return
+    }
+    $mutatedBody = $bodyGroup.Value.Remove(
+        $actionMatch.Index, $actionMatch.Length)
+    $mutatedContent = $Content.Substring(0, $bodyGroup.Index) +
+        $mutatedBody +
+        $Content.Substring($bodyGroup.Index + $bodyGroup.Length)
+    if (Test-SwitchCaseAction $mutatedContent $CaseLabel $NextCaseLabel `
+            $RoutePattern $ActionPattern) {
+        $failures.Add("$FailureMessage (accepted removed production action)")
+    }
+}
+
 function ConvertFrom-Utf8Base64 {
     param([string]$Value)
     return [System.Text.Encoding]::UTF8.GetString(
@@ -1755,6 +1819,8 @@ if ($RegistryConcurrencyWorker) {
 $areaPathLabelPrefix = "$([char]0x533a)$([char]0x57df)$([char]0x8def)$([char]0x5f84)$([char]0x6807)$([char]0x7b7e)$([char]0x7531)"
 $architecturePath = Join-Path $RepositoryRoot 'docs/ARCHITECTURE.md'
 $architectureContent = Get-Content -Raw -Encoding UTF8 -LiteralPath $architecturePath
+$appSourcePath = Join-Path $RepositoryRoot 'src/app.cpp'
+$appSourceContent = Get-Content -Raw -Encoding UTF8 -LiteralPath $appSourcePath
 
 Assert-Present (Join-Path $RepositoryRoot 'build.bat') '(?s)copy /Y .*?if errorlevel 1 exit /b 1\s+echo BUILD_OK' 'build.bat must stop before BUILD_OK when the candidate copy fails'
 Assert-Absent (Join-Path $RepositoryRoot '.github/labeler.yml') '(?m)^(documentation|ci|tests):' 'path labeler must not manage type labels'
@@ -1763,6 +1829,22 @@ Assert-Present (Join-Path $RepositoryRoot 'docs/MULTI_FORMAT_RESEARCH.md') 'Prod
 Assert-Present (Join-Path $RepositoryRoot 'docs/MULTI_FORMAT_RESEARCH.md') 'Issue #4' 'format research must preserve the Issue #4 implementation gate'
 Assert-Present (Join-Path $RepositoryRoot 'README.md') '#1A1A1A' 'README must use the authoritative background color'
 Assert-Absent (Join-Path $RepositoryRoot 'README.md') '#1A1A1E|`F2`' 'README must not advertise stale color or F2 behavior'
+Assert-Absent $appSourcePath "(?m)^\s*case 'G':" 'G must remain removed from production key routing'
+Assert-Present $appSourcePath '(?s)case VK_F11:\s+toggle_fullscreen\(hwnd\);\s+return 0;' 'F11 must continue toggling fullscreen'
+Assert-Present $appSourcePath '(?s)case VK_RETURN:.*?toggle_fullscreen\(hwnd\);\s+return 0;' 'Enter must continue toggling fullscreen in browsing modes'
+Assert-Present $appSourcePath "(?s)case 'I':\s+toggle_info\(\);\s+return 0;" 'I must continue toggling the complete information panel'
+Assert-SwitchCaseActionMutationGuard $appSourceContent `
+    'VK_ESCAPE' 'VK_F11' `
+    'route_grid_exit\(GridExitTrigger::Escape' 'toggle_grid\(\);' `
+    'Escape case must continue returning big-image mode to the grid'
+Assert-SwitchCaseActionMutationGuard $appSourceContent `
+    'WM_LBUTTONDBLCLK' 'WM_IME_STARTCOMPOSITION' `
+    'route_grid_exit\(GridExitTrigger::DoubleClick' 'toggle_grid\(\);' `
+    'big-image double-click case must continue returning to the grid'
+Assert-SwitchCaseActionMutationGuard $appSourceContent `
+    'VK_SPACE' 'VK_BACK' `
+    'route_grid_exit\(GridExitTrigger::Space' 'toggle_grid\(\);' `
+    'Space case must continue returning big-image mode to the grid'
 Assert-Present $architecturePath '3[^\r\n]*WIC' 'architecture must match the three-entry preload cache'
 Assert-Absent $architecturePath '6[^\r\n]*WIC' 'architecture must not advertise a six-entry preload cache'
 if (-not (Test-NoLegacyMetadataLog $architectureContent)) {
