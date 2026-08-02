@@ -2117,8 +2117,7 @@ public:
         case ComicAppCancelTrigger::EmptyBook:
             reason = ComicAutoScrollCancelReason::EmptyBook; break;
         case ComicAppCancelTrigger::ViewportChanged:
-            // Updated to the dedicated Model reason after its reviewed fix merges.
-            reason = ComicAutoScrollCancelReason::ManualInput; break;
+            reason = ComicAutoScrollCancelReason::ViewportChanged; break;
         case ComicAppCancelTrigger::InvalidInput:
             reason = ComicAutoScrollCancelReason::InvalidInput; break;
         }
