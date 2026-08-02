@@ -94,6 +94,17 @@ private:
     void    update_comic_viewport();
     void    adjust_comic_width(float delta);
     void    sync_comic_current();
+    ComicControlsRenderInput comic_controls_snapshot() const;
+    void    toggle_comic_cruise();
+    void    set_comic_cruise_speed(int index);
+    void    change_comic_cruise_speed(int delta);
+    void    cancel_comic_auto_scroll(ComicAutoScrollCancelReason reason);
+    void    reset_comic_controls(ComicAutoScrollCancelReason reason);
+    void    ensure_comic_timer();
+    void    stop_comic_timer_if_idle();
+    void    handle_comic_timer(HWND hwnd);
+    void    show_comic_status(const std::wstring& text);
+    void    finish_comic_scrollbar_drag();
     void    request_comic_pages();
     void    apply_comic_results();
     void    trim_comic_cache();
@@ -193,6 +204,20 @@ private:
     std::vector<ComicPageEntry> m_comic_pages;
     std::uint64_t m_comic_generation = 1;
     int m_comic_fallback_index = -1;
+    UINT_PTR m_comic_timer = 0;
+    ULONGLONG m_comic_last_tick_ms = 0;
+    ULONGLONG m_comic_transient_until_ms = 0;
+    ComicTransientOverlayKind m_comic_transient_kind =
+        ComicTransientOverlayKind::None;
+    std::wstring m_comic_current_filename;
+    std::wstring m_comic_transient_status;
+    bool m_comic_scrollbar_dragging = false;
+    bool m_comic_scrollbar_hover = false;
+    float m_comic_scrollbar_grab_offset_y = 0.0f;
+    float m_comic_autoscroll_anchor_x = 0.0f;
+    float m_comic_autoscroll_anchor_y = 0.0f;
+    float m_comic_autoscroll_pointer_x = 0.0f;
+    float m_comic_autoscroll_pointer_y = 0.0f;
 
     // Metadata extraction runs off the UI/render thread.
     std::thread m_metadata_thread;

@@ -28,6 +28,9 @@ constexpr UINT WM_THUMB_READY = WM_APP + 1;
 constexpr UINT WM_METADATA_READY = WM_APP + 2;
 constexpr UINT WM_RENDER_RETRY = WM_APP + 3;
 constexpr UINT WM_COMIC_READY = WM_APP + 4;
+constexpr UINT_PTR kComicTimerId = 5;
+constexpr UINT kComicTimerIntervalMs = 16;
+constexpr ULONGLONG kComicTransientDurationMs = 1000;
 
 std::size_t current_private_bytes() {
     PROCESS_MEMORY_COUNTERS_EX counters = {};
@@ -173,6 +176,7 @@ enum {
     IDM_LABELS       = 1015,
     IDM_COMIC        = 1016,
     IDM_COMIC_SEAMLESS = 1017,
+    IDM_COMIC_AUTOSCROLL = 1018,
     IDM_SORT_NAME    = 1020,
     IDM_SORT_DATE    = 1021,
     IDM_SORT_SIZE    = 1022,
@@ -182,6 +186,10 @@ enum {
     IDM_CREATE_COPY  = 1035,
     IDM_EXPLORER     = 1033,
     IDM_ABOUT        = 1040,
+    IDM_COMIC_SPEED_05 = 1041,
+    IDM_COMIC_SPEED_10 = 1042,
+    IDM_COMIC_SPEED_15 = 1043,
+    IDM_COMIC_SPEED_20 = 1044,
 };
 
 HMENU build_menu_bar() {
@@ -197,6 +205,16 @@ HMENU build_menu_bar() {
     HMENU view_menu = CreatePopupMenu();
     AppendMenuW(view_menu, MF_STRING, IDM_COMIC, L"\u6F2B\u753B\u6A21\u5F0F\tM");
     AppendMenuW(view_menu, MF_STRING, IDM_COMIC_SEAMLESS, L"\u65E0\u7F1D\u9875\u8DDD");
+    AppendMenuW(view_menu, MF_STRING, IDM_COMIC_AUTOSCROLL,
+        L"\u81EA\u52A8\u6EDA\u52A8\tP");
+    HMENU comic_speed_menu = CreatePopupMenu();
+    AppendMenuW(comic_speed_menu, MF_STRING, IDM_COMIC_SPEED_05, L"0.5x");
+    AppendMenuW(comic_speed_menu, MF_STRING, IDM_COMIC_SPEED_10, L"1.0x");
+    AppendMenuW(comic_speed_menu, MF_STRING, IDM_COMIC_SPEED_15, L"1.5x");
+    AppendMenuW(comic_speed_menu, MF_STRING, IDM_COMIC_SPEED_20, L"2.0x");
+    AppendMenuW(view_menu, MF_POPUP,
+        reinterpret_cast<UINT_PTR>(comic_speed_menu),
+        L"\u81EA\u52A8\u6EDA\u52A8\u901F\u5EA6");
     AppendMenuW(view_menu, MF_STRING, IDM_FULLSCREEN,  L"\u5168\u5C4F	F11");
     AppendMenuW(view_menu, MF_SEPARATOR, 0, nullptr);
 
@@ -466,6 +484,7 @@ int App::run(const std::wstring& initial_path) {
     }
 
     int ret = m_window.run();
+    reset_comic_controls(ComicAutoScrollCancelReason::ExitMode);
     m_comic_loader.stop();
     stop_metadata_loader();
     stop_preloader();
@@ -526,6 +545,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     }
 
+    case WM_CLOSE:
+        reset_comic_controls(ComicAutoScrollCancelReason::ExitMode);
+        return -1;
+
     case WM_COMMAND:
         if (m_delete_composition->handle_command(
                 DeleteCommandEntry::WindowCommand, LOWORD(wp)))
@@ -555,7 +578,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
-        case IDM_EXIT: DestroyWindow(hwnd); return 0;
+        case IDM_EXIT:
+            reset_comic_controls(ComicAutoScrollCancelReason::ExitMode);
+            DestroyWindow(hwnd);
+            return 0;
         case IDM_FULLSCREEN: toggle_fullscreen(hwnd); return 0;
         case IDM_COMIC: toggle_comic_reader(); return 0;
         case IDM_COMIC_SEAMLESS:
@@ -565,6 +591,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_window.invalidate();
             }
             return 0;
+        case IDM_COMIC_AUTOSCROLL:
+            if (m_comic_reader.enabled()) toggle_comic_cruise();
+            return 0;
+        case IDM_COMIC_SPEED_05: set_comic_cruise_speed(0); return 0;
+        case IDM_COMIC_SPEED_10: set_comic_cruise_speed(1); return 0;
+        case IDM_COMIC_SPEED_15: set_comic_cruise_speed(2); return 0;
+        case IDM_COMIC_SPEED_20: set_comic_cruise_speed(3); return 0;
         case IDM_RECURSIVE:
             if (can_toggle_recursive(
                     m_grid_mode, m_has_image, m_index.directory()))
@@ -703,6 +736,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_TIMER:
+        if (wp == kComicTimerId && m_comic_timer) {
+            handle_comic_timer(hwnd);
+        }
         if (wp == 1 && m_grid_mode) {
             finish_grid_scroll();
             m_window.invalidate();
@@ -793,6 +829,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_MOUSEWHEEL: {
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(ComicAutoScrollCancelReason::MouseWheel);
+        }
         float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
         POINT wheel_pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ScreenToClient(hwnd, &wheel_pt);
@@ -900,6 +939,15 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_LBUTTONDOWN: {
+        if (m_comic_reader.middle_autoscroll_active()) {
+            cancel_comic_auto_scroll(ComicAutoScrollCancelReason::LeftButton);
+            m_window.invalidate();
+            return 0;
+        }
+        if (m_comic_reader.cruise_active()) {
+            cancel_comic_auto_scroll(ComicAutoScrollCancelReason::ManualInput);
+            m_window.invalidate();
+        }
         // Title bar: buttons → menu items → drag
         {
             int ty2 = GET_Y_LPARAM(lp);
@@ -938,6 +986,34 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int ty = GET_Y_LPARAM(lp);
         if (toolbar_visible() && ty < m_toolbar_h) {
             return 0;  // title bar area already handled above
+        }
+        if (m_comic_reader.enabled()) {
+            const ComicControlsLayout controls =
+                build_comic_controls_layout(comic_controls_snapshot());
+            const ComicScrollbarHit hit = hit_test_comic_scrollbar(
+                controls.scrollbar,
+                static_cast<float>(GET_X_LPARAM(lp)),
+                static_cast<float>(ty));
+            if (hit != ComicScrollbarHit::None) {
+                cancel_comic_auto_scroll(ComicAutoScrollCancelReason::Scrollbar);
+                m_comic_scrollbar_hover = true;
+                if (hit == ComicScrollbarHit::Thumb) {
+                    m_comic_scrollbar_grab_offset_y =
+                        static_cast<float>(ty) - controls.scrollbar.thumb.top;
+                    m_comic_scrollbar_dragging = true;
+                    SetCapture(hwnd);
+                } else {
+                    const ComicScrollDirection direction =
+                        hit == ComicScrollbarHit::PageBackward
+                        ? ComicScrollDirection::Backward
+                        : ComicScrollDirection::Forward;
+                    m_comic_reader.scrollbar_page_step(direction);
+                    sync_comic_current();
+                    request_comic_pages();
+                }
+                m_window.invalidate();
+                return 0;
+            }
         }
         // Panel value click → copy + brief highlight + toast
         if (m_panel_expanded && !m_panel_clickable.empty()) {
@@ -1010,6 +1086,48 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetCapture(hwnd);
         return 0;
 
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONDBLCLK: {
+        if (!m_comic_reader.enabled()) return -1;
+        if (m_comic_reader.middle_autoscroll_active()) {
+            cancel_comic_auto_scroll(
+                ComicAutoScrollCancelReason::RepeatedMiddleClick);
+            m_window.invalidate();
+            return 0;
+        }
+        const float pointer_x = static_cast<float>(GET_X_LPARAM(lp));
+        const float pointer_y = static_cast<float>(GET_Y_LPARAM(lp));
+        ComicControlsRenderInput prospective = comic_controls_snapshot();
+        prospective.middle_autoscroll_active = true;
+        prospective.autoscroll_anchor_x = pointer_x;
+        prospective.autoscroll_anchor_y = pointer_y;
+        prospective.autoscroll_pointer_x = pointer_x;
+        prospective.autoscroll_pointer_y = pointer_y;
+        if (!build_comic_controls_layout(prospective).autoscroll.visible
+            || !m_comic_reader.start_middle_autoscroll(pointer_y)) {
+            return 0;
+        }
+        m_comic_autoscroll_anchor_x = pointer_x;
+        m_comic_autoscroll_anchor_y = pointer_y;
+        m_comic_autoscroll_pointer_x = pointer_x;
+        m_comic_autoscroll_pointer_y = pointer_y;
+        if (m_comic_transient_kind == ComicTransientOverlayKind::Status) {
+            m_comic_transient_kind = ComicTransientOverlayKind::None;
+            m_comic_transient_until_ms = 0;
+            m_comic_transient_status.clear();
+        }
+        m_comic_last_tick_ms = GetTickCount64();
+        SetCapture(hwnd);
+        if (GetCapture() != hwnd) {
+            cancel_comic_auto_scroll(ComicAutoScrollCancelReason::InvalidInput);
+            return 0;
+        }
+        SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
+        ensure_comic_timer();
+        m_window.invalidate();
+        return 0;
+    }
+
     case WM_NCMOUSEMOVE:
         // Non-client mouse move (title bar area): clear menu hover
         if (m_toolbar_active >= 0) {
@@ -1026,8 +1144,32 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             else if (reveal && mouse_y > m_toolbar_h + 8) reveal = false;
             if (reveal != m_toolbar_revealed) {
                 m_toolbar_revealed = reveal;
+                update_content_viewport(false);
                 m_window.invalidate();
             }
+        }
+        if (m_comic_reader.middle_autoscroll_active()) {
+            m_comic_autoscroll_pointer_x =
+                static_cast<float>(GET_X_LPARAM(lp));
+            m_comic_autoscroll_pointer_y =
+                static_cast<float>(GET_Y_LPARAM(lp));
+            m_window.invalidate();
+            return 0;
+        }
+        if (m_comic_scrollbar_dragging) {
+            const ComicControlsLayout controls =
+                build_comic_controls_layout(comic_controls_snapshot());
+            const ComicScrollbarDragResult mapped = map_comic_scrollbar_drag(
+                controls.scrollbar,
+                static_cast<float>(GET_Y_LPARAM(lp)),
+                m_comic_scrollbar_grab_offset_y);
+            if (mapped.valid) {
+                m_comic_reader.set_scroll_from_scrollbar(mapped.scroll_y);
+                sync_comic_current();
+                request_comic_pages();
+                m_window.invalidate();
+            }
+            return 0;
         }
         // Scrollbar drag
         if (m_scrollbar_dragging) {
@@ -1054,6 +1196,18 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                           ty2 < static_cast<int>(m_renderer.target_size().height));
             if (in_sb != m_scrollbar_hover) {
                 m_scrollbar_hover = in_sb;
+                m_window.invalidate();
+            }
+        } else if (m_comic_reader.enabled()) {
+            const ComicControlsLayout controls =
+                build_comic_controls_layout(comic_controls_snapshot());
+            const bool hovered = hit_test_comic_scrollbar(
+                controls.scrollbar,
+                static_cast<float>(GET_X_LPARAM(lp)),
+                static_cast<float>(GET_Y_LPARAM(lp)))
+                != ComicScrollbarHit::None;
+            if (hovered != m_comic_scrollbar_hover) {
+                m_comic_scrollbar_hover = hovered;
                 m_window.invalidate();
             }
         }
@@ -1132,6 +1286,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             else if (id == 0) ShowWindow(hwnd, SW_MINIMIZE);
             return 0;
         }
+        if (m_comic_scrollbar_dragging) {
+            finish_comic_scrollbar_drag();
+            m_window.invalidate();
+            return 0;
+        }
         if (m_scrollbar_dragging) {
             m_scrollbar_dragging = false;
             ReleaseCapture();
@@ -1181,13 +1340,41 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return -1;
 
     case WM_IME_ENDCOMPOSITION:
+        m_ime_composing = false;
+        return -1;
+
     case WM_KILLFOCUS:
         m_ime_composing = false;
+        cancel_comic_auto_scroll(ComicAutoScrollCancelReason::FocusLost);
+        finish_comic_scrollbar_drag();
+        return -1;
+
+    case WM_ACTIVATEAPP:
+        if (!wp) {
+            cancel_comic_auto_scroll(ComicAutoScrollCancelReason::FocusLost);
+            finish_comic_scrollbar_drag();
+        }
+        return -1;
+
+    case WM_CAPTURECHANGED:
+    case WM_CANCELMODE:
+        if (m_comic_reader.middle_autoscroll_active()) {
+            cancel_comic_auto_scroll(ComicAutoScrollCancelReason::FocusLost);
+        }
+        finish_comic_scrollbar_drag();
         return -1;
 
     case WM_KEYDOWN: {
         bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+
+        if (m_comic_reader.middle_autoscroll_active() && wp != 'P') {
+            const ComicAutoScrollCancelReason reason = wp == VK_ESCAPE
+                ? ComicAutoScrollCancelReason::Escape
+                : ComicAutoScrollCancelReason::KeyboardPage;
+            cancel_comic_auto_scroll(reason);
+            m_window.invalidate();
+        }
 
         DeleteKeyGuards delete_guards;
         delete_guards.shift_down = shift;
@@ -1203,6 +1390,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_comic_reader.enabled()) {
                 switch (wp) {
                 case '0': case VK_NUMPAD0:
+                    cancel_comic_auto_scroll(
+                        ComicAutoScrollCancelReason::KeyboardPage);
                     m_comic_reader.reset_width();
                     clear_comic_cache();
                     request_comic_pages();
@@ -1244,6 +1433,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         switch (wp) {
         case '0': case VK_NUMPAD0:
             if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
                 m_comic_reader.reset_width();
                 clear_comic_cache();
                 request_comic_pages();
@@ -1295,7 +1486,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;  // in normal image mode, do nothing
         }
-        case VK_BACK:  navigate_to(m_current_idx - 1); return 0;
+        case VK_BACK:
+            if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
+            }
+            navigate_to(m_current_idx - 1);
+            return 0;
         case VK_RETURN:
             if (m_has_image || m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
             return -1;
@@ -1308,6 +1505,21 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             toggle_info(); return 0;
         case 'M':
             toggle_comic_reader(); return 0;
+        case 'P':
+            if (m_comic_reader.enabled()) { toggle_comic_cruise(); return 0; }
+            return -1;
+        case VK_OEM_4:
+            if (m_comic_reader.enabled()) {
+                change_comic_cruise_speed(-1);
+                return 0;
+            }
+            return -1;
+        case VK_OEM_6:
+            if (m_comic_reader.enabled()) {
+                change_comic_cruise_speed(1);
+                return 0;
+            }
+            return -1;
         case 'N':
             if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Name); return 0; }
             return -1;
@@ -1322,9 +1534,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return -1;
         case VK_LEFT:
             if (m_grid_mode) { grid_navigate(-1, shift); return 0; }
+            if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
+            }
             navigate_to(m_current_idx - 1); return 0;
         case VK_RIGHT:
             if (m_grid_mode) { grid_navigate(1, shift); return 0; }
+            if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
+            }
             navigate_to(m_current_idx + 1); return 0;
         case VK_UP:
             if (m_grid_mode) { grid_navigate(-m_grid_cols, shift); return 0; }
@@ -1335,6 +1555,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_HOME:
             if (m_grid_mode) { select_item(0, shift, false); grid_ensure_visible(); return 0; }
             if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
                 m_comic_reader.home(); sync_comic_current();
                 request_comic_pages(); m_window.invalidate(); return 0;
             }
@@ -1342,18 +1564,24 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_END:
             if (m_grid_mode) { select_item(static_cast<int>(m_index.size()) - 1, shift, false); grid_ensure_visible(); return 0; }
             if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
                 m_comic_reader.end(); sync_comic_current();
                 request_comic_pages(); m_window.invalidate(); return 0;
             }
             navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
         case VK_PRIOR:
             if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
                 m_comic_reader.page_up(); sync_comic_current();
                 request_comic_pages(); m_window.invalidate(); return 0;
             }
             return -1;
         case VK_NEXT:
             if (m_comic_reader.enabled()) {
+                cancel_comic_auto_scroll(
+                    ComicAutoScrollCancelReason::KeyboardPage);
                 m_comic_reader.page_down(); sync_comic_current();
                 request_comic_pages(); m_window.invalidate(); return 0;
             }
@@ -1379,6 +1607,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_SETCURSOR:
+        if (LOWORD(lp) == HTCLIENT
+            && m_comic_reader.middle_autoscroll_active()) {
+            SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
+            return TRUE;
+        }
+        if (LOWORD(lp) == HTCLIENT && m_comic_reader.enabled()
+            && m_comic_scrollbar_hover) {
+            SetCursor(LoadCursor(nullptr, IDC_HAND));
+            return TRUE;
+        }
         if (LOWORD(lp) == HTCLIENT && m_grid_mode && m_scrollbar_hover) {
             SetCursor(LoadCursor(nullptr, IDC_HAND));
             return TRUE;
@@ -1724,6 +1962,7 @@ void App::toggle_comic_reader() {
     update_comic_viewport();
     m_comic_fallback_index = m_current_idx;
     if (!m_comic_reader.enter(m_current_idx)) return;
+    (void)m_comic_reader.take_page_change_event();
     sync_comic_current();
     request_comic_pages();
     m_window.invalidate();
@@ -1731,6 +1970,7 @@ void App::toggle_comic_reader() {
 
 bool App::leave_comic_reader(bool load_visible_page) {
     if (!m_comic_reader.enabled()) return true;
+    reset_comic_controls(ComicAutoScrollCancelReason::ExitMode);
     const int index = m_comic_reader.exit_current_index();
     std::wstring path;
     if (index >= 0 && index < static_cast<int>(m_index.size())) {
@@ -1743,6 +1983,9 @@ bool App::leave_comic_reader(bool load_visible_page) {
 }
 
 void App::rebuild_comic_pages() {
+    reset_comic_controls(m_index.empty()
+        ? ComicAutoScrollCancelReason::EmptyBook
+        : ComicAutoScrollCancelReason::ManualInput);
     clear_comic_cache();
     m_comic_fallback_index = -1;
     std::vector<ComicPageSource> pages;
@@ -1798,6 +2041,7 @@ void App::update_comic_viewport() {
 
 void App::adjust_comic_width(float delta) {
     if (!m_comic_reader.enabled()) return;
+    cancel_comic_auto_scroll(ComicAutoScrollCancelReason::ManualInput);
     m_comic_reader.set_width_factor(m_comic_reader.width_factor() + delta);
     clear_comic_cache();
     sync_comic_current();
@@ -1805,17 +2049,230 @@ void App::adjust_comic_width(float delta) {
     m_window.invalidate();
 }
 
+ComicControlsRenderInput App::comic_controls_snapshot() const {
+    const D2D1_SIZE_U target = m_renderer.target_size();
+    const float dpi = m_window.handle()
+        ? static_cast<float>(GetDpiForWindow(m_window.handle()))
+        : 96.0f;
+    const ComicScrollMetrics scroll = m_comic_reader.scroll_metrics();
+    const ComicPageStatus page = m_comic_reader.page_status();
+    ComicTransientOverlayKind transient = m_comic_transient_kind;
+    if (transient != ComicTransientOverlayKind::None
+        && GetTickCount64() >= m_comic_transient_until_ms) {
+        transient = ComicTransientOverlayKind::None;
+    }
+    return ComicControlsRenderInput{
+        {0.0f, m_renderer.content_top(), m_renderer.content_width(),
+            static_cast<float>(target.height)},
+        dpi,
+        scroll.is_valid ? scroll.total_height : 0.0f,
+        scroll.is_valid ? scroll.scroll : 0.0f,
+        m_comic_scrollbar_hover,
+        m_comic_scrollbar_dragging,
+        page.anchored_index,
+        page.total_pages,
+        m_comic_current_filename,
+        transient,
+        m_comic_transient_status,
+        m_comic_reader.middle_autoscroll_active(),
+        m_comic_autoscroll_anchor_x,
+        m_comic_autoscroll_anchor_y,
+        m_comic_autoscroll_pointer_x,
+        m_comic_autoscroll_pointer_y};
+}
+
+void App::toggle_comic_cruise() {
+    if (!m_comic_reader.enabled()) return;
+    const bool was_middle = m_comic_reader.middle_autoscroll_active();
+    const bool was_cruise = m_comic_reader.cruise_active();
+    const bool active = m_comic_reader.toggle_cruise();
+    if (was_middle && !m_comic_reader.middle_autoscroll_active()) {
+        HWND hwnd = m_window.handle();
+        if (hwnd && GetCapture() == hwnd) ReleaseCapture();
+        SetCursor(LoadCursor(nullptr, IDC_ARROW));
+    }
+    if (active) {
+        m_comic_last_tick_ms = GetTickCount64();
+        set_comic_cruise_speed(m_comic_reader.cruise_speed_index());
+    } else if (was_cruise) {
+        show_comic_status(L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 \u5DF2\u6682\u505C");
+    } else {
+        show_comic_status(L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 \u5DF2\u5230\u8FB9\u754C");
+    }
+    ensure_comic_timer();
+    m_window.invalidate();
+}
+
+void App::set_comic_cruise_speed(int index) {
+    if (!m_comic_reader.enabled()) return;
+    m_comic_reader.set_cruise_speed_index(index);
+    const wchar_t* speed = L"1.0x";
+    switch (m_comic_reader.cruise_speed_index()) {
+    case 0: speed = L"0.5x"; break;
+    case 1: speed = L"1.0x"; break;
+    case 2: speed = L"1.5x"; break;
+    case 3: speed = L"2.0x"; break;
+    }
+    std::wstring status = L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 ";
+    status += speed;
+    show_comic_status(status);
+}
+
+void App::change_comic_cruise_speed(int delta) {
+    if (!m_comic_reader.enabled()) return;
+    set_comic_cruise_speed(m_comic_reader.cruise_speed_index() + delta);
+}
+
+void App::cancel_comic_auto_scroll(ComicAutoScrollCancelReason reason) {
+    const bool was_active =
+        m_comic_reader.auto_scroll_owner() != ComicAutoScrollOwner::None;
+    const bool was_middle = m_comic_reader.middle_autoscroll_active();
+    m_comic_reader.cancel_auto_scroll(reason);
+    if (was_active
+        && m_comic_transient_kind == ComicTransientOverlayKind::Status) {
+        m_comic_transient_kind = ComicTransientOverlayKind::None;
+        m_comic_transient_until_ms = 0;
+        m_comic_transient_status.clear();
+    }
+    if (was_middle) {
+        HWND hwnd = m_window.handle();
+        if (hwnd && GetCapture() == hwnd) ReleaseCapture();
+        SetCursor(LoadCursor(nullptr, IDC_ARROW));
+    }
+    stop_comic_timer_if_idle();
+}
+
+void App::reset_comic_controls(ComicAutoScrollCancelReason reason) {
+    cancel_comic_auto_scroll(reason);
+    finish_comic_scrollbar_drag();
+    m_comic_scrollbar_hover = false;
+    m_comic_transient_kind = ComicTransientOverlayKind::None;
+    m_comic_transient_until_ms = 0;
+    m_comic_transient_status.clear();
+    m_comic_current_filename.clear();
+    m_comic_autoscroll_anchor_x = 0.0f;
+    m_comic_autoscroll_anchor_y = 0.0f;
+    m_comic_autoscroll_pointer_x = 0.0f;
+    m_comic_autoscroll_pointer_y = 0.0f;
+    if (m_comic_timer && m_window.handle()) {
+        KillTimer(m_window.handle(), kComicTimerId);
+    }
+    m_comic_timer = 0;
+    m_comic_last_tick_ms = 0;
+}
+
+void App::ensure_comic_timer() {
+    HWND hwnd = m_window.handle();
+    if (!hwnd || m_comic_timer) return;
+    if (m_comic_last_tick_ms == 0) m_comic_last_tick_ms = GetTickCount64();
+    m_comic_timer = SetTimer(
+        hwnd, kComicTimerId, kComicTimerIntervalMs, nullptr);
+    if (!m_comic_timer) {
+        m_comic_transient_kind = ComicTransientOverlayKind::None;
+        m_comic_transient_until_ms = 0;
+        cancel_comic_auto_scroll(ComicAutoScrollCancelReason::InvalidInput);
+    }
+}
+
+void App::stop_comic_timer_if_idle() {
+    if (m_comic_reader.auto_scroll_owner() != ComicAutoScrollOwner::None
+        || m_comic_transient_kind != ComicTransientOverlayKind::None) {
+        return;
+    }
+    if (m_comic_timer && m_window.handle()) {
+        KillTimer(m_window.handle(), kComicTimerId);
+    }
+    m_comic_timer = 0;
+    m_comic_last_tick_ms = 0;
+}
+
+void App::handle_comic_timer(HWND hwnd) {
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG previous = m_comic_last_tick_ms;
+    m_comic_last_tick_ms = now;
+    const float elapsed = previous > 0 && now >= previous
+        ? static_cast<float>(now - previous) / 1000.0f
+        : 0.0f;
+    const ComicAutoScrollOwner owner = m_comic_reader.auto_scroll_owner();
+    float applied = 0.0f;
+    if (owner == ComicAutoScrollOwner::Cruise) {
+        applied = m_comic_reader.advance_cruise(elapsed);
+    } else if (owner == ComicAutoScrollOwner::Middle) {
+        applied = m_comic_reader.advance_middle_autoscroll(
+            m_comic_autoscroll_pointer_y, elapsed);
+    }
+    bool redraw = false;
+    if (applied != 0.0f) {
+        sync_comic_current();
+        request_comic_pages();
+        redraw = true;
+    }
+    if (owner == ComicAutoScrollOwner::Middle
+        && !m_comic_reader.middle_autoscroll_active()) {
+        if (GetCapture() == hwnd) ReleaseCapture();
+        SetCursor(LoadCursor(nullptr, IDC_ARROW));
+        redraw = true;
+    }
+    if (m_comic_transient_kind != ComicTransientOverlayKind::None
+        && now >= m_comic_transient_until_ms) {
+        m_comic_transient_kind = ComicTransientOverlayKind::None;
+        m_comic_transient_until_ms = 0;
+        m_comic_transient_status.clear();
+        redraw = true;
+    }
+    stop_comic_timer_if_idle();
+    if (redraw) m_window.invalidate();
+}
+
+void App::show_comic_status(const std::wstring& text) {
+    if (!m_comic_reader.enabled() || text.empty()) return;
+    m_comic_transient_kind = ComicTransientOverlayKind::Status;
+    m_comic_transient_status = text;
+    m_comic_transient_until_ms =
+        GetTickCount64() + kComicTransientDurationMs;
+    ensure_comic_timer();
+    m_window.invalidate();
+}
+
+void App::finish_comic_scrollbar_drag() {
+    if (!m_comic_scrollbar_dragging) return;
+    m_comic_scrollbar_dragging = false;
+    m_comic_scrollbar_grab_offset_y = 0.0f;
+    HWND hwnd = m_window.handle();
+    if (hwnd && GetCapture() == hwnd) ReleaseCapture();
+}
+
 void App::sync_comic_current() {
     if (!m_comic_reader.enabled()) return;
+    const std::optional<ComicPageChangeEvent> page_change =
+        m_comic_reader.take_page_change_event();
     const ComicAnchor anchor = m_comic_reader.capture_anchor();
     if (!anchor.valid() || anchor.index >= static_cast<int>(m_index.size())) return;
     const std::wstring& path = m_index.path_at(
         static_cast<std::size_t>(anchor.index));
-    if (m_current_idx == anchor.index && m_current_path == path) return;
-    m_current_idx = anchor.index;
-    m_current_path = path;
-    m_has_image = true;
-    update_title();
+    const bool identity_changed =
+        m_current_idx != anchor.index || m_current_path != path;
+    if (identity_changed || m_comic_current_filename.empty()) {
+        const std::size_t separator = path.find_last_of(L"\\/");
+        m_comic_current_filename.assign(
+            path, separator == std::wstring::npos ? 0 : separator + 1);
+    }
+    if (identity_changed) {
+        m_current_idx = anchor.index;
+        m_current_path = path;
+        m_has_image = true;
+        update_title();
+    }
+    if (page_change
+        && page_change->current_index == anchor.index
+        && page_change->total_pages == static_cast<int>(m_index.size())) {
+        m_comic_transient_kind = ComicTransientOverlayKind::PageChange;
+        m_comic_transient_status.clear();
+        m_comic_transient_until_ms =
+            GetTickCount64() + kComicTransientDurationMs;
+        ensure_comic_timer();
+        m_window.invalidate();
+    }
 }
 
 void App::request_comic_pages() {
@@ -1934,6 +2391,7 @@ void App::render_comic_reader(float content_top) {
         m_comic_reader.scroll(), dpi, m_comic_reader.seamless()});
 
     sync_comic_current();
+    m_renderer.draw_comic_controls(comic_controls_snapshot());
     const int current = m_current_idx;
     ID2D1Bitmap1* preview = nullptr;
     std::uint32_t preview_width = 0;
@@ -2000,6 +2458,9 @@ void App::set_delete_current_identity(
     m_current_path = path;
     m_current_idx = index;
     m_has_image = has_image;
+    if (!has_image) {
+        reset_comic_controls(ComicAutoScrollCancelReason::EmptyBook);
+    }
 }
 
 void App::set_delete_grid_state(
@@ -2170,6 +2631,24 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
             m_grid_mode || !m_has_image, m_comic_reader.enabled());
         AddOwnerItem(popup, IDM_COMIC_SEAMLESS, L"无缝页距",
             !m_comic_reader.enabled(), m_comic_reader.seamless());
+        AddOwnerItem(popup, IDM_COMIC_AUTOSCROLL,
+            L"\u81EA\u52A8\u6EDA\u52A8\tP", !m_comic_reader.enabled(),
+            m_comic_reader.cruise_active());
+        {
+            HMENU speed_menu = CreatePopupMenu();
+            const bool disabled = !m_comic_reader.enabled();
+            const int speed = m_comic_reader.cruise_speed_index();
+            AddOwnerItem(speed_menu, IDM_COMIC_SPEED_05, L"0.5x",
+                disabled, speed == 0);
+            AddOwnerItem(speed_menu, IDM_COMIC_SPEED_10, L"1.0x",
+                disabled, speed == 1);
+            AddOwnerItem(speed_menu, IDM_COMIC_SPEED_15, L"1.5x",
+                disabled, speed == 2);
+            AddOwnerItem(speed_menu, IDM_COMIC_SPEED_20, L"2.0x",
+                disabled, speed == 3);
+            BuildOwnerMenu(popup, speed_menu,
+                L"\u81EA\u52A8\u6EDA\u52A8\u901F\u5EA6");
+        }
         AddOwnerSeparator(popup);
         AddOwnerItem(popup, IDM_FULLSCREEN, L"全屏	F11");
         AddOwnerSeparator(popup);
@@ -2315,7 +2794,9 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
         return;
 
     switch (cmd) {
-    case IDM_COMIC: case IDM_COMIC_SEAMLESS:
+    case IDM_COMIC: case IDM_COMIC_SEAMLESS: case IDM_COMIC_AUTOSCROLL:
+    case IDM_COMIC_SPEED_05: case IDM_COMIC_SPEED_10:
+    case IDM_COMIC_SPEED_15: case IDM_COMIC_SPEED_20:
     case IDM_OPEN_FILE: case IDM_OPEN_FOLDER: case IDM_FULLSCREEN: case IDM_RECURSIVE:
     case IDM_THUMB_SQUARE: case IDM_INFO: case IDM_LABELS:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
@@ -3178,10 +3659,11 @@ int App::visible_panel_width() const {
 }
 
 void App::update_content_viewport(bool refit) {
-    float top = (m_fullscreen && !m_grid_mode) ? 0.0f : static_cast<float>(m_toolbar_h);
+    float top = toolbar_visible() ? static_cast<float>(m_toolbar_h) : 0.0f;
     float right = m_grid_mode ? 0.0f : static_cast<float>(visible_panel_width());
     m_renderer.set_content_viewport(top, right);
     if (m_comic_reader.enabled()) {
+        if (!m_comic_scrollbar_dragging) m_comic_scrollbar_hover = false;
         update_comic_viewport();
     } else if (refit) {
         fit_to_window();

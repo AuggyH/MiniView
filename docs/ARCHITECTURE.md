@@ -8,8 +8,8 @@
 |---|---|---|
 | `src/main.cpp` | DPI awareness、COM、单实例、参数转发、配置目录、文件关联 | 注册表副作用、单实例消息、启动/退出清理 |
 | `src/window.*` | Win32 窗口注册、创建、消息转发、暗色 DWM 属性 | Windows 版本兼容、自绘非客户区、窗口生命周期 |
-| `src/app.*` | 应用状态机、快捷键、菜单、网格/大图、动画、删除/复制/拖拽、后台加载 | 集中度最高；线程、缓存、输入状态和文件操作相互影响 |
-| `src/renderer.*` | D3D11/DXGI swap chain、Direct2D、DirectWrite、网格和面板绘制 | 设备丢失、资源重建、DPI 单位、裁剪栈与高负载 |
+| `src/app.*` | 应用状态机、快捷键、菜单、网格/大图、动画、漫画自动滚动计时与鼠标捕获、删除/复制/拖拽、后台加载 | 集中度最高；线程、缓存、输入状态和文件操作相互影响 |
+| `src/renderer.*` | D3D11/DXGI swap chain、Direct2D、DirectWrite、网格、漫画控件覆盖层和面板绘制 | 设备丢失、资源重建、DPI 单位、裁剪栈与高负载 |
 | `src/decoder.*` | WIC 解码、缩放、探测、主色提取 | 系统 codec 差异、超大/损坏图片、COM apartment |
 | `src/indexer.*` | 文件扫描、过滤、排序、路径索引 | 递归权限、格式集合、排序稳定性、大目录性能 |
 | `src/metadata.*` | PNG tEXt、JPEG/WebP 注释、ComfyUI 与 SD WebUI 信息解析 | 自定义解析器、损坏输入、编码与受预算约束的元数据 |
@@ -29,6 +29,7 @@ wWinMain
 ## 状态与并发
 
 - UI 状态主要由 `App` 持有并在窗口线程修改。
+- 漫画恒速巡航与中键自动滚动共享一个 UI 线程定时推进源，但保持互斥的滚动 owner。`App` 持有单调时钟、滚动条拖动、鼠标捕获、锚定页变化和约 1000 ms 瞬时提示生命周期；`ComicReaderModel` 限制异常停顿后的单帧 elapsed 增量；Renderer 只消费无状态快照并绘制，不持有 timer、scroll 或当前索引。
 - 相邻大图预加载使用 1 个后台线程，队列和最多 3 项的 WIC 缓存由 mutex 保护。
 - 网格缩略图使用 4 个后台线程；WIC 缓存受 mutex 保护，D2D bitmap 只在主线程创建和使用。
 - 生成信息由 1 个 `metadata worker` 在 UI 线程外解析；请求、结果和 ready 状态由 mutex/condition variable 保护，通过 `WM_METADATA_READY` 回到窗口线程，并按当前面板 path 丢弃过期结果。
@@ -43,14 +44,14 @@ CTest 当前注册八项自动化测试：
 
 - `indexer.unit`：扫描、过滤、排序、相对路径、Windows invariant path identity 和批量移除。
 - `app_state.unit`：缩放/拖动状态、滚动夹紧、布局重建选择可见性和删除后 current identity 事务。
-- `comic_reader_model.unit`：漫画模式虚拟布局、锚点恢复、方向预读范围和 LRU 软上限。
+- `comic_reader_model.unit`：漫画模式虚拟布局、锚点恢复、方向预读范围、LRU 软上限、四档恒速与 elapsed-time 推进、末页停止、手动输入暂停、锚定页变化事件、Renderer 映射后滚动值的业务夹紧与按视口 page-step，以及中键 dead-zone/方向/封顶曲线和非有限输入 fail-closed。
 - `comic_reader_loader.unit`：方向请求替换、generation 与陈旧结果丢弃、去重、失败语义、WIC 显示尺寸解码、8 B/px 与 512 MiB LRU 预算，以及 stop/destructor 线程清理。
 - `metadata.unit`：正常、恶意长度、截断和超预算 PNG tEXt 输入。
-- `renderer_state.unit`：D2D/DXGI 失败分类、设备重建和 App 缓存 generation 失效。
+- `renderer_state.unit`：D2D/DXGI 失败分类、设备重建、App 缓存 generation 失效，以及漫画滚动条、常驻页码、长文件名瞬时提示和中键锚点在 DPI/全屏/侧栏布局中的避让与裁剪。
 - `file_operation.unit`：删除后磁盘存在性与 Shell 完成/取消/部分完成判定。
 - `governance.unit`：构建失败传播、标签边界和权威文档约束。
 
-Windows CI 还验证所有目标能在 MSVC x64 Release、`/W4 /WX` 下构建。这些窄接口测试不启动窗口，也不替代下列人工 QA。
+生产绑定测试还必须直接覆盖“查看”菜单与 `P`/`[`/`]` handler、定时推进、漫画滚动条命中与鼠标捕获、`WM_MBUTTONDOWN`/`WM_MOUSEMOVE`/失焦取消，以及锚定页变化后约 1000 ms 提示生命周期。Windows CI 还验证所有目标能在 MSVC x64 Release、`/W4 /WX` 下构建。这些窄接口测试不启动窗口，也不替代下列人工 QA。
 
 以下行为仍需手工 QA 或未来通过更窄接口增加测试：
 
