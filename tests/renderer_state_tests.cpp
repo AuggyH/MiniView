@@ -5,9 +5,21 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
+
+static_assert(std::is_same_v<
+    decltype(mv::ComicTextOverlayLayout{}.text), std::wstring_view>);
+static_assert(std::is_same_v<
+    decltype(mv::ComicControlsRenderInput{}.page_badge_text),
+    std::wstring_view>);
+static_assert(std::is_same_v<
+    decltype(mv::ComicControlsRenderInput{}.transient_text),
+    std::wstring_view>);
 
 int failures = 0;
 
@@ -296,6 +308,13 @@ void test_comic_scrollbar_hit_test_and_drag() {
             geometry, geometry.hit_bounds.left - 1.0f, geometry.thumb.top)
             == mv::ComicScrollbarHit::None,
         "coordinates outside the hit zone must not affect scrolling");
+    expect(mv::hit_test_comic_scrollbar(
+            geometry, hit_x, geometry.thumb.top)
+            == mv::ComicScrollbarHit::Thumb
+            && mv::hit_test_comic_scrollbar(
+                geometry, hit_x, geometry.thumb.bottom)
+                == mv::ComicScrollbarHit::Thumb,
+        "half-open outer bounds must preserve exact thumb-edge semantics");
 
     const float grab_offset = geometry.thumb.height() * 0.5f;
     const mv::ComicScrollbarDragResult start =
@@ -319,6 +338,43 @@ void test_comic_scrollbar_hit_test_and_drag() {
         "drag past track end must clamp to maximum scroll");
 }
 
+void test_comic_scrollbar_half_open_boundaries() {
+    const float dpis[] = {96.0f, 168.0f, 192.0f};
+    for (const float dpi : dpis) {
+        const float scale = dpi / 96.0f;
+        const mv::ComicRenderRect content_viewport{
+            0.0f, 40.0f * scale, 400.0f * scale, 840.0f * scale};
+        const mv::ComicScrollbarGeometry geometry =
+            mv::build_comic_scrollbar_geometry(
+                content_viewport, 8000.0f * scale,
+                2000.0f * scale, dpi);
+        expect(geometry.visible,
+            "half-open boundary fixture must expose a scrollbar");
+        const float thumb_y = (geometry.thumb.top + geometry.thumb.bottom) * 0.5f;
+        expect(mv::hit_test_comic_scrollbar(
+                geometry, geometry.hit_bounds.right, thumb_y)
+                == mv::ComicScrollbarHit::None,
+            "content right edge/panel left edge must be outside scrollbar hit bounds");
+        expect(mv::hit_test_comic_scrollbar(
+                geometry, geometry.hit_bounds.right - 1.0f, thumb_y)
+                == mv::ComicScrollbarHit::Thumb,
+            "the adjacent physical pixel inside the right edge must remain hittable");
+        expect(mv::hit_test_comic_scrollbar(
+                geometry, geometry.hit_bounds.left, geometry.hit_bounds.bottom)
+                == mv::ComicScrollbarHit::None,
+            "the exact bottom edge must be outside scrollbar hit bounds");
+        expect(mv::hit_test_comic_scrollbar(
+                geometry, geometry.hit_bounds.left,
+                geometry.hit_bounds.bottom - 1.0f)
+                == mv::ComicScrollbarHit::PageForward,
+            "the adjacent physical pixel inside the bottom edge must retain track semantics");
+        expect(mv::hit_test_comic_scrollbar(
+                geometry, geometry.hit_bounds.left, geometry.hit_bounds.top)
+                != mv::ComicScrollbarHit::None,
+            "the closed top and left edges must remain inside hit bounds");
+    }
+}
+
 void test_comic_controls_viewport_avoidance() {
     mv::ComicControlsRenderInput input;
     input.content_viewport = {0.0f, 40.0f, 920.0f, 800.0f};
@@ -327,6 +383,8 @@ void test_comic_controls_viewport_avoidance() {
     input.scroll_y = 800.0f;
     input.anchored_page_index = 11;
     input.total_pages = 86;
+    const std::wstring page_badge = L"12 / 86";
+    input.page_badge_text = page_badge;
     const mv::ComicControlsLayout panel =
         mv::build_comic_controls_layout(input);
     expect(panel.scrollbar.visible && panel.page_badge.visible,
@@ -337,7 +395,9 @@ void test_comic_controls_viewport_avoidance() {
             <= panel.scrollbar.hit_bounds.left - panel.metrics.overlay_gap,
         "page badge must avoid the scrollbar hit zone");
     expect(panel.page_badge.text == L"12 / 86",
-        "progress badge must use one-based anchored page feedback");
+        "progress badge must consume App-preformatted page feedback");
+    expect(panel.page_badge.text.data() == page_badge.data(),
+        "progress badge layout must borrow rather than copy its text");
     expect(!panel.transient_overlay.visible,
         "transient overlay must be hidden in the default state");
 
@@ -365,8 +425,11 @@ void test_comic_controls_transient_layout() {
     input.scroll_y = 1000.0f;
     input.anchored_page_index = 11;
     input.total_pages = 86;
-    const std::wstring long_name(1024, L'\u957F');
-    input.current_filename = long_name;
+    const std::wstring page_badge = L"12 / 86";
+    std::wstring long_toast(1024, L'\u957F');
+    long_toast += L" \u00B7 \u7B2C12/86\u9875";
+    input.page_badge_text = page_badge;
+    input.transient_text = long_toast;
     input.transient_kind = mv::ComicTransientOverlayKind::PageChange;
     const mv::ComicControlsLayout narrow =
         mv::build_comic_controls_layout(input);
@@ -382,14 +445,17 @@ void test_comic_controls_transient_layout() {
             <= narrow.metrics.page_toast_max_width,
         "long filename toast must never exceed its DPI-aware maximum width");
     expect(narrow.transient_overlay.text.ends_with(L"\u00B7 \u7B2C12/86\u9875"),
-        "page-change toast must include exact anchored page feedback");
+        "page-change toast must consume exact App-preformatted feedback");
+    expect(narrow.page_badge.text.data() == page_badge.data()
+            && narrow.transient_overlay.text.data() == long_toast.data(),
+        "overlay layouts must borrow both App-owned backing strings");
 
     input.transient_kind = mv::ComicTransientOverlayKind::None;
     expect(!mv::build_comic_controls_layout(input).transient_overlay.visible,
         "explicitly hidden transient state must draw no toast");
 
     input.transient_kind = mv::ComicTransientOverlayKind::Status;
-    input.transient_status_text = L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 1.0x";
+    input.transient_text = L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 1.0x";
     const mv::ComicControlsLayout status =
         mv::build_comic_controls_layout(input);
     expect(status.transient_overlay.visible
@@ -398,9 +464,13 @@ void test_comic_controls_transient_layout() {
 
     const std::wstring oversized(
         mv::kComicOverlayMaxTextCharacters + 1, L'x');
-    input.transient_status_text = oversized;
+    input.transient_text = oversized;
     expect(!mv::build_comic_controls_layout(input).transient_overlay.visible,
         "oversized transient input must fail closed before allocation/rendering");
+    input.transient_kind = mv::ComicTransientOverlayKind::None;
+    input.page_badge_text = oversized;
+    expect(!mv::build_comic_controls_layout(input).page_badge.visible,
+        "oversized page badge input must fail closed before rendering");
 }
 
 void test_comic_autoscroll_graphic() {
@@ -490,6 +560,9 @@ void test_comic_autoscroll_graphic() {
             + near_bottom.autoscroll.dead_zone_radius
             > near_bottom.viewport.bottom,
         "near-bottom graphic must rely on the existing viewport clip");
+    input.autoscroll_anchor_y = input.content_viewport.bottom;
+    expect(!mv::build_comic_controls_layout(input).autoscroll.visible,
+        "anchor center on the half-open content bottom edge must be outside");
 
     const float usable_right = forward.scrollbar.hit_bounds.left;
     input.autoscroll_anchor_x = usable_right - 1.0f;
@@ -507,6 +580,14 @@ void test_comic_autoscroll_graphic() {
     input.autoscroll_anchor_x = usable_right;
     expect(!mv::build_comic_controls_layout(input).autoscroll.visible,
         "anchor center in scrollbar hit zone must retain precedence and fail closed");
+
+    input.virtual_height = input.content_viewport.height();
+    input.autoscroll_anchor_x = input.content_viewport.right - 1.0f;
+    expect(mv::build_comic_controls_layout(input).autoscroll.visible,
+        "adjacent pixel inside a content edge must remain a valid anchor");
+    input.autoscroll_anchor_x = input.content_viewport.right;
+    expect(!mv::build_comic_controls_layout(input).autoscroll.visible,
+        "anchor center on panel-left/content-right boundary must be outside");
 }
 
 void test_comic_controls_invalid_input_fails_closed() {
@@ -520,7 +601,8 @@ void test_comic_controls_invalid_input_fails_closed() {
     input.scroll_y = 800.0f;
     input.anchored_page_index = 11;
     input.total_pages = 86;
-    input.current_filename = L"page.png";
+    input.page_badge_text = L"12 / 86";
+    input.transient_text = L"page.png \u00B7 \u7B2C12/86\u9875";
     input.transient_kind = mv::ComicTransientOverlayKind::PageChange;
 
     input.anchored_page_index = -1;
@@ -541,7 +623,7 @@ void test_comic_controls_invalid_input_fails_closed() {
             && !invalid_page.transient_overlay.visible,
         "non-positive total pages must suppress page feedback");
     input.transient_kind = mv::ComicTransientOverlayKind::Status;
-    input.transient_status_text = L"\u81EA\u52A8\u6EDA\u52A8\u5DF2\u6682\u505C";
+    input.transient_text = L"\u81EA\u52A8\u6EDA\u52A8\u5DF2\u6682\u505C";
     const mv::ComicControlsLayout status_without_page =
         mv::build_comic_controls_layout(input);
     expect(!status_without_page.page_badge.visible
@@ -614,6 +696,7 @@ int main() {
     test_non_finite_geometry_fails_closed();
     test_comic_scrollbar_dpi_and_boundaries();
     test_comic_scrollbar_hit_test_and_drag();
+    test_comic_scrollbar_half_open_boundaries();
     test_comic_controls_viewport_avoidance();
     test_comic_controls_transient_layout();
     test_comic_autoscroll_graphic();

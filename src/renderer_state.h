@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstdint>
 #include <span>
-#include <string>
 #include <string_view>
 #include <vector>
 #include <winerror.h>
@@ -151,7 +150,9 @@ struct ComicScrollbarDragResult {
 struct ComicTextOverlayLayout {
     bool visible = false;
     ComicRenderRect bounds;
-    std::wstring text;
+    // Borrowed from ComicControlsRenderInput. Do not retain this layout beyond
+    // the lifetime of the snapshot's backing strings.
+    std::wstring_view text;
 };
 
 struct ComicAutoscrollLayout {
@@ -169,8 +170,11 @@ struct ComicAutoscrollLayout {
 // Coordinates use the same absolute client physical-pixel space as
 // ComicRenderViewport and App pointer input. The content viewport must already
 // exclude any visible toolbar and side panel; dpi scales DIP constants only.
-// App owns every timer, input state and business index. Renderer synchronously
-// consumes one immutable snapshot and does not retain either string view.
+// App owns every timer, input state, business index, and preformatted backing
+// string. Renderer synchronously consumes one immutable snapshot and does not
+// format, copy, or allocate owning text, and it retains neither string view. A
+// layout returned by build_comic_controls_layout borrows the views and must not
+// outlive them.
 struct ComicControlsRenderInput {
     ComicRenderRect content_viewport;
     float dpi = 96.0f;
@@ -178,12 +182,12 @@ struct ComicControlsRenderInput {
     float scroll_y = 0.0f;
     bool scrollbar_hovered = false;
     bool scrollbar_dragging = false;
-    int anchored_page_index = -1; // zero-based
-    int total_pages = 0;
-    std::wstring_view current_filename;
+    int anchored_page_index = -1; // zero-based validity gate only
+    int total_pages = 0; // validity gate only
+    std::wstring_view page_badge_text;
     ComicTransientOverlayKind transient_kind =
         ComicTransientOverlayKind::None;
-    std::wstring_view transient_status_text;
+    std::wstring_view transient_text;
     bool middle_autoscroll_active = false;
     float autoscroll_anchor_x = 0.0f;
     float autoscroll_anchor_y = 0.0f;
@@ -333,8 +337,8 @@ inline ComicScrollbarHit hit_test_comic_scrollbar(
     const ComicScrollbarGeometry& geometry, float x, float y) noexcept {
     if (!geometry.visible || geometry.hit_bounds.empty()
         || geometry.thumb.empty() || !std::isfinite(x) || !std::isfinite(y)
-        || x < geometry.hit_bounds.left || x > geometry.hit_bounds.right
-        || y < geometry.hit_bounds.top || y > geometry.hit_bounds.bottom) {
+        || x < geometry.hit_bounds.left || x >= geometry.hit_bounds.right
+        || y < geometry.hit_bounds.top || y >= geometry.hit_bounds.bottom) {
         return ComicScrollbarHit::None;
     }
     if (y < geometry.thumb.top) return ComicScrollbarHit::PageBackward;
@@ -383,12 +387,10 @@ inline ComicControlsLayout build_comic_controls_layout(
     const bool valid_page = input.anchored_page_index >= 0
         && input.total_pages > 0
         && input.anchored_page_index < input.total_pages;
-    std::wstring page;
-    std::wstring total;
-    if (valid_page) {
-        page = std::to_wstring(input.anchored_page_index + 1);
-        total = std::to_wstring(input.total_pages);
-        layout.page_badge.text = page + L" / " + total;
+    const bool page_badge = valid_page && !input.page_badge_text.empty()
+        && input.page_badge_text.size() <= kComicOverlayMaxTextCharacters;
+    if (page_badge) {
+        layout.page_badge.text = input.page_badge_text;
         const float usable_right = layout.scrollbar.visible
             ? layout.scrollbar.hit_bounds.left - layout.metrics.overlay_gap
             : layout.viewport.right - layout.metrics.edge_margin;
@@ -415,27 +417,14 @@ inline ComicControlsLayout build_comic_controls_layout(
 
     }
 
+    const bool valid_transient_text = !input.transient_text.empty()
+        && input.transient_text.size() <= kComicOverlayMaxTextCharacters;
     const bool page_change = valid_page && input.transient_kind
-        == ComicTransientOverlayKind::PageChange
-        && !input.current_filename.empty()
-        && input.current_filename.size()
-            <= kComicOverlayMaxTextCharacters - 32;
+        == ComicTransientOverlayKind::PageChange && valid_transient_text;
     const bool status = input.transient_kind
-        == ComicTransientOverlayKind::Status
-        && !input.transient_status_text.empty()
-        && input.transient_status_text.size()
-            <= kComicOverlayMaxTextCharacters;
+        == ComicTransientOverlayKind::Status && valid_transient_text;
     if (page_change || status) {
-        if (page_change) {
-            layout.transient_overlay.text = input.current_filename;
-            layout.transient_overlay.text += L" \u00B7 \u7B2C";
-            layout.transient_overlay.text += page;
-            layout.transient_overlay.text += L"/";
-            layout.transient_overlay.text += total;
-            layout.transient_overlay.text += L"\u9875";
-        } else {
-            layout.transient_overlay.text = input.transient_status_text;
-        }
+        layout.transient_overlay.text = input.transient_text;
         const float toast_right = layout.scrollbar.visible
             ? layout.scrollbar.hit_bounds.left - layout.metrics.overlay_gap
             : layout.viewport.right - layout.metrics.edge_margin;
@@ -472,7 +461,7 @@ inline ComicControlsLayout build_comic_controls_layout(
         if (input.autoscroll_anchor_x >= layout.viewport.left
             && input.autoscroll_anchor_x < safe_right
             && input.autoscroll_anchor_y >= layout.viewport.top
-            && input.autoscroll_anchor_y <= layout.viewport.bottom) {
+            && input.autoscroll_anchor_y < layout.viewport.bottom) {
             ComicAutoscrollLayout& autoscroll = layout.autoscroll;
             autoscroll.visible = true;
             autoscroll.anchor_x = input.autoscroll_anchor_x;
