@@ -1907,26 +1907,31 @@ void App::render_comic_reader(float content_top) {
     request_comic_pages();
     const ComicPageRange visible = m_comic_reader.visible_range();
     const auto geometries = m_comic_reader.materialize(visible);
+    std::vector<ComicPageDrawItem> draw_items;
+    draw_items.reserve(geometries.size());
     for (const ComicPageGeometry& geometry : geometries) {
-        D2D1_RECT_F destination = {
-            geometry.left,
-            content_top + geometry.top - m_comic_reader.scroll(),
-            geometry.left + geometry.width,
-            content_top + geometry.top - m_comic_reader.scroll() + geometry.height};
         ComicPageEntry& page = m_comic_pages[static_cast<std::size_t>(geometry.index)];
         if (page.wic && !page.d2d) {
             m_renderer.create_bitmap_from_wic(page.wic.Get(), &page.d2d);
         }
+        ID2D1Bitmap1* bitmap = nullptr;
         if (page.d2d) {
-            m_renderer.draw_comic_page(page.d2d.Get(), destination);
+            bitmap = page.d2d.Get();
             m_comic_lru.touch(geometry.index, page.estimated_cache_bytes);
         } else if (geometry.index == m_comic_fallback_index
                    && m_renderer.image_bitmap()) {
-            m_renderer.draw_comic_page(m_renderer.image_bitmap(), destination);
-        } else {
-            m_renderer.draw_comic_card(destination, page.failed || geometry.decode_failed);
+            bitmap = m_renderer.image_bitmap();
         }
+        draw_items.push_back({geometry, bitmap, page.failed});
     }
+    const float viewport_height = std::max(
+        1.0f, static_cast<float>(m_renderer.target_size().height) - content_top);
+    const float dpi = m_window.handle()
+        ? static_cast<float>(GetDpiForWindow(m_window.handle()))
+        : 96.0f;
+    m_renderer.draw_comic_pages(draw_items, {
+        0.0f, content_top, m_renderer.content_width(), viewport_height,
+        m_comic_reader.scroll(), dpi, m_comic_reader.seamless()});
 
     sync_comic_current();
     const int current = m_current_idx;

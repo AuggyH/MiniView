@@ -257,6 +257,8 @@ void test_production_app_binds_virtual_window_and_lru() {
         "production cache trimming must enforce the shared soft limit");
     require_binding("m_comic_reader.materialize(visible)",
         "production rendering must materialize only visible page geometry");
+    require_binding("m_renderer.draw_comic_pages(draw_items,",
+        "production rendering must consume the tested stacked renderer contract");
 }
 
 } // namespace
