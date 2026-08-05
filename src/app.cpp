@@ -1294,10 +1294,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             route_state.item_count = static_cast<int>(m_index.size());
             const auto request = route_grid_entry(
                 GridEntryTrigger::DoubleClick, route_state);
-            if (request) {
-                select_item(request->index, false, false);
-                enter_grid_image(hwnd, *request);
-            }
+            if (request) enter_grid_image(hwnd, *request);
             return 0;
         }
         if (m_comic_reader.enabled() && !leave_comic_reader(true)) return 0;
@@ -1644,14 +1641,28 @@ void App::open_directory(const std::wstring& path) {
         update_title();
         m_window.invalidate();
     }
+    static_cast<void>(complete_directory_open(result, m_open_error));
 }
 
 bool App::open_image(const std::wstring& path) {
     if (m_comic_reader.enabled()) leave_comic_reader(false);
+    namespace fs = std::filesystem;
+    SetLastError(ERROR_SUCCESS);
     DWORD attributes = GetFileAttributesW(path.c_str());
-    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    const DWORD attribute_error = attributes == INVALID_FILE_ATTRIBUTES
+        ? GetLastError() : ERROR_SUCCESS;
+    const auto route = classify_open_input(
+        attributes != INVALID_FILE_ATTRIBUTES,
+        attributes != INVALID_FILE_ATTRIBUTES
+            && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0,
+        attribute_error, fs::path(path).extension().wstring());
+    if (route == OpenInputRoute::OpenDirectory) {
         open_directory(path);
         return true;
+    }
+    if (route != OpenInputRoute::DecodeImage) {
+        show_open_error(route);
+        return false;
     }
     try {
         // A recursive grid can contain files from many child directories.  Keep
@@ -1659,7 +1670,8 @@ bool App::open_image(const std::wstring& path) {
         int indexed_position = m_index.index_of(path);
 
         ComPtr<IWICBitmapSource> bitmap;
-        if (!run_image_load_stages(
+        const auto resolved_route = resolve_open_input_route(route, [&]() {
+            return run_image_load_stages(
                 [this, &path]() {
                     auto decoded = get_preloaded(path);
                     if (!decoded) decoded = m_decoder.decode(path);
@@ -1671,8 +1683,10 @@ bool App::open_image(const std::wstring& path) {
                 [this, &bitmap](const ComPtr<IWICBitmapSource>& materialized) {
                     bitmap = materialized;
                     return m_renderer.upload_image(bitmap.Get());
-                })) {
-            update_title();
+                });
+        });
+        if (resolved_route != OpenInputRoute::DecodeImage) {
+            show_open_error(resolved_route);
             return false;
         }
 
@@ -1689,7 +1703,6 @@ bool App::open_image(const std::wstring& path) {
         fit_to_window();
         m_current_wic = bitmap;
 
-        namespace fs = std::filesystem;
         fs::path p(path);
         std::wstring dir = p.parent_path().wstring();
         if (dir.empty()) dir = L".";
@@ -1703,6 +1716,7 @@ bool App::open_image(const std::wstring& path) {
         commit_current_image_identity(path, indexed_position,
             m_current_path, m_current_idx, m_has_image);
         m_from_grid = m_current_idx >= 0;
+        m_open_error.clear();
 
         update_title();
 
@@ -1712,9 +1726,16 @@ bool App::open_image(const std::wstring& path) {
         m_window.invalidate();
         return true;
     } catch (const std::exception&) {
-        update_title();
+        show_open_error(OpenInputRoute::ReadOrDecodeFailed);
         return false;
     }
+}
+
+void App::show_open_error(OpenInputRoute route) {
+    m_open_error = open_input_error_message(route);
+    SetForegroundWindow(m_window.handle());
+    SetFocus(m_window.handle());
+    m_window.invalidate();
 }
 
 void App::update_title() {
@@ -3152,9 +3173,14 @@ void App::begin_animation(HWND hwnd) {
 bool App::enter_grid_image(HWND hwnd, const GridEntryRequest& request) {
     return run_grid_entry(
         request,
-        GridEntryTransactionState{m_grid_mode, m_from_grid, m_animating},
-        [this, hwnd](int index) {
-            m_grid_sel = index;
+        GridEntryTransactionState{
+            m_grid_mode, m_from_grid, m_animating,
+            m_grid_sel, m_selected, m_sel_anchor},
+        [this, hwnd, &request](int index) {
+            if (request.trigger == GridEntryTrigger::DoubleClick)
+                select_item(index, false, false);
+            else
+                m_grid_sel = index;
             start_transition(hwnd, true, index);
         },
         [this](int index) {
@@ -4197,6 +4223,7 @@ void App::grid_render() {
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
+    m_renderer.draw_status_message(m_open_error);
     m_renderer.draw_title_bar(target_width, m_title_btn_hover, m_title_btn_press,
         m_toolbar_items, m_toolbar_active);
     if (!m_renderer.end_frame())
@@ -4219,9 +4246,10 @@ void App::render_frame() {
             DeleteObject(bg);
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(128, 128, 128));
-            const wchar_t* msg = m_has_image ? L"\u52A0\u8F7D\u4E2D..."
+            const wchar_t* msg = !m_open_error.empty() ? m_open_error.c_str()
+                : (m_has_image ? L"\u52A0\u8F7D\u4E2D..."
                 : (m_index.directory().empty() ? L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6"
-                    : L"\u5F53\u524D\u6587\u4EF6\u5939\u6682\u65E0\u53D7\u652F\u6301\u7684\u56FE\u7247\uFF0C\u53EF\u5F00\u542F\u9012\u5F52\u6D4F\u89C8");
+                    : L"\u5F53\u524D\u6587\u4EF6\u5939\u6682\u65E0\u53D7\u652F\u6301\u7684\u56FE\u7247\uFF0C\u53EF\u5F00\u542F\u9012\u5F52\u6D4F\u89C8"));
             DrawTextW(hdc, msg, -1, &rc,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             EndPaint(m_window.handle(), &ps);
@@ -4274,6 +4302,7 @@ void App::render_frame() {
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
+    m_renderer.draw_status_message(m_open_error);
     if (toolbar_visible()) {
         m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
             m_toolbar_items, m_toolbar_active);

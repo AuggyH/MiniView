@@ -308,6 +308,41 @@ void Renderer::draw_hint(const std::wstring& text) {
     m_text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
 }
 
+void Renderer::draw_status_message(const std::wstring& text) {
+    if (!m_d2d_context || !m_text_format || text.empty()) return;
+
+    const float dpi_scale = m_dpi_y / 96.0f;
+    const float available_width = std::max(1.0f, content_width() - 32.0f * dpi_scale);
+    const float width = std::min(520.0f * dpi_scale, available_width);
+    const float height = 44.0f * dpi_scale;
+    const float left = (content_width() - width) * 0.5f;
+    const float top = m_content_top + 12.0f * dpi_scale;
+    const D2D1_RECT_F bounds = {left, top, left + width, top + height};
+    const auto rounded = D2D1::RoundedRect(
+        bounds, 6.0f * dpi_scale, 6.0f * dpi_scale);
+
+    ComPtr<ID2D1SolidColorBrush> background;
+    ComPtr<ID2D1SolidColorBrush> border;
+    ComPtr<ID2D1SolidColorBrush> foreground;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.18f, 0.08f, 0.06f, 0.96f), &background);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.88f, 0.38f, 0.24f, 1.0f), &border);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.96f, 0.90f, 0.88f, 1.0f), &foreground);
+    if (!background || !border || !foreground) return;
+
+    m_d2d_context->FillRoundedRectangle(rounded, background.Get());
+    m_d2d_context->DrawRoundedRectangle(
+        rounded, border.Get(), std::max(1.0f, dpi_scale));
+    m_text_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    m_text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    m_d2d_context->DrawText(text.c_str(), static_cast<uint32_t>(text.size()),
+        m_text_format.Get(), &bounds, foreground.Get());
+    m_text_format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    m_text_format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+}
+
 void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wstring>>& items) {
     if (!m_d2d_context || !m_dwrite_factory || items.empty()) return;
 

@@ -40,6 +40,7 @@ public:
     void draw_image();
     void draw_overlay();
     void draw_hint(const std::wstring& text);
+    void draw_status_message(const std::wstring& text);
     void draw_info_card(const std::vector<std::pair<std::wstring, std::wstring>>& items);
     float draw_side_panel(float x, float y_off, float w, float h,
         ID2D1Bitmap1* preview, uint32_t pw, uint32_t ph,

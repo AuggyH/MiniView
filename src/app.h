@@ -1,6 +1,7 @@
 #pragma once
 #include "window.h"
 #include "renderer.h"
+#include "open_error.h"
 #include "decoder.h"
 #include "indexer.h"
 #include "metadata.h"
@@ -42,6 +43,7 @@ private:
 
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     bool    open_image(const std::wstring& path);
+    void    show_open_error(OpenInputRoute route);
     void    open_directory(const std::wstring& path);
     void    navigate_to(int idx);
     void    fit_to_window();
@@ -175,6 +177,7 @@ private:
     bool         m_has_image = false;
     bool         m_fullscreen = false;
     bool         m_recursive = false;
+    std::wstring m_open_error;
 
     WINDOWPLACEMENT m_saved_placement = {sizeof(WINDOWPLACEMENT)};
     LONG            m_saved_style = 0;
