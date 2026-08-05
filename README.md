@@ -1,12 +1,12 @@
-# MinView
+# MiniView
 
 Windows 图片浏览器。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/AuggyH/minview-native/blob/master/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/AuggyH/MiniView/blob/master/LICENSE)
 
 ## 下载
 
-[MinView v0.1.0（Windows x64）](https://github.com/AuggyH/minview-native/releases/download/v0.1.0/MinView-v0.1.0-win64.zip)
+[MiniView v0.1.0（Windows x64）](https://github.com/AuggyH/MiniView/releases/download/v0.1.0/MinView-v0.1.0-win64.zip)
 
 ## 功能
 
