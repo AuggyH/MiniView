@@ -155,6 +155,7 @@ enum {
     IDM_RECURSIVE    = 1012,
     IDM_THUMB_SQUARE = 1013,
     IDM_INFO         = 1014,
+    IDM_LABELS       = 1015,
     IDM_SORT_NAME    = 1020,
     IDM_SORT_DATE    = 1021,
     IDM_SORT_SIZE    = 1022,
@@ -275,8 +276,9 @@ static OwnerItemData* AddOwnerItem(HMENU menu, UINT id, const std::wstring& labe
     d->disabled = disabled;
     d->checked  = checked;
     MENUITEMINFOW mii = { sizeof(mii) };
-    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA;
+    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_DATA | MIIM_STATE;
     mii.fType = MFT_OWNERDRAW;
+    mii.fState = disabled ? MFS_DISABLED : MFS_ENABLED;
     mii.wID   = id;
     mii.dwItemData = reinterpret_cast<ULONG_PTR>(d);
     InsertMenuItemW(menu, GetMenuItemCount(menu), TRUE, &mii);
@@ -444,6 +446,24 @@ int App::run(const std::wstring& initial_path) {
     return ret;
 }
 
+void App::begin_grid_scroll(HWND hwnd) {
+    m_grid_scroll_pause.begin(
+        [hwnd](std::uintptr_t timer) {
+            KillTimer(hwnd, static_cast<UINT_PTR>(timer));
+        },
+        [hwnd] {
+            return static_cast<std::uintptr_t>(
+                SetTimer(hwnd, 1, 80, nullptr));
+        });
+}
+
+void App::finish_grid_scroll() {
+    HWND hwnd = m_window.handle();
+    m_grid_scroll_pause.finish([hwnd](std::uintptr_t timer) {
+        KillTimer(hwnd, static_cast<UINT_PTR>(timer));
+    });
+}
+
 // ── Message handler ──────────────────────────────────────────
 
 LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -518,6 +538,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
         case IDM_INFO:         toggle_info(); return 0;
+        case IDM_LABELS:       toggle_grid_labels(); return 0;
         case IDM_SORT_NAME:   if (m_grid_mode) set_sort_mode(SortMode::Name);   return 0;
         case IDM_SORT_DATE:   if (m_grid_mode) set_sort_mode(SortMode::Date);   return 0;
         case IDM_SORT_SIZE:   if (m_grid_mode) set_sort_mode(SortMode::Size);   return 0;
@@ -648,9 +669,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_TIMER:
         if (wp == 1 && m_grid_mode) {
-            m_scroll_active = false;
-            KillTimer(hwnd, 1);
-            m_grid_timer = 0;
+            finish_grid_scroll();
             m_window.invalidate();
         }
         if (wp == 2) {
@@ -765,9 +784,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
             int max_scroll = std::max(0, m_grid_total_h - (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h));
             if (m_grid_scroll_y > max_scroll) m_grid_scroll_y = max_scroll;
-            m_scroll_active = true;
-            if (m_grid_timer) KillTimer(hwnd, m_grid_timer);
-            m_grid_timer = SetTimer(hwnd, 1, 80, nullptr);
+            begin_grid_scroll(hwnd);
             m_window.invalidate();
             return 0;
         }
@@ -1198,8 +1215,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_grid_mode) { toggle_thumb_square(); return 0; }
             return -1;
         case 'L':
-            if (m_grid_mode) { m_show_labels = !m_show_labels; m_grid_layout_dirty = true; m_window.invalidate(); return 0; }
-            return -1;
+            return toggle_grid_labels() ? 0 : -1;
         case 'I':
             toggle_info(); return 0;
         case 'N':
@@ -1267,10 +1283,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 void App::open_directory(const std::wstring& path) {
     if (path.empty()) return;
     if (m_thumb_running) stop_thumb_loader();
-    if (m_grid_timer) {
-        KillTimer(m_window.handle(), m_grid_timer);
-        m_grid_timer = 0;
-    }
+    finish_grid_scroll();
 
     m_grid_mode = false;
     m_from_grid = false;
@@ -1370,7 +1383,7 @@ bool App::open_image(const std::wstring& path) {
             m_grid_saved_idx = m_grid_sel;
             m_grid_mode = false;
             m_from_grid = true;  // Esc/Space will return to grid
-            if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
+            finish_grid_scroll();
             stop_thumb_loader();
         }
         update_content_viewport(false);
@@ -1643,6 +1656,7 @@ void App::set_delete_current_identity(
 void App::set_delete_grid_state(
     bool grid_mode, int grid_selection, const std::vector<bool>& selected,
     int selection_anchor) {
+    if (m_grid_mode && !grid_mode) finish_grid_scroll();
     m_grid_mode = grid_mode;
     m_grid_sel = grid_selection;
     m_selected = selected;
@@ -1820,6 +1834,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
             m_recursive);
         AddOwnerItem(popup, IDM_THUMB_SQUARE,
             m_thumb_square ? L"原始比例网格	A" : L"方形缩略图	A", !m_grid_mode);
+        AddOwnerItem(popup, IDM_LABELS, L"显示文件名标签	L",
+            !m_grid_mode, m_show_labels);
         AddOwnerSeparator(popup);
         AddOwnerItem(popup, IDM_INFO, L"展开/收起信息面板	I", false, m_panel_expanded);
         break;
@@ -1946,7 +1962,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
 
     switch (cmd) {
     case IDM_OPEN_FILE: case IDM_OPEN_FOLDER: case IDM_FULLSCREEN: case IDM_RECURSIVE:
-    case IDM_THUMB_SQUARE: case IDM_INFO:
+    case IDM_THUMB_SQUARE: case IDM_INFO: case IDM_LABELS:
     case IDM_SORT_NAME: case IDM_SORT_DATE:
     case IDM_SORT_SIZE: case IDM_SORT_RANDOM:
     case IDM_COPY_IMAGE: case IDM_COPY_PATH: case IDM_CREATE_COPY:
@@ -2663,7 +2679,7 @@ void App::toggle_grid() {
         // Exit grid — save state but keep thumb cache
         m_grid_scroll_saved = m_grid_scroll_y;
         m_grid_saved_idx = m_grid_sel;
-        if (m_grid_timer) { KillTimer(m_window.handle(), m_grid_timer); m_grid_timer = 0; }
+        finish_grid_scroll();
         // Don't stop thumb loader or clear cache — reuse on re-entry
         update_title();
     }
@@ -2977,6 +2993,15 @@ void App::toggle_thumb_square() {
     m_window.invalidate();
 }
 
+bool App::toggle_grid_labels() {
+    if (!apply_grid_label_toggle(
+            m_grid_mode, m_show_labels, m_grid_layout_dirty)) {
+        return false;
+    }
+    m_window.invalidate();
+    return true;
+}
+
 // ── Multi-select helpers ─────────────────────────────────
 
 bool App::has_selection() const {
@@ -3139,10 +3164,13 @@ void App::grid_render() {
     int bottom_row = bottom_it == rows.begin() ? -1
         : static_cast<int>(bottom_it - rows.begin()) - 1;
 
-    if (!m_scroll_active) {
-        for (int r = top_row; r <= bottom_row; ++r)
-            for (int i = rows[static_cast<size_t>(r)].start_idx;
-                 i < rows[static_cast<size_t>(r)].end_idx; ++i) request_thumb(i);
+    const bool loader_running =
+        m_thumb_running.load(std::memory_order_relaxed);
+    for (int r = top_row; r <= bottom_row; ++r) {
+        const auto& row = rows[static_cast<size_t>(r)];
+        m_grid_scroll_pause.request_visible(
+            loader_running, row.start_idx, row.end_idx,
+            [this](int index) { request_thumb(index); });
     }
 
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;

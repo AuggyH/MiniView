@@ -89,6 +89,7 @@ private:
     void    toggle_grid();
     void    set_sort_mode(SortMode mode);
     void    toggle_thumb_square();
+    bool    toggle_grid_labels();
     void    toggle_info();
     bool    toolbar_visible() const;
     int     visible_panel_width() const;
@@ -116,6 +117,8 @@ private:
     void    grid_render();
     void    handle_scrollbar_click(HWND hwnd, int mx, int my);
     void    select_item(int idx, bool shift, bool ctrl);
+    void    begin_grid_scroll(HWND hwnd);
+    void    finish_grid_scroll();
     void    start_thumb_loader();
     void    stop_thumb_loader();
     void    request_thumb(int idx);
@@ -198,12 +201,11 @@ private:
     bool  m_anim_forward = true;
     float m_anim_iw = 1, m_anim_ih = 1;  // target image size for animation
     int   m_panel_width = 280;
-    UINT_PTR m_grid_timer = 0;
+    GridScrollPause m_grid_scroll_pause;
     int   m_toolbar_h = 28;
     std::vector<std::wstring> m_toolbar_items = {L"文件", L"查看", L"编辑", L"帮助"};
     int   m_toolbar_active = -1;
     HWND  m_tooltip = nullptr;
-    bool  m_scroll_active = false;
     bool  m_scrollbar_dragging = false;  // scrollbar thumb drag active
     bool  m_scrollbar_hover    = false;  // mouse hovering over scrollbar
     int   m_scrollbar_drag_y = 0;        // mouse y when drag started

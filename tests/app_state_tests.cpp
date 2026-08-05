@@ -2,7 +2,9 @@
 #include "decoder.h"
 #include "open_error.h"
 
+#include <Windows.h>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -21,6 +23,52 @@ void expect(bool condition, const char* message) {
 
 bool nearly_equal(float left, float right, float tolerance = 0.01f) {
     return std::abs(left - right) <= tolerance;
+}
+
+void test_native_owner_menu_state() {
+    HMENU menu = CreatePopupMenu();
+    expect(menu != nullptr, "native owner-menu test must create a popup menu");
+    if (!menu) return;
+
+    constexpr UINT disabled_id = 7001;
+    constexpr UINT enabled_id = 7002;
+    auto insert_owner_item = [&](UINT id, bool disabled) {
+        MENUITEMINFOW item = {sizeof(item)};
+        item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE;
+        item.fType = MFT_OWNERDRAW;
+        item.fState = disabled ? MFS_DISABLED : MFS_ENABLED;
+        item.wID = id;
+        return InsertMenuItemW(
+            menu, GetMenuItemCount(menu), TRUE, &item) != FALSE;
+    };
+
+    expect(insert_owner_item(disabled_id, true),
+        "native menu must accept a disabled owner-draw item");
+    expect(insert_owner_item(enabled_id, false),
+        "native menu must accept an enabled owner-draw item");
+
+    MENUITEMINFOW disabled_state = {sizeof(disabled_state)};
+    disabled_state.fMask = MIIM_STATE;
+    expect(GetMenuItemInfoW(menu, disabled_id, FALSE, &disabled_state) != FALSE
+            && (disabled_state.fState & MFS_DISABLED) == MFS_DISABLED,
+        "disabled owner-draw item must retain MFS_DISABLED in native state");
+    const UINT disabled_flags = GetMenuState(menu, disabled_id, MF_BYCOMMAND);
+    expect(disabled_flags != static_cast<UINT>(-1)
+            && (disabled_flags & (MF_DISABLED | MF_GRAYED))
+                == (MF_DISABLED | MF_GRAYED),
+        "native menu behavior must report the owner-draw item as unavailable");
+
+    MENUITEMINFOW enabled_state = {sizeof(enabled_state)};
+    enabled_state.fMask = MIIM_STATE;
+    expect(GetMenuItemInfoW(menu, enabled_id, FALSE, &enabled_state) != FALSE
+            && (enabled_state.fState & MFS_DISABLED) == 0,
+        "enabled owner-draw item must remain selectable in native state");
+    const UINT enabled_flags = GetMenuState(menu, enabled_id, MF_BYCOMMAND);
+    expect(enabled_flags != static_cast<UINT>(-1)
+            && (enabled_flags & (MF_DISABLED | MF_GRAYED)) == 0,
+        "native menu behavior must report the enabled owner-draw item as available");
+
+    DestroyMenu(menu);
 }
 
 } // namespace
@@ -150,6 +198,7 @@ int main() {
     expect(mv::complete_directory_open(0, directory_error)
             && directory_error.empty(),
         "a successful empty directory open must clear a previous open error");
+    test_native_owner_menu_state();
     using mv::RecursiveScanAction;
     expect(!mv::can_toggle_recursive(false, false, L"")
             && mv::can_toggle_recursive(false, false, L"C:\\空根目录")
@@ -227,6 +276,52 @@ int main() {
             && !mv::route_grid_exit(mv::GridExitTrigger::Escape, exit_state)
             && !mv::route_grid_exit(mv::GridExitTrigger::DoubleClick, exit_state),
         "all mode-switch inputs must remain ignored during animation");
+
+    mv::GridScrollPause scroll_pause;
+    std::vector<std::uintptr_t> cancelled_timers;
+    const auto cancel_timer = [&cancelled_timers](std::uintptr_t timer) {
+        cancelled_timers.push_back(timer);
+    };
+    scroll_pause.begin(cancel_timer, [] { return std::uintptr_t{17}; });
+    expect(scroll_pause.active() && scroll_pause.timer() == 17,
+        "a created scroll timer must pause visible thumbnail requests");
+    std::vector<int> requested_thumbnails;
+    scroll_pause.request_visible(
+        true, 40, 44, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails.empty(),
+        "active scrolling must continue suppressing visible thumbnail requests");
+
+    scroll_pause.begin(cancel_timer, [] { return std::uintptr_t{0}; });
+    expect(!scroll_pause.active() && scroll_pause.timer() == 0
+            && cancelled_timers == std::vector<std::uintptr_t>{17},
+        "SetTimer failure must cancel the prior timer and immediately resume scheduling");
+    scroll_pause.request_visible(
+        true, 40, 44, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails == std::vector<int>({40, 41, 42, 43}),
+        "SetTimer failure must make the exact visible range requestable");
+
+    requested_thumbnails.clear();
+    scroll_pause.begin(cancel_timer, [] { return std::uintptr_t{23}; });
+    scroll_pause.finish(cancel_timer);
+    expect(!scroll_pause.active() && scroll_pause.timer() == 0
+            && cancelled_timers == std::vector<std::uintptr_t>({17, 23}),
+        "grid exit must cancel its timer and end the scroll pause");
+    scroll_pause.request_visible(
+        false, 50, 53, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails.empty(),
+        "a stopped loader must not accumulate visible requests");
+    scroll_pause.request_visible(
+        true, 50, 53, [&requested_thumbnails](int index) {
+            requested_thumbnails.push_back(index);
+        });
+    expect(requested_thumbnails == std::vector<int>({50, 51, 52}),
+        "a restarted loader must receive the exact visible range after grid exit");
 
     mv::GridTransitionGeometry geometry;
     geometry.request_index = 2;
@@ -495,6 +590,23 @@ int main() {
     expect(mv::classify_grid_rebuild_reason(false, false, false, true)
             == GridRebuildReason::BackgroundDimensions,
         "dimension generation alone should be a background rebuild");
+
+    bool show_labels = true;
+    bool label_layout_dirty = false;
+    expect(mv::apply_grid_label_toggle(
+            true, show_labels, label_layout_dirty)
+            && !show_labels && label_layout_dirty,
+        "grid label toggle must hide labels and request a structural rebuild");
+    label_layout_dirty = false;
+    expect(mv::apply_grid_label_toggle(
+            true, show_labels, label_layout_dirty)
+            && show_labels && label_layout_dirty,
+        "a second grid label toggle must restore labels and rebuild layout");
+    label_layout_dirty = false;
+    expect(!mv::apply_grid_label_toggle(
+            false, show_labels, label_layout_dirty)
+            && show_labels && !label_layout_dirty,
+        "big-image mode must ignore the label toggle without changing layout state");
 
     int background_scroll = mv::reconcile_grid_scroll_after_rebuild(
         GridRebuildReason::BackgroundDimensions, 900, true,

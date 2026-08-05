@@ -118,7 +118,7 @@ if(BUILD_TESTING)
         NOMINMAX
         MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
     )
-    target_link_libraries(app_state_tests PRIVATE windowscodecs ole32)
+    target_link_libraries(app_state_tests PRIVATE windowscodecs ole32 user32)
     set_target_properties(app_state_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(app_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME app_state.unit COMMAND app_state_tests)
