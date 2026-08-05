@@ -6,7 +6,7 @@ Windows 图片浏览器。
 
 ## 下载
 
-[MiniView v0.1.0（Windows x64）](https://github.com/AuggyH/MiniView/releases/download/v0.1.0/MinView-v0.1.0-win64.zip)
+[MiniView v0.1.0（Windows x64）](https://github.com/AuggyH/MiniView/releases/download/v0.1.0/MiniView-v0.1.0-win64.zip)
 
 ## 功能
 
