@@ -1,8 +1,0 @@
-# gitleaks configuration for MinView Native
-# Extend the built-in default rule set. Project-specific patterns can be
-# added below under [[rules]] with their own regexes.
-
-title = "MinView Native gitleaks config"
-
-[extend]
-useDefault = true

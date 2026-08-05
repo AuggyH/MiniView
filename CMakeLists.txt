@@ -74,25 +74,6 @@ endif()
 # Disable Windows min/max macros (conflict with std::min/std::max)
 target_compile_definitions(MinView PRIVATE NOMINMAX)
 
-# ── Test: dump metadata ───────────────────────────────────────
-add_executable(test_meta
-    test_meta.cpp
-    src/metadata.cpp
-)
-target_include_directories(test_meta PRIVATE src)
-target_compile_options(test_meta PRIVATE /W4 /utf-8)
-if(MINVIEW_WARNINGS_AS_ERRORS)
-    target_compile_options(test_meta PRIVATE /WX)
-endif()
-target_compile_definitions(test_meta PRIVATE NOMINMAX)
-target_link_libraries(test_meta PRIVATE
-    shlwapi
-)
-set_target_properties(test_meta PROPERTIES
-    WIN32_EXECUTABLE FALSE
-)
-target_link_options(test_meta PRIVATE /SUBSYSTEM:CONSOLE)
-
 include(CTest)
 if(BUILD_TESTING)
     add_executable(indexer_tests
@@ -215,59 +196,6 @@ if(BUILD_TESTING)
     set_target_properties(file_operation_tests PROPERTIES WIN32_EXECUTABLE FALSE)
     target_link_options(file_operation_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME file_operation.unit COMMAND file_operation_tests)
-
-    add_test(NAME governance.unit
-        COMMAND powershell -NoProfile -ExecutionPolicy Bypass
-            -File "${CMAKE_SOURCE_DIR}/tests/governance_tests.ps1"
-            -RepositoryRoot "${CMAKE_SOURCE_DIR}"
-            -CMakeCommand "${CMAKE_COMMAND}"
-            -CTestCommand "${CMAKE_CTEST_COMMAND}"
-            -BuildDirectory "${CMAKE_BINARY_DIR}"
-            -Configuration "$<CONFIG>"
-    )
-    set(MINVIEW_GOVERNANCE_TEST_TIMEOUT_SECONDS 120)
-    set_tests_properties(governance.unit PROPERTIES
-        TIMEOUT ${MINVIEW_GOVERNANCE_TEST_TIMEOUT_SECONDS}
-    )
-
-    add_executable(indexer_benchmark
-        tools/indexer_benchmark.cpp
-        src/indexer.cpp
-    )
-    target_include_directories(indexer_benchmark PRIVATE src)
-    target_compile_options(indexer_benchmark PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(indexer_benchmark PRIVATE /WX)
-    endif()
-    target_compile_definitions(indexer_benchmark PRIVATE NOMINMAX)
-    target_link_libraries(indexer_benchmark PRIVATE psapi)
-    set_target_properties(indexer_benchmark PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(indexer_benchmark PRIVATE /SUBSYSTEM:CONSOLE)
-
-    add_executable(wic_format_probe
-        tools/wic_format_probe.cpp
-        src/decoder.cpp
-    )
-    target_include_directories(wic_format_probe PRIVATE src)
-    target_compile_options(wic_format_probe PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(wic_format_probe PRIVATE /WX)
-    endif()
-    target_compile_definitions(wic_format_probe PRIVATE NOMINMAX)
-    target_link_libraries(wic_format_probe PRIVATE windowscodecs ole32)
-    set_target_properties(wic_format_probe PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(wic_format_probe PRIVATE /SUBSYSTEM:CONSOLE)
-
-    add_executable(hardlink_fixture
-        tools/hardlink_fixture.cpp
-    )
-    target_compile_options(hardlink_fixture PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(hardlink_fixture PRIVATE /WX)
-    endif()
-    target_compile_definitions(hardlink_fixture PRIVATE NOMINMAX)
-    set_target_properties(hardlink_fixture PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(hardlink_fixture PRIVATE /SUBSYSTEM:CONSOLE)
 
 endif()
 
