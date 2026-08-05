@@ -74,6 +74,7 @@ public:
     void draw_comic_pages(
         std::span<const ComicPageDrawItem> pages,
         ComicRenderViewport viewport);
+    void draw_comic_controls(const ComicControlsRenderInput& input);
     void draw_selection_border(D2D1_RECT_F rc);
     void draw_label(float x, float y, float w, const std::wstring& text, float font_size,
         float r = 0.82f, float g = 0.82f, float b = 0.85f);

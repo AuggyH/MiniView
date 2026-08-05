@@ -20,6 +20,8 @@
 
 namespace mv {
 
+class AppComicPort;
+
 class App : private DeleteCompositionHost {
 public:
     App();
@@ -36,6 +38,8 @@ public:
     };
 
 private:
+    friend class AppComicPort;
+
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     bool    open_image(const std::wstring& path);
     void    open_directory(const std::wstring& path);
@@ -94,6 +98,19 @@ private:
     void    update_comic_viewport();
     void    adjust_comic_width(float delta);
     void    sync_comic_current();
+    ComicControlsRenderInput comic_controls_snapshot() const;
+    bool    dispatch_comic_command(ComicAppCommand command);
+    bool    start_comic_middle(
+                float anchor_x, float anchor_y,
+                float pointer_x, float pointer_y, bool anchor_visible);
+    void    cancel_comic_auto_scroll(ComicAppCancelTrigger trigger);
+    void    reset_comic_controls(ComicAppCancelTrigger trigger);
+    bool    start_comic_timer();
+    void    stop_comic_timer();
+    void    handle_comic_timer(HWND hwnd);
+    void    clear_comic_transient();
+    void    revalidate_comic_middle_anchor();
+    void    finish_comic_scrollbar_drag();
     void    request_comic_pages();
     void    apply_comic_results();
     void    trim_comic_cache();
@@ -193,6 +210,23 @@ private:
     std::vector<ComicPageEntry> m_comic_pages;
     std::uint64_t m_comic_generation = 1;
     int m_comic_fallback_index = -1;
+    UINT_PTR m_comic_timer = 0;
+    ULONGLONG m_comic_last_tick_ms = 0;
+    ULONGLONG m_comic_transient_until_ms = 0;
+    ComicTransientOverlayKind m_comic_transient_kind =
+        ComicTransientOverlayKind::None;
+    std::wstring m_comic_current_filename;
+    std::wstring m_comic_page_badge;
+    std::wstring m_comic_transient_text;
+    int m_comic_cached_page_index = -1;
+    int m_comic_cached_total_pages = 0;
+    bool m_comic_scrollbar_dragging = false;
+    bool m_comic_scrollbar_hover = false;
+    float m_comic_scrollbar_grab_offset_y = 0.0f;
+    float m_comic_autoscroll_anchor_x = 0.0f;
+    float m_comic_autoscroll_anchor_y = 0.0f;
+    float m_comic_autoscroll_pointer_x = 0.0f;
+    float m_comic_autoscroll_pointer_y = 0.0f;
 
     // Metadata extraction runs off the UI/render thread.
     std::thread m_metadata_thread;
