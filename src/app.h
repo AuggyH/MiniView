@@ -6,6 +6,9 @@
 #include "metadata.h"
 #include "app_state.h"
 #include "file_operation.h"
+#include "comic_reader_loader.h"
+#include "comic_reader_model.h"
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <thread>
@@ -82,6 +85,19 @@ private:
     void    request_preload(const std::wstring& path);
     Microsoft::WRL::ComPtr<IWICBitmapSource> get_preloaded(const std::wstring& path);
     void    preload_neighbors();
+
+    // Continuous comic layout inside large-image mode
+    void    toggle_comic_reader();
+    bool    leave_comic_reader(bool load_visible_page);
+    void    rebuild_comic_pages();
+    void    clear_comic_cache();
+    void    update_comic_viewport();
+    void    adjust_comic_width(float delta);
+    void    sync_comic_current();
+    void    request_comic_pages();
+    void    apply_comic_results();
+    void    trim_comic_cache();
+    void    render_comic_reader(float content_top);
 
     // Grid mode
     void    toggle_grid();
@@ -160,6 +176,23 @@ private:
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IWICBitmapSource>> m_preload_cache;
     std::vector<std::wstring> m_preload_queue;
     std::atomic<bool> m_preload_running{false};
+
+    struct ComicPageEntry {
+        Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> d2d;
+        std::uint32_t source_width = 0;
+        std::uint32_t source_height = 0;
+        std::uint32_t decoded_width = 0;
+        std::uint32_t decoded_height = 0;
+        std::size_t estimated_cache_bytes = 0;
+        bool failed = false;
+    };
+    ComicReaderModel m_comic_reader;
+    ComicReaderLoader m_comic_loader;
+    ComicLruBudget m_comic_lru;
+    std::vector<ComicPageEntry> m_comic_pages;
+    std::uint64_t m_comic_generation = 1;
+    int m_comic_fallback_index = -1;
 
     // Metadata extraction runs off the UI/render thread.
     std::thread m_metadata_thread;
