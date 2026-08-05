@@ -23,6 +23,334 @@ bool nearly_equal(float left, float right, float tolerance = 0.01f) {
     return std::abs(left - right) <= tolerance;
 }
 
+struct FakeComicAppPort {
+    bool enabled_value = true;
+    mv::ComicAppAutoOwner owner_value = mv::ComicAppAutoOwner::None;
+    int speed_value = 1;
+    bool toggle_result = true;
+    bool middle_start_result = true;
+    bool capture_result = true;
+    bool timer_value = false;
+    bool timer_start_result = true;
+    bool transient_value = false;
+    float advance_result = 0.0f;
+    bool stop_owner_on_advance = false;
+    std::vector<std::string> calls;
+
+    bool enabled() const { return enabled_value; }
+    mv::ComicAppAutoOwner owner() const { return owner_value; }
+    int speed_index() const { return speed_value; }
+    bool timer_running() const { return timer_value; }
+    bool transient_visible() const { return transient_value; }
+
+    bool toggle_cruise() {
+        calls.push_back("toggle_cruise");
+        if (owner_value == mv::ComicAppAutoOwner::Cruise) {
+            owner_value = mv::ComicAppAutoOwner::None;
+            return false;
+        }
+        owner_value = toggle_result
+            ? mv::ComicAppAutoOwner::Cruise
+            : mv::ComicAppAutoOwner::None;
+        return toggle_result;
+    }
+
+    void set_speed(int speed) {
+        speed_value = std::clamp(speed, 0, 3);
+        calls.push_back("set_speed:" + std::to_string(speed_value));
+    }
+
+    void show_cruise_status(mv::ComicAppCruiseStatus status) {
+        transient_value = true;
+        const char* name = status == mv::ComicAppCruiseStatus::Speed
+            ? "speed"
+            : (status == mv::ComicAppCruiseStatus::Paused
+                ? "paused" : "boundary");
+        calls.push_back(std::string("status:") + name);
+    }
+
+    void begin_tick_clock() { calls.push_back("begin_clock"); }
+
+    bool start_middle(float anchor_x, float anchor_y, float pointer_x, float pointer_y) {
+        calls.push_back("start_middle:" + std::to_string(static_cast<int>(anchor_x))
+            + "," + std::to_string(static_cast<int>(anchor_y))
+            + "," + std::to_string(static_cast<int>(pointer_x))
+            + "," + std::to_string(static_cast<int>(pointer_y)));
+        if (middle_start_result) owner_value = mv::ComicAppAutoOwner::Middle;
+        return middle_start_result;
+    }
+
+    bool acquire_middle_capture() {
+        calls.push_back("acquire_capture");
+        return capture_result;
+    }
+
+    void release_middle_capture() { calls.push_back("release_capture"); }
+
+    void set_middle_cursor(bool active) {
+        calls.push_back(active ? "cursor:on" : "cursor:off");
+    }
+
+    void cancel_auto_scroll(mv::ComicAppCancelTrigger trigger) {
+        const char* name = "invalid";
+        switch (trigger) {
+        case mv::ComicAppCancelTrigger::ManualInput: name = "manual"; break;
+        case mv::ComicAppCancelTrigger::Scrollbar: name = "scrollbar"; break;
+        case mv::ComicAppCancelTrigger::RepeatedMiddleClick: name = "repeated"; break;
+        case mv::ComicAppCancelTrigger::LeftButton: name = "left"; break;
+        case mv::ComicAppCancelTrigger::Escape: name = "escape"; break;
+        case mv::ComicAppCancelTrigger::KeyboardPage: name = "keyboard"; break;
+        case mv::ComicAppCancelTrigger::MouseWheel: name = "wheel"; break;
+        case mv::ComicAppCancelTrigger::FocusLost: name = "focus"; break;
+        case mv::ComicAppCancelTrigger::ExitMode: name = "exit"; break;
+        case mv::ComicAppCancelTrigger::EmptyBook: name = "empty"; break;
+        case mv::ComicAppCancelTrigger::ViewportChanged: name = "viewport"; break;
+        case mv::ComicAppCancelTrigger::InvalidInput: name = "invalid"; break;
+        }
+        calls.push_back(std::string("cancel:") + name);
+        owner_value = mv::ComicAppAutoOwner::None;
+    }
+
+    float advance_cruise(float) {
+        calls.push_back("advance_cruise");
+        if (stop_owner_on_advance) owner_value = mv::ComicAppAutoOwner::None;
+        return advance_result;
+    }
+
+    float advance_middle(float) {
+        calls.push_back("advance_middle");
+        if (stop_owner_on_advance) owner_value = mv::ComicAppAutoOwner::None;
+        return advance_result;
+    }
+
+    void sync_page() { calls.push_back("sync_page"); }
+    void request_pages() { calls.push_back("request_pages"); }
+
+    void clear_status_transient() {
+        calls.push_back("clear_status");
+        transient_value = false;
+    }
+
+    void clear_all_transient() {
+        calls.push_back("clear_transient");
+        transient_value = false;
+    }
+
+    bool start_timer() {
+        calls.push_back("start_timer");
+        timer_value = timer_start_result;
+        return timer_start_result;
+    }
+
+    void stop_timer() {
+        calls.push_back("stop_timer");
+        timer_value = false;
+    }
+
+    void invalidate() { calls.push_back("invalidate"); }
+};
+
+void test_comic_app_controller() {
+    expect(mv::kComicAppTimerIntervalMs == 16
+            && mv::kComicAppTransientDurationMs == 1000,
+        "production comic timing must use a 16 ms tick and 1000 ms transient");
+    const std::vector<std::string> cruise_start = {
+        "toggle_cruise", "begin_clock", "status:speed",
+        "start_timer", "invalidate"};
+    FakeComicAppPort keyboard;
+    expect(mv::ComicAppController::dispatch_command(
+            keyboard, mv::ComicAppCommand::ToggleCruise)
+            && keyboard.calls == cruise_start,
+        "P must drive the production cruise transition and timer order");
+    FakeComicAppPort menu;
+    expect(mv::ComicAppController::dispatch_command(
+            menu, mv::ComicAppCommand::ToggleCruise)
+            && menu.calls == cruise_start,
+        "the View menu must drive the same production cruise transition as P");
+
+    FakeComicAppPort disabled;
+    disabled.enabled_value = false;
+    expect(!mv::ComicAppController::dispatch_command(
+            disabled, mv::ComicAppCommand::ToggleCruise)
+            && disabled.calls.empty(),
+        "comic commands outside comic mode must fail closed without effects");
+
+    FakeComicAppPort speed;
+    expect(mv::ComicAppController::dispatch_command(
+            speed, mv::ComicAppCommand::SetSpeed20)
+            && speed.speed_value == 3,
+        "the 2.0x menu command must select the exact production tier");
+    speed.calls.clear();
+    expect(mv::ComicAppController::dispatch_command(
+            speed, mv::ComicAppCommand::IncreaseSpeed)
+            && speed.speed_value == 3
+            && speed.calls.front() == "set_speed:3",
+        "] must clamp at the highest production speed tier");
+    speed.calls.clear();
+    expect(mv::ComicAppController::dispatch_command(
+            speed, mv::ComicAppCommand::DecreaseSpeed)
+            && speed.speed_value == 2
+            && speed.calls.front() == "set_speed:2",
+        "[ must decrement exactly one production speed tier");
+
+    FakeComicAppPort middle;
+    expect(mv::ComicAppController::start_middle(
+            middle, 10.0f, 20.0f, 10.0f, 20.0f, true)
+            && middle.owner_value == mv::ComicAppAutoOwner::Middle
+            && middle.calls == std::vector<std::string>({
+                "start_middle:10,20,10,20", "clear_status", "begin_clock",
+                "acquire_capture", "cursor:on", "start_timer", "invalidate"}),
+        "a valid middle click must start, capture, arm timer, then redraw in order");
+    middle.calls.clear();
+    expect(mv::ComicAppController::start_middle(
+            middle, 10.0f, 20.0f, 10.0f, 20.0f, true)
+            && middle.owner_value == mv::ComicAppAutoOwner::None
+            && middle.calls == std::vector<std::string>({
+                "cancel:repeated", "clear_status", "release_capture",
+                "stop_timer", "cursor:off", "invalidate"}),
+        "a repeated middle click must cancel capture and timer in production order");
+
+    FakeComicAppPort outside;
+    expect(!mv::ComicAppController::start_middle(
+            outside, 1.0f, 1.0f, 1.0f, 1.0f, false)
+            && outside.calls.empty(),
+        "a middle anchor outside the Renderer layout must not acquire resources");
+
+    FakeComicAppPort capture_failure;
+    capture_failure.capture_result = false;
+    expect(!mv::ComicAppController::start_middle(
+            capture_failure, 10.0f, 20.0f, 10.0f, 20.0f, true)
+            && capture_failure.owner_value == mv::ComicAppAutoOwner::None
+            && capture_failure.calls == std::vector<std::string>({
+                "start_middle:10,20,10,20", "clear_status", "begin_clock",
+                "acquire_capture", "cancel:invalid", "clear_status",
+                "release_capture", "stop_timer", "cursor:off", "invalidate"}),
+        "capture failure must roll back the active middle owner before returning");
+
+    FakeComicAppPort cruise_tick;
+    cruise_tick.owner_value = mv::ComicAppAutoOwner::Cruise;
+    cruise_tick.timer_value = true;
+    cruise_tick.advance_result = 12.0f;
+    expect(mv::ComicAppController::timer_tick(
+            cruise_tick, 0.016f, false)
+            && cruise_tick.calls == std::vector<std::string>({
+                "advance_cruise", "sync_page", "request_pages", "invalidate"}),
+        "a cruise timer tick must advance before synchronizing and requesting pages");
+
+    FakeComicAppPort middle_boundary;
+    middle_boundary.owner_value = mv::ComicAppAutoOwner::Middle;
+    middle_boundary.timer_value = true;
+    middle_boundary.stop_owner_on_advance = true;
+    expect(mv::ComicAppController::timer_tick(
+            middle_boundary, 0.016f, false)
+            && middle_boundary.calls == std::vector<std::string>({
+                "advance_middle", "release_capture", "stop_timer",
+                "cursor:off", "invalidate"}),
+        "a middle boundary tick must release capture before stopping its timer");
+
+    const std::vector<std::pair<mv::ComicAppCancelTrigger, std::string>>
+        cancellation_cases = {
+            {mv::ComicAppCancelTrigger::LeftButton, "cancel:left"},
+            {mv::ComicAppCancelTrigger::Escape, "cancel:escape"},
+            {mv::ComicAppCancelTrigger::KeyboardPage, "cancel:keyboard"},
+            {mv::ComicAppCancelTrigger::MouseWheel, "cancel:wheel"},
+            {mv::ComicAppCancelTrigger::FocusLost, "cancel:focus"},
+            {mv::ComicAppCancelTrigger::ExitMode, "cancel:exit"}};
+    for (const auto& [trigger, expected_cancel] : cancellation_cases) {
+        FakeComicAppPort cancelled;
+        cancelled.owner_value = mv::ComicAppAutoOwner::Middle;
+        cancelled.timer_value = true;
+        expect(mv::ComicAppController::cancel(cancelled, trigger)
+                && cancelled.owner_value == mv::ComicAppAutoOwner::None
+                && cancelled.calls.size() == 6
+                && cancelled.calls[0] == expected_cancel
+                && cancelled.calls[1] == "clear_status"
+                && cancelled.calls[2] == "release_capture"
+                && cancelled.calls[3] == "stop_timer"
+                && cancelled.calls[4] == "cursor:off"
+                && cancelled.calls[5] == "invalidate",
+            "each manual/focus/exit cancellation must share atomic cleanup order");
+    }
+
+    struct ViewportRect {
+        float left;
+        float top;
+        float right;
+        float bottom;
+    };
+    const ViewportRect before{0.0f, 0.0f, 1000.0f, 800.0f};
+    struct ViewportCase {
+        const char* name;
+        ViewportRect after;
+        bool expect_visible;
+        bool old_top_width_gate;
+    };
+    const std::vector<ViewportCase> viewport_cases = {
+        {"same", {0.0f, 0.0f, 1000.0f, 800.0f}, true, false},
+        {"top-only", {0.0f, 100.0f, 1000.0f, 800.0f}, true, true},
+        {"right-only", {0.0f, 0.0f, 900.0f, 800.0f}, true, true},
+        {"bottom-only", {0.0f, 0.0f, 1000.0f, 600.0f}, false, false}};
+    constexpr float anchor_x = 500.0f;
+    constexpr float anchor_y = 700.0f;
+    for (const ViewportCase& item : viewport_cases) {
+        const bool old_gate = before.top != item.after.top
+            || (before.right - before.left)
+                != (item.after.right - item.after.left);
+        expect(old_gate == item.old_top_width_gate,
+            "the discriminating table must reproduce the old subset gate");
+        const bool anchor_visible = anchor_x >= item.after.left
+            && anchor_x < item.after.right
+            && anchor_y >= item.after.top
+            && anchor_y < item.after.bottom;
+        expect(anchor_visible == item.expect_visible,
+            "the viewport table must classify the post-update anchor");
+
+        FakeComicAppPort viewport;
+        viewport.owner_value = mv::ComicAppAutoOwner::Middle;
+        viewport.timer_value = true;
+        const bool cancelled = mv::ComicAppController::viewport_changed(
+            viewport, anchor_visible);
+        if (anchor_visible) {
+            expect(!cancelled && viewport.calls.empty(),
+                "same/top/right updates with a visible anchor must be no-ops");
+        } else {
+            expect(cancelled
+                    && std::string(item.name) == "bottom-only"
+                    && !old_gate
+                    && viewport.owner_value == mv::ComicAppAutoOwner::None
+                    && viewport.calls == std::vector<std::string>({
+                        "cancel:viewport", "clear_status", "release_capture",
+                        "stop_timer", "cursor:off", "invalidate"}),
+                "height-only shrink must bypass the old gate and clean up atomically");
+        }
+    }
+
+    FakeComicAppPort inactive_viewport;
+    inactive_viewport.timer_value = false;
+    expect(!mv::ComicAppController::viewport_changed(inactive_viewport, false)
+            && inactive_viewport.calls.empty(),
+        "every viewport update must remain a cheap no-op without a middle owner");
+
+    FakeComicAppPort timer_failure;
+    timer_failure.owner_value = mv::ComicAppAutoOwner::Middle;
+    timer_failure.transient_value = true;
+    timer_failure.timer_start_result = false;
+    expect(!mv::ComicAppController::transient_changed(timer_failure)
+            && timer_failure.owner_value == mv::ComicAppAutoOwner::None
+            && timer_failure.calls == std::vector<std::string>({
+                "start_timer", "clear_transient", "cancel:invalid",
+                "release_capture", "stop_timer", "cursor:off", "invalidate"}),
+        "timer creation failure must clear transient and middle resources together");
+
+    FakeComicAppPort expired;
+    expired.timer_value = true;
+    expired.transient_value = true;
+    expect(mv::ComicAppController::timer_tick(expired, 0.016f, true)
+            && expired.calls == std::vector<std::string>({
+                "clear_transient", "stop_timer", "invalidate"}),
+        "transient expiry must stop an otherwise idle timer before redraw");
+}
+
 void test_native_owner_menu_state() {
     HMENU menu = CreatePopupMenu();
     expect(menu != nullptr, "native owner-menu test must create a popup menu");
@@ -73,6 +401,7 @@ void test_native_owner_menu_state() {
 
 int main() {
     test_native_owner_menu_state();
+    test_comic_app_controller();
     using mv::RecursiveScanAction;
     expect(!mv::can_toggle_recursive(false, false, L"")
             && mv::can_toggle_recursive(false, false, L"C:\\空根目录")
