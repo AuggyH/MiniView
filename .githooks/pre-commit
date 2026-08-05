@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Pre-commit secret scan via gitleaks.
+# Installed by: git config core.hooksPath .githooks
+#
+# NOTE: `gitleaks git --pre-commit` is broken on Windows (its internal git
+# invocation fails silently -> "0 commits scanned"), so we stage-copy the
+# files to a temp dir and scan that with `gitleaks dir` instead.
+#
+# Skips (with a warning) when gitleaks is not installed, so the hook never
+# blocks development on machines without the tool.
+
+set -u
+
+GITLEAKS="$HOME/bin/gitleaks.exe"
+if [ ! -x "$GITLEAKS" ]; then
+    GITLEAKS="$(command -v gitleaks 2>/dev/null)"
+fi
+if [ -z "$GITLEAKS" ] || [ ! -x "$GITLEAKS" ]; then
+    echo "gitleaks not found — skipping secret scan" >&2
+    exit 0
+fi
+
+files="$(git diff --cached --name-only --diff-filter=ACM)"
+if [ -z "$files" ]; then
+    exit 0
+fi
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    mkdir -p "$tmp/$(dirname "$f")"
+    cp "$f" "$tmp/$f" 2>/dev/null || continue
+done <<< "$files"
+
+config="$(pwd)/.gitleaks.toml"
+if [ ! -f "$config" ]; then
+    config=""
+fi
+
+tmp_win="$(cygpath -w "$tmp" 2>/dev/null || echo "$tmp")"
+if [ -n "$config" ]; then
+    MSYS_NO_PATHCONV=1 "$GITLEAKS" dir "$tmp_win" --no-banner --config "$(cygpath -w "$config")"
+else
+    MSYS_NO_PATHCONV=1 "$GITLEAKS" dir "$tmp_win" --no-banner
+fi
+status=$?
+if [ "$status" -ne 0 ]; then
+    echo "gitleaks blocked this commit (possible secret). Use 'git commit --no-verify' only if you are sure." >&2
+fi
+exit "$status"
