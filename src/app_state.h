@@ -11,10 +11,214 @@
 
 namespace mv {
 
+inline constexpr std::uint32_t kComicAppTimerIntervalMs = 16;
+inline constexpr std::uint64_t kComicAppTransientDurationMs = 1000;
+
 enum class GridRebuildReason {
     None,
     Structural,
     BackgroundDimensions,
+};
+
+enum class ComicAppCommand {
+    ToggleCruise,
+    SetSpeed05,
+    SetSpeed10,
+    SetSpeed15,
+    SetSpeed20,
+    DecreaseSpeed,
+    IncreaseSpeed,
+};
+
+enum class ComicAppAutoOwner {
+    None,
+    Cruise,
+    Middle,
+};
+
+enum class ComicAppCancelTrigger {
+    ManualInput,
+    Scrollbar,
+    RepeatedMiddleClick,
+    LeftButton,
+    Escape,
+    KeyboardPage,
+    MouseWheel,
+    FocusLost,
+    ExitMode,
+    EmptyBook,
+    ViewportChanged,
+    InvalidInput,
+};
+
+enum class ComicAppCruiseStatus {
+    Speed,
+    Paused,
+    Boundary,
+};
+
+// Port is the single production seam for comic command/input/timer lifecycle.
+// App supplies the real Model/Win32 effects; tests supply a recording fake.
+class ComicAppController {
+public:
+    template <typename Port>
+    static bool dispatch_command(Port& port, ComicAppCommand command) {
+        if (!port.enabled()) return false;
+        if (command == ComicAppCommand::ToggleCruise) {
+            const ComicAppAutoOwner previous = port.owner();
+            const bool active = port.toggle_cruise();
+            if (previous == ComicAppAutoOwner::Middle
+                && port.owner() != ComicAppAutoOwner::Middle) {
+                port.release_middle_capture();
+                port.set_middle_cursor(false);
+            }
+            if (active) {
+                port.begin_tick_clock();
+                port.show_cruise_status(ComicAppCruiseStatus::Speed);
+            } else {
+                port.show_cruise_status(previous == ComicAppAutoOwner::Cruise
+                    ? ComicAppCruiseStatus::Paused
+                    : ComicAppCruiseStatus::Boundary);
+            }
+            (void)ensure_timer(port);
+            port.invalidate();
+            return true;
+        }
+
+        int requested_speed = port.speed_index();
+        switch (command) {
+        case ComicAppCommand::SetSpeed05: requested_speed = 0; break;
+        case ComicAppCommand::SetSpeed10: requested_speed = 1; break;
+        case ComicAppCommand::SetSpeed15: requested_speed = 2; break;
+        case ComicAppCommand::SetSpeed20: requested_speed = 3; break;
+        case ComicAppCommand::DecreaseSpeed: --requested_speed; break;
+        case ComicAppCommand::IncreaseSpeed: ++requested_speed; break;
+        case ComicAppCommand::ToggleCruise: break;
+        }
+        port.set_speed(requested_speed);
+        port.show_cruise_status(ComicAppCruiseStatus::Speed);
+        (void)ensure_timer(port);
+        port.invalidate();
+        return true;
+    }
+
+    template <typename Port>
+    static bool start_middle(
+        Port& port, float anchor_x, float anchor_y,
+        float pointer_x, float pointer_y, bool anchor_visible) {
+        if (!port.enabled()) return false;
+        if (port.owner() == ComicAppAutoOwner::Middle) {
+            return cancel(port, ComicAppCancelTrigger::RepeatedMiddleClick);
+        }
+        if (!anchor_visible
+            || !port.start_middle(anchor_x, anchor_y, pointer_x, pointer_y)) {
+            return false;
+        }
+        port.clear_status_transient();
+        port.begin_tick_clock();
+        if (!port.acquire_middle_capture()) {
+            (void)cancel(port, ComicAppCancelTrigger::InvalidInput);
+            return false;
+        }
+        port.set_middle_cursor(true);
+        if (!ensure_timer(port)) return false;
+        port.invalidate();
+        return true;
+    }
+
+    template <typename Port>
+    static bool cancel(Port& port, ComicAppCancelTrigger trigger) {
+        const ComicAppAutoOwner previous = port.owner();
+        if (previous == ComicAppAutoOwner::None) return false;
+        port.cancel_auto_scroll(trigger);
+        port.clear_status_transient();
+        if (previous == ComicAppAutoOwner::Middle) {
+            port.release_middle_capture();
+        }
+        stop_timer_if_idle(port);
+        if (previous == ComicAppAutoOwner::Middle) {
+            port.set_middle_cursor(false);
+        }
+        port.invalidate();
+        return true;
+    }
+
+    template <typename Port>
+    static bool timer_tick(Port& port, float elapsed_seconds, bool transient_expired) {
+        if (!port.timer_running()) return false;
+        const ComicAppAutoOwner previous = port.owner();
+        float applied = 0.0f;
+        if (previous == ComicAppAutoOwner::Cruise) {
+            applied = port.advance_cruise(elapsed_seconds);
+        } else if (previous == ComicAppAutoOwner::Middle) {
+            applied = port.advance_middle(elapsed_seconds);
+        }
+        bool redraw = false;
+        if (applied != 0.0f) {
+            port.sync_page();
+            port.request_pages();
+            redraw = true;
+        }
+        const bool middle_stopped = previous == ComicAppAutoOwner::Middle
+            && port.owner() != ComicAppAutoOwner::Middle;
+        if (middle_stopped) {
+            port.release_middle_capture();
+            redraw = true;
+        }
+        if (transient_expired) {
+            port.clear_all_transient();
+            redraw = true;
+        }
+        stop_timer_if_idle(port);
+        if (middle_stopped) port.set_middle_cursor(false);
+        if (redraw) port.invalidate();
+        return redraw;
+    }
+
+    template <typename Port>
+    static bool transient_changed(Port& port) {
+        if (!port.transient_visible()) return false;
+        if (!ensure_timer(port)) return false;
+        port.invalidate();
+        return true;
+    }
+
+    template <typename Port>
+    static bool viewport_changed(Port& port, bool middle_anchor_visible) {
+        if (port.owner() != ComicAppAutoOwner::Middle
+            || middle_anchor_visible) {
+            return false;
+        }
+        return cancel(port, ComicAppCancelTrigger::ViewportChanged);
+    }
+
+    template <typename Port>
+    static void stop_timer_if_idle(Port& port) {
+        if (port.owner() == ComicAppAutoOwner::None
+            && !port.transient_visible()) {
+            port.stop_timer();
+        }
+    }
+
+private:
+    template <typename Port>
+    static bool ensure_timer(Port& port) {
+        if (port.timer_running() || port.start_timer()) return true;
+        const ComicAppAutoOwner previous = port.owner();
+        port.clear_all_transient();
+        if (previous != ComicAppAutoOwner::None) {
+            port.cancel_auto_scroll(ComicAppCancelTrigger::InvalidInput);
+        }
+        if (previous == ComicAppAutoOwner::Middle) {
+            port.release_middle_capture();
+        }
+        port.stop_timer();
+        if (previous == ComicAppAutoOwner::Middle) {
+            port.set_middle_cursor(false);
+        }
+        port.invalidate();
+        return false;
+    }
 };
 
 enum class RecursiveScanAction {

@@ -7,6 +7,9 @@
 #include "metadata.h"
 #include "app_state.h"
 #include "file_operation.h"
+#include "comic_reader_loader.h"
+#include "comic_reader_model.h"
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <thread>
@@ -17,6 +20,8 @@
 #include <atomic>
 
 namespace mv {
+
+class AppComicPort;
 
 class App : private DeleteCompositionHost {
 public:
@@ -34,6 +39,8 @@ public:
     };
 
 private:
+    friend class AppComicPort;
+
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     bool    open_image(const std::wstring& path);
     void    show_open_error(OpenInputRoute route);
@@ -84,6 +91,32 @@ private:
     void    request_preload(const std::wstring& path);
     Microsoft::WRL::ComPtr<IWICBitmapSource> get_preloaded(const std::wstring& path);
     void    preload_neighbors();
+
+    // Continuous comic layout inside large-image mode
+    void    toggle_comic_reader();
+    bool    leave_comic_reader(bool load_visible_page);
+    void    rebuild_comic_pages();
+    void    clear_comic_cache();
+    void    update_comic_viewport();
+    void    adjust_comic_width(float delta);
+    void    sync_comic_current();
+    ComicControlsRenderInput comic_controls_snapshot() const;
+    bool    dispatch_comic_command(ComicAppCommand command);
+    bool    start_comic_middle(
+                float anchor_x, float anchor_y,
+                float pointer_x, float pointer_y, bool anchor_visible);
+    void    cancel_comic_auto_scroll(ComicAppCancelTrigger trigger);
+    void    reset_comic_controls(ComicAppCancelTrigger trigger);
+    bool    start_comic_timer();
+    void    stop_comic_timer();
+    void    handle_comic_timer(HWND hwnd);
+    void    clear_comic_transient();
+    void    revalidate_comic_middle_anchor();
+    void    finish_comic_scrollbar_drag();
+    void    request_comic_pages();
+    void    apply_comic_results();
+    void    trim_comic_cache();
+    void    render_comic_reader(float content_top);
 
     // Grid mode
     void    toggle_grid();
@@ -163,6 +196,40 @@ private:
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IWICBitmapSource>> m_preload_cache;
     std::vector<std::wstring> m_preload_queue;
     std::atomic<bool> m_preload_running{false};
+
+    struct ComicPageEntry {
+        Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> d2d;
+        std::uint32_t source_width = 0;
+        std::uint32_t source_height = 0;
+        std::uint32_t decoded_width = 0;
+        std::uint32_t decoded_height = 0;
+        std::size_t estimated_cache_bytes = 0;
+        bool failed = false;
+    };
+    ComicReaderModel m_comic_reader;
+    ComicReaderLoader m_comic_loader;
+    ComicLruBudget m_comic_lru;
+    std::vector<ComicPageEntry> m_comic_pages;
+    std::uint64_t m_comic_generation = 1;
+    int m_comic_fallback_index = -1;
+    UINT_PTR m_comic_timer = 0;
+    ULONGLONG m_comic_last_tick_ms = 0;
+    ULONGLONG m_comic_transient_until_ms = 0;
+    ComicTransientOverlayKind m_comic_transient_kind =
+        ComicTransientOverlayKind::None;
+    std::wstring m_comic_current_filename;
+    std::wstring m_comic_page_badge;
+    std::wstring m_comic_transient_text;
+    int m_comic_cached_page_index = -1;
+    int m_comic_cached_total_pages = 0;
+    bool m_comic_scrollbar_dragging = false;
+    bool m_comic_scrollbar_hover = false;
+    float m_comic_scrollbar_grab_offset_y = 0.0f;
+    float m_comic_autoscroll_anchor_x = 0.0f;
+    float m_comic_autoscroll_anchor_y = 0.0f;
+    float m_comic_autoscroll_pointer_x = 0.0f;
+    float m_comic_autoscroll_pointer_y = 0.0f;
 
     // Metadata extraction runs off the UI/render thread.
     std::thread m_metadata_thread;
