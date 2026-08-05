@@ -1,5 +1,8 @@
 #pragma once
+#include "renderer_state.h"
+
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -15,6 +18,12 @@ namespace mv {
 using Microsoft::WRL::ComPtr;
 
 struct PanelRegion { D2D1_RECT_F rect; std::wstring text; std::wstring label; };
+
+struct ComicPageDrawItem {
+    ComicPageGeometry geometry;
+    ID2D1Bitmap1* bitmap = nullptr;
+    bool failed = false;
+};
 
 class Renderer {
 public:
@@ -60,6 +69,11 @@ public:
     // Grid mode drawing
     void draw_grid_placeholder(float x, float y, float w, float h, D2D1_COLOR_F color);
     void draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitmap1* thumb, bool square = false);
+    void draw_comic_page(ID2D1Bitmap1* bitmap, D2D1_RECT_F destination);
+    void draw_comic_card(D2D1_RECT_F destination, bool failed);
+    void draw_comic_pages(
+        std::span<const ComicPageDrawItem> pages,
+        ComicRenderViewport viewport);
     void draw_selection_border(D2D1_RECT_F rc);
     void draw_label(float x, float y, float w, const std::wstring& text, float font_size,
         float r = 0.82f, float g = 0.82f, float b = 0.85f);
@@ -94,6 +108,12 @@ private:
     bool create_text_resources();
     void discard_device_resources();
     void update_fit_scale();
+    void draw_comic_bitmap(
+        ID2D1Bitmap1* bitmap, D2D1_RECT_F destination,
+        float corner_radius);
+    void draw_comic_card_visual(
+        D2D1_RECT_F destination, D2D1_RECT_F text_bounds,
+        ComicPageVisual visual, const ComicRenderMetrics& metrics);
 
     HWND m_hwnd = nullptr;
 

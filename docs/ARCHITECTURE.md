@@ -39,10 +39,12 @@ wWinMain
 
 ## 当前自动化边界
 
-CTest 当前注册六项自动化测试：
+CTest 当前注册八项自动化测试：
 
 - `indexer.unit`：扫描、过滤、排序、相对路径、Windows invariant path identity 和批量移除。
 - `app_state.unit`：缩放/拖动状态、滚动夹紧、布局重建选择可见性和删除后 current identity 事务。
+- `comic_reader_model.unit`：漫画模式虚拟布局、锚点恢复、方向预读范围和 LRU 软上限。
+- `comic_reader_loader.unit`：方向请求替换、generation 与陈旧结果丢弃、去重、失败语义、WIC 显示尺寸解码、8 B/px 与 512 MiB LRU 预算，以及 stop/destructor 线程清理。
 - `metadata.unit`：正常、恶意长度、截断和超预算 PNG tEXt 输入。
 - `renderer_state.unit`：D2D/DXGI 失败分类、设备重建和 App 缓存 generation 失效。
 - `file_operation.unit`：删除后磁盘存在性与 Shell 完成/取消/部分完成判定。

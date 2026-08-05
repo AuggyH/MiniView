@@ -6,6 +6,7 @@
 #include <dxgi1_2.h>
 #include <stdexcept>
 #include <algorithm>
+#include <iterator>
 #include <string>
 
 namespace mv {
@@ -13,6 +14,10 @@ namespace mv {
 namespace {
     constexpr float OVERLAY_PAD = 12.0f;
     constexpr float OVERLAY_FONT_SIZE = 14.0f;
+
+    D2D1_RECT_F to_d2d_rect(ComicRenderRect rect) {
+        return {rect.left, rect.top, rect.right, rect.bottom};
+    }
 }
 
 Renderer::Renderer() = default;
@@ -516,6 +521,175 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     if (square) {
         m_d2d_context->PopAxisAlignedClip();
     }
+}
+
+void Renderer::draw_comic_page(
+    ID2D1Bitmap1* bitmap, D2D1_RECT_F destination) {
+    draw_comic_bitmap(
+        bitmap, destination,
+        comic_render_metrics(m_dpi_y, false).corner_radius);
+}
+
+void Renderer::draw_comic_bitmap(
+    ID2D1Bitmap1* bitmap, D2D1_RECT_F destination,
+    float corner_radius) {
+    if (!m_d2d_context || !bitmap) return;
+    if (destination.right <= destination.left
+        || destination.bottom <= destination.top) return;
+
+    if (corner_radius <= 0.0f || !m_d2d_factory) {
+        m_d2d_context->DrawBitmap(
+            bitmap, &destination, 1.0f,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+        return;
+    }
+
+    const D2D1_ROUNDED_RECT rounded = {
+        destination, corner_radius, corner_radius};
+    ComPtr<ID2D1RoundedRectangleGeometry> geometry;
+    const HRESULT result = m_d2d_factory->CreateRoundedRectangleGeometry(
+        &rounded, &geometry);
+    if (FAILED(result) || !geometry) {
+        m_d2d_context->DrawBitmap(
+            bitmap, &destination, 1.0f,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+        return;
+    }
+
+    m_d2d_context->PushLayer(
+        D2D1::LayerParameters(
+            D2D1::InfiniteRect(), geometry.Get(),
+            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            D2D1::IdentityMatrix(), 1.0f, nullptr,
+            D2D1_LAYER_OPTIONS_NONE),
+        nullptr);
+    m_d2d_context->DrawBitmap(
+        bitmap, &destination, 1.0f,
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+    m_d2d_context->PopLayer();
+}
+
+void Renderer::draw_comic_card(D2D1_RECT_F destination, bool failed) {
+    draw_comic_card_visual(
+        destination, destination,
+        failed ? ComicPageVisual::Error : ComicPageVisual::Placeholder,
+        comic_render_metrics(m_dpi_y, false));
+}
+
+void Renderer::draw_comic_card_visual(
+    D2D1_RECT_F destination, D2D1_RECT_F text_bounds,
+    ComicPageVisual visual, const ComicRenderMetrics& metrics) {
+    if (!m_d2d_context || destination.right <= destination.left
+        || destination.bottom <= destination.top) return;
+
+    const bool failed = visual == ComicPageVisual::Error;
+    ComPtr<ID2D1SolidColorBrush> background;
+    m_d2d_context->CreateSolidColorBrush(
+        failed ? D2D1::ColorF(0.20f, 0.12f, 0.12f, 1.0f)
+               : D2D1::ColorF(0.16f, 0.16f, 0.18f, 1.0f),
+        &background);
+    if (!background) return;
+
+    if (metrics.corner_radius > 0.0f) {
+        const D2D1_ROUNDED_RECT rounded = {
+            destination, metrics.corner_radius, metrics.corner_radius};
+        m_d2d_context->FillRoundedRectangle(&rounded, background.Get());
+    } else {
+        m_d2d_context->FillRectangle(&destination, background.Get());
+    }
+
+    ComPtr<ID2D1SolidColorBrush> border;
+    m_d2d_context->CreateSolidColorBrush(
+        failed ? D2D1::ColorF(0.42f, 0.24f, 0.24f, 1.0f)
+               : D2D1::ColorF(0.22f, 0.22f, 0.25f, 1.0f),
+        &border);
+    if (border) {
+        if (metrics.corner_radius > 0.0f) {
+            const D2D1_ROUNDED_RECT rounded = {
+                destination, metrics.corner_radius, metrics.corner_radius};
+            m_d2d_context->DrawRoundedRectangle(
+                &rounded, border.Get(), metrics.card_border_width);
+        } else {
+            m_d2d_context->DrawRectangle(
+                &destination, border.Get(), metrics.card_border_width);
+        }
+    }
+    if (!failed || !m_dwrite_factory) return;
+
+    ComPtr<ID2D1SolidColorBrush> text;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.88f, 0.72f, 0.72f, 1.0f), &text);
+    ComPtr<IDWriteTextFormat> format;
+    m_dwrite_factory->CreateTextFormat(
+        L"Microsoft YaHei", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        metrics.error_font_size, L"zh-CN", &format);
+    if (!format) return;
+    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    D2D1_RECT_F padded_text = {
+        text_bounds.left + metrics.card_padding,
+        text_bounds.top + metrics.card_padding,
+        text_bounds.right - metrics.card_padding,
+        text_bounds.bottom - metrics.card_padding};
+    if (padded_text.right <= padded_text.left
+        || padded_text.bottom <= padded_text.top) {
+        padded_text = text_bounds;
+    }
+    constexpr wchar_t message[] = L"\u56FE\u7247\u52A0\u8F7D\u5931\u8D25";
+    m_d2d_context->DrawText(
+        message, static_cast<UINT32>(std::size(message) - 1),
+        format.Get(), &padded_text, text.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+}
+
+void Renderer::draw_comic_pages(
+    std::span<const ComicPageDrawItem> pages,
+    ComicRenderViewport viewport) {
+    if (!m_d2d_context) return;
+    if (!std::isfinite(viewport.dpi) || viewport.dpi <= 0.0f) {
+        viewport.dpi = m_dpi_y;
+    }
+
+    std::vector<ComicPageRenderInput> inputs;
+    inputs.reserve(pages.size());
+    for (const ComicPageDrawItem& page : pages) {
+        const ComicPageVisual visual = page.failed || page.geometry.decode_failed
+            ? ComicPageVisual::Error
+            : (page.bitmap ? ComicPageVisual::Bitmap
+                           : ComicPageVisual::Placeholder);
+        inputs.push_back({page.geometry, visual});
+    }
+
+    const ComicRenderPlan plan = build_comic_render_plan(inputs, viewport);
+    if (plan.viewport.empty()) return;
+
+    const D2D1_RECT_F viewport_rect = to_d2d_rect(plan.viewport);
+    ComPtr<ID2D1SolidColorBrush> background;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.102f, 0.102f, 0.102f, 1.0f),
+        &background);
+    if (background) {
+        m_d2d_context->FillRectangle(&viewport_rect, background.Get());
+    }
+
+    m_d2d_context->PushAxisAlignedClip(
+        &viewport_rect, D2D1_ANTIALIAS_MODE_ALIASED);
+    for (const ComicPageRenderCommand& command : plan.pages) {
+        const ComicPageDrawItem& page = pages[command.input_index];
+        const D2D1_RECT_F destination = to_d2d_rect(command.destination);
+        const D2D1_RECT_F clip = to_d2d_rect(command.clip);
+        m_d2d_context->PushAxisAlignedClip(
+            &clip, D2D1_ANTIALIAS_MODE_ALIASED);
+        if (command.visual == ComicPageVisual::Bitmap && page.bitmap) {
+            draw_comic_bitmap(
+                page.bitmap, destination, plan.metrics.corner_radius);
+        } else {
+            draw_comic_card_visual(
+                destination, clip, command.visual, plan.metrics);
+        }
+        m_d2d_context->PopAxisAlignedClip();
+    }
+    m_d2d_context->PopAxisAlignedClip();
 }
 
 void Renderer::draw_selection_border(D2D1_RECT_F rc) {
