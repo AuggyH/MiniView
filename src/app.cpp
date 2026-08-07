@@ -434,8 +434,8 @@ App::~App() {
 int App::run(const std::wstring& initial_path) {
     // Scale window size by DPI
     float dpi = static_cast<float>(GetDpiForSystem());
-    int ww = static_cast<int>(1400 * dpi / 96.0f);
-    int wh = static_cast<int>(900 * dpi / 96.0f);
+    int ww = static_cast<int>(layout::kDefaultWindowWidthDip * dpi / 96.0f);
+    int wh = static_cast<int>(layout::kDefaultWindowHeightDip * dpi / 96.0f);
     if (!m_window.create(L"MinView", ww, wh))
         throw std::runtime_error("Failed to create window");
 
@@ -453,16 +453,7 @@ int App::run(const std::wstring& initial_path) {
         throw std::runtime_error("Failed to init Direct2D renderer");
     m_renderer_generation = m_renderer.device_generation();
 
-    // Scale thumbnail sizes by DPI
-    float scale = dpi / 96.0f;
-    m_thumb_cell  = static_cast<int>(200 * scale);  // display cell → columns (~5/row)
-    m_thumb_size  = static_cast<int>(400 * scale);  // decode res (2x supersampling)
-    m_thumb_gap_h = static_cast<int>(8 * scale);
-    m_thumb_gap_v = static_cast<int>(16 * scale);
-    m_thumb_pad   = static_cast<int>(8 * scale);   // uniform padding
-    m_cell_size   = m_thumb_cell + m_thumb_gap_h;
-    m_panel_width = static_cast<int>(280 * scale);
-    m_toolbar_h  = static_cast<int>(m_title_h * scale);
+    apply_dpi_layout(dpi);
     update_content_viewport(false);
 
     // No native menu bar — custom toolbar drawn via D2D
@@ -487,6 +478,19 @@ int App::run(const std::wstring& initial_path) {
     stop_metadata_loader();
     stop_preloader();
     return ret;
+}
+
+// Single DPI-scaling entry for all layout members. Nominal DIP values come
+// from mv::layout; the scaled results are the unique runtime layout source.
+void App::apply_dpi_layout(float dpi) {
+    const float scale = layout::dpi_scale(dpi);
+    m_thumb_cell  = static_cast<int>(layout::kThumbCellDip * scale);  // display cell → columns (~5/row)
+    m_thumb_size  = static_cast<int>(layout::kThumbSizeDip * scale);  // decode res (2x supersampling)
+    m_thumb_gap_h = static_cast<int>(layout::kThumbGapHDip * scale);
+    m_thumb_gap_v = static_cast<int>(layout::kThumbGapVDip * scale);
+    m_thumb_pad   = static_cast<int>(layout::kThumbPadDip * scale);   // uniform padding
+    m_panel_width = static_cast<int>(layout::kPanelWidthDip * scale);
+    m_toolbar_h   = static_cast<int>(m_title_h * scale);
 }
 
 void App::begin_grid_scroll(HWND hwnd) {
@@ -524,17 +528,19 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int th = static_cast<int>(m_title_h * dpi_s);
         if (toolbar_visible() && pt.y >= 0 && pt.y < th) {
             float tw = static_cast<float>(m_renderer.target_size().width);
-            float btn_w = 46.0f * dpi_s;
+            float btn_w = layout::kTitleBarButtonWidthDip * dpi_s;
             float cx = tw - btn_w;
             // Window buttons → HTCLIENT (handled by WM_LBUTTONDOWN)
             if (pt.x >= cx)                return HTCLIENT;
             if (pt.x >= cx - btn_w)        return HTCLIENT;
             if (pt.x >= cx - btn_w * 2)    return HTCLIENT;
             // Menu items → HTCLIENT (handled by WM_LBUTTONDOWN)
-            float mx = 12.0f * dpi_s + 68.0f * dpi_s + 4.0f * dpi_s;
-            float fsize = 12.0f * dpi_s;
+            float mx = layout::kTitleBarPadDip * dpi_s
+                + layout::kTitleBarTitleWidthDip * dpi_s
+                + layout::kTitleBarTitleGapDip * dpi_s;
+            float fsize = layout::kTitleBarMenuFontSizeDip * dpi_s;
             for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + 16.0f * dpi_s;
+                float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + layout::kTitleBarMenuPadDip * dpi_s;
                 if (pt.x >= mx && pt.x < mx + iw) return HTCLIENT;
                 mx += iw;
             }
@@ -793,15 +799,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DPICHANGED: {
         float dpi = static_cast<float>(LOWORD(wp));
         m_renderer.set_dpi(dpi, dpi);
-        float scale = dpi / 96.0f;
-        m_thumb_cell  = static_cast<int>(200 * scale);
-        m_thumb_size  = static_cast<int>(400 * scale);
-        m_thumb_gap_h = static_cast<int>(8 * scale);
-        m_thumb_gap_v = static_cast<int>(16 * scale);
-        m_thumb_pad   = static_cast<int>(8 * scale);
-        m_cell_size   = m_thumb_cell + m_thumb_gap_h;
-        m_panel_width = static_cast<int>(280 * scale);
-        m_toolbar_h   = static_cast<int>(m_title_h * scale);
+        apply_dpi_layout(dpi);
         m_grid_layout_dirty = true;
         update_content_viewport(false);
         // Resize to suggested rect
@@ -956,7 +954,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (toolbar_visible() && ty2 < th) {
                 int tx2 = GET_X_LPARAM(lp);
                 float tw2 = static_cast<float>(m_renderer.target_size().width);
-                float bw = 46.0f * ts;
+                float bw = layout::kTitleBarButtonWidthDip * ts;
 
                 // Window buttons
                 if (tx2 >= tw2 - bw)      { m_title_btn_press = 2; m_window.invalidate(); return 0; }
@@ -964,11 +962,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (tx2 >= tw2 - bw * 3)  { m_title_btn_press = 0; m_window.invalidate(); return 0; }
 
                 // Menu items (after "MinView" title)
-                float mx = 12.0f * ts + 68.0f * ts + 4.0f * ts;
-                float fsize = 12.0f * ts;
+                float mx = layout::kTitleBarPadDip * ts
+                    + layout::kTitleBarTitleWidthDip * ts
+                    + layout::kTitleBarTitleGapDip * ts;
+                float fsize = layout::kTitleBarMenuFontSizeDip * ts;
                 m_toolbar_active = -1;
                 for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                    float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + 16.0f * ts;
+                    float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + layout::kTitleBarMenuPadDip * ts;
                     if (tx2 >= static_cast<int>(mx) && tx2 < static_cast<int>(mx + iw)) {
                         m_toolbar_active = i;
                         POINT pt = {static_cast<int>(mx), th};
@@ -1050,7 +1050,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         // Scrollbar click in grid mode?
         if (m_grid_mode) {
-            int sb_zone2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
+            int sb_zone2 = static_cast<int>(layout::kScrollbarZoneDip * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
             int sb_x = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone2;
             int sx = GET_X_LPARAM(lp);
             if (sx >= sb_x && sx < sb_x + sb_zone2 && ty >= m_toolbar_h &&
@@ -1165,7 +1165,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Scrollbar hover tracking (for cursor + highlight)
         if (m_grid_mode) {
             int ty2 = GET_Y_LPARAM(lp);
-            int sb_zone2 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
+            int sb_zone2 = static_cast<int>(layout::kScrollbarZoneDip * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
             int sb_x2 = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone2;
             int tx2 = GET_X_LPARAM(lp);
             bool in_sb = (tx2 >= sb_x2 && tx2 < sb_x2 + sb_zone2 && ty2 >= m_toolbar_h &&
@@ -1196,10 +1196,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 float dpi_m = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
                 int tx = GET_X_LPARAM(lp);
                 // Menu items start after "MinView" title
-                float x = 12.0f * dpi_m + 68.0f * dpi_m + 4.0f * dpi_m;  // pad + title_w + gap
-                float fs = 12.0f * dpi_m;
+                float x = layout::kTitleBarPadDip * dpi_m
+                    + layout::kTitleBarTitleWidthDip * dpi_m
+                    + layout::kTitleBarTitleGapDip * dpi_m;  // pad + title_w + gap
+                float fs = layout::kTitleBarMenuFontSizeDip * dpi_m;
                 for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                    float iw = m_renderer.measure_text(m_toolbar_items[i], fs) + 16.0f * dpi_m;
+                    float iw = m_renderer.measure_text(m_toolbar_items[i], fs) + layout::kTitleBarMenuPadDip * dpi_m;
                     if (tx >= static_cast<int>(x) && tx < static_cast<int>(x + iw)) {
                         m_toolbar_active = i; break;
                     }
@@ -1239,7 +1241,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (toolbar_visible() && ty3 >= 0 && ty3 < th2) {
                 int tx3 = GET_X_LPARAM(lp);
                 float tw3 = static_cast<float>(m_renderer.target_size().width);
-                float bw2 = 46.0f * ts2;
+                float bw2 = layout::kTitleBarButtonWidthDip * ts2;
                 if (tx3 >= tw3 - bw2)          m_title_btn_hover = 2;
                 else if (tx3 >= tw3 - bw2 * 2)  m_title_btn_hover = 1;
                 else if (tx3 >= tw3 - bw2 * 3)  m_title_btn_hover = 0;
@@ -2678,12 +2680,14 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
 void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     // Precompute menu item bounds (after "MinView" title, matching draw_title_bar)
     float dpi_s_tb = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-    float fsize = 12.0f * dpi_s_tb;
-    float item_x = 12.0f * dpi_s_tb + 68.0f * dpi_s_tb + 4.0f * dpi_s_tb;
+    float fsize = layout::kTitleBarMenuFontSizeDip * dpi_s_tb;
+    float item_x = layout::kTitleBarPadDip * dpi_s_tb
+        + layout::kTitleBarTitleWidthDip * dpi_s_tb
+        + layout::kTitleBarTitleGapDip * dpi_s_tb;
     struct TbItem { float left, right; };
     std::vector<TbItem> tb_bounds;
     for (auto& item : m_toolbar_items) {
-        float iw = m_renderer.measure_text(item, fsize) + 16.0f * dpi_s_tb;
+        float iw = m_renderer.measure_text(item, fsize) + layout::kTitleBarMenuPadDip * dpi_s_tb;
         tb_bounds.push_back({item_x, item_x + iw});
         item_x += iw;
     }
@@ -3088,7 +3092,7 @@ bool App::capture_grid_transition_source(int index) {
 
     const float dpi_scale =
         static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    const int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+    const int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     const int grid_area_width = std::max(1,
         static_cast<int>(m_renderer.target_size().width)
             - visible_panel_width() - scrollbar_zone - m_thumb_pad);
@@ -3547,7 +3551,7 @@ void App::toggle_grid() {
         }
         start_thumb_loader();
         float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-        int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+        int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
         int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
             - visible_panel_width() - scrollbar_zone - m_thumb_pad);
         rebuild_grid_layout(grid_width, GridRebuildReason::Structural);
@@ -3569,7 +3573,7 @@ void App::toggle_grid() {
         m_sel_anchor = m_grid_sel;
 
         // Request first visible page of thumbnails
-        int sb_zone3 = static_cast<int>(20 * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
+        int sb_zone3 = static_cast<int>(layout::kScrollbarZoneDip * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
         int gw = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone3;
         int cols = std::max(1, (gw + m_thumb_gap_h) / (m_thumb_cell + m_thumb_gap_h));
         m_grid_cols = cols;
@@ -3704,7 +3708,7 @@ void App::grid_navigate(int dir, bool shift) {
 void App::grid_ensure_visible() {
     if (m_grid_sel < 0 || m_grid_cols <= 0) return;
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+    int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
         - visible_panel_width() - scrollbar_zone - m_thumb_pad);
     uint64_t generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
@@ -3954,7 +3958,7 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
     int effective_cell = std::max(1, static_cast<int>(m_thumb_cell * m_thumb_zoom));
     int cols = std::max(1, (grid_area_width + m_thumb_gap_h)
         / (effective_cell + m_thumb_gap_h));
-    int label_height = m_show_labels ? static_cast<int>(42 * dpi_scale) : 0;
+    int label_height = m_show_labels ? static_cast<int>(layout::kGridLabelHeightDip * dpi_scale) : 0;
     m_grid_cols = cols;
     m_grid_rows.clear();
     m_grid_rows.reserve(static_cast<size_t>((total + cols - 1) / cols));
@@ -4055,7 +4059,7 @@ void App::grid_render() {
 
     int total = static_cast<int>(m_index.size());
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
-    int scrollbar_zone = static_cast<int>(20 * dpi_scale);
+    int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     int grid_area_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
         - visible_panel_width() - scrollbar_zone - m_thumb_pad);
     uint64_t dimension_generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);

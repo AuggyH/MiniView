@@ -37,6 +37,7 @@ set(HEADERS
     src/viewer.h
     src/app.h
     src/app_state.h
+    src/layout.h
     src/comic_reader_loader.h
     src/comic_reader_model.h
     src/file_operation.h

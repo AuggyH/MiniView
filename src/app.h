@@ -9,6 +9,7 @@
 #include "file_operation.h"
 #include "comic_reader_loader.h"
 #include "comic_reader_model.h"
+#include "layout.h"
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -29,6 +30,9 @@ public:
     ~App();
 
     int run(const std::wstring& initial_path = L"");
+
+    // Recompute DPI-scaled layout members from nominal DIP constants.
+    void apply_dpi_layout(float dpi);
 
     // Thumb cache entry (public for background thread access)
     struct ThumbEntry {
@@ -157,13 +161,12 @@ private:
     void    request_thumb(int idx);
     void    trim_thumb_cache(int visible_start, int visible_end);
 
-    int m_thumb_size = 160;   // decode resolution (WIC)
-    int m_thumb_cell  = 160;  // display cell size for column calc
+    int m_thumb_size = layout::kThumbSizeDip;  // decode resolution (WIC)
+    int m_thumb_cell  = layout::kThumbCellDip;  // display cell size for column calc
     float m_thumb_zoom = 1.0f; // Ctrl+wheel zoom factor
-    int m_thumb_gap_h = 8;    // horizontal gap
-    int m_thumb_gap_v = 16;   // vertical gap
-    int m_thumb_pad  = 8;     // uniform padding (all sides)
-    int m_cell_size  = 168;   // size + gap_h
+    int m_thumb_gap_h = layout::kThumbGapHDip;  // horizontal gap
+    int m_thumb_gap_v = layout::kThumbGapVDip;  // vertical gap
+    int m_thumb_pad  = layout::kThumbPadDip;    // uniform padding (all sides)
 
     Window     m_window;
     Renderer   m_renderer;
@@ -267,9 +270,9 @@ private:
     D2D1_RECT_F m_anim_dst = {};
     bool  m_anim_forward = true;
     float m_anim_iw = 1, m_anim_ih = 1;  // target image size for animation
-    int   m_panel_width = 280;
+    int   m_panel_width = layout::kPanelWidthDip;
     GridScrollPause m_grid_scroll_pause;
-    int   m_toolbar_h = 28;
+    int   m_toolbar_h = layout::kTitleBarHeightDip;
     std::vector<std::wstring> m_toolbar_items = {L"文件", L"查看", L"编辑", L"帮助"};
     int   m_toolbar_active = -1;
     HWND  m_tooltip = nullptr;
@@ -306,7 +309,7 @@ private:
     UINT_PTR m_sel_timer = 0;       // selection clear timer
 
     // Title bar (custom, bypasses system hook on this PC)
-    int m_title_h = 40;  // title bar height in DIPs (was 32)
+    int m_title_h = layout::kTitleBarHeightDip;  // title bar height in DIPs (was 32)
     int m_title_btn_hover = -1;  // 0=min, 1=max, 2=close
     int m_title_btn_press = -1;
 

@@ -349,7 +349,7 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
     float dpi_s = m_dpi_y / 96.0f;
     float font_size = 13.0f;           // logical pt, draw_text_line will DPI-scale
     float pad = 16.0f * dpi_s;
-    float label_w = 70.0f * dpi_s;
+    float label_w = layout::kPanelLabelColumnWidthDip * dpi_s;
     float gap = 10.0f * dpi_s;         // label–value gap
     float item_spacing = 8.0f * dpi_s;
     float card_w = std::min(600.0f * dpi_s, m_target_size.width - 40.0f * dpi_s);
@@ -511,7 +511,7 @@ void Renderer::draw_grid_placeholder(float x, float y, float w, float h, D2D1_CO
     if (std::max({color.r, color.g, color.b}) < 0.18f)
         color = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
 
-    float radius = 4.0f * m_dpi_y / 96.0f;
+    float radius = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
     D2D1_RECT_F rc = {x, y, x + w, y + h};
     D2D1_ROUNDED_RECT rr = {rc, radius, radius};
 
@@ -535,7 +535,7 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
 
     // Rounded corner clip
-    float radius = 4.0f * m_dpi_y / 96.0f;
+    float radius = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
     D2D1_ROUNDED_RECT rr = {{x, y, x + w, y + h}, radius, radius};
     ComPtr<ID2D1RoundedRectangleGeometry> geo;
     m_d2d_factory->CreateRoundedRectangleGeometry(&rr, &geo);
@@ -911,7 +911,7 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc) {
     if (!m_d2d_context) return;
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.29f, 0.56f, 1.0f, 1.0f), &br);
-    float r = 4.0f * m_dpi_y / 96.0f;
+    float r = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
     float sw = 2.0f * m_dpi_y / 96.0f;
     float outer_r = r + sw;
     D2D1_ROUNDED_RECT rr = {rc, outer_r, outer_r};
@@ -1031,7 +1031,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
     }
 
     // ── Info rows (label emphasized, value slightly dimmed) ──
-    float lw = 70.0f * dpi_s;
+    float lw = layout::kPanelLabelColumnWidthDip * dpi_s;
     float cgap = 8.0f * dpi_s;
     float val_w = content_w - lw - cgap;
 
@@ -1344,9 +1344,9 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     if (!m_d2d_context || !m_dwrite_factory) return;
 
     float dpi_s = m_dpi_y / 96.0f;
-    float h = std::max(40.0f * dpi_s, GetSystemMetrics(SM_CYCAPTION) + 2.0f);
-    float pad = 12.0f * dpi_s;
-    float btn_w = 46.0f * dpi_s;
+    float h = std::max(static_cast<float>(layout::kTitleBarHeightDip) * dpi_s, GetSystemMetrics(SM_CYCAPTION) + 2.0f);
+    float pad = layout::kTitleBarPadDip * dpi_s;
+    float btn_w = layout::kTitleBarButtonWidthDip * dpi_s;
 
     // ── No background — fully immersive, clip keeps content below ──
 
@@ -1358,12 +1358,12 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
 
     // ── Title text (left) ──
     ComPtr<IDWriteTextFormat> tf;
-    float fs = 12.0f * dpi_s;
+    float fs = layout::kTitleBarMenuFontSizeDip * dpi_s;
     m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-    float title_w = 68.0f * dpi_s;
+    float title_w = layout::kTitleBarTitleWidthDip * dpi_s;
     D2D1_RECT_F trc = {pad, 0, pad + title_w, h};
     m_d2d_context->DrawText(L"MinView", 7, tf.Get(), &trc, title_br.Get());
 
@@ -1372,14 +1372,14 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &mtf);
-    float mx = pad + title_w + 4.0f * dpi_s;
+    float mx = pad + title_w + layout::kTitleBarTitleGapDip * dpi_s;
     for (int i = 0; i < static_cast<int>(menu_items.size()); ++i) {
         ComPtr<IDWriteTextLayout> layout;
         m_dwrite_factory->CreateTextLayout(menu_items[i].c_str(),
             static_cast<uint32_t>(menu_items[i].size()), mtf.Get(), 200.0f, h, &layout);
         DWRITE_TEXT_METRICS m;
         layout->GetMetrics(&m);
-        float mw = m.width + 16.0f * dpi_s;  // padding each side
+        float mw = m.width + layout::kTitleBarMenuPadDip * dpi_s;  // padding each side
 
         // Hover highlight
         if (i == active_menu) {
