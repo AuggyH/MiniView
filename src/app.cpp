@@ -3319,41 +3319,11 @@ static void save_wic_as_jpeg(IWICBitmapSource* src, const std::wstring& path) {
 }
 
 // Get a WIC bitmap from the Windows shell thumbnail cache (fast path)
-static ComPtr<IWICBitmapSource> get_shell_thumb(const std::wstring& path, uint32_t max_size) {
-    ComPtr<IShellItemImageFactory> factory;
-    HRESULT hr = SHCreateItemFromParsingName(path.c_str(), nullptr,
-        IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) return nullptr;
-
-    SIZE sz = {static_cast<LONG>(max_size), static_cast<LONG>(max_size)};
-    HBITMAP hbmp = nullptr;
-    hr = factory->GetImage(sz, SIIGBF_RESIZETOFIT, &hbmp);
-    if (FAILED(hr) || !hbmp) return nullptr;
-
-    // Convert HBITMAP to WIC bitmap via IWICImagingFactory
-    ComPtr<IWICImagingFactory> wic_factory;
-    hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-        CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic_factory));
-    if (FAILED(hr)) { DeleteObject(hbmp); return nullptr; }
-
-    ComPtr<IWICBitmap> wic_bmp;
-    hr = wic_factory->CreateBitmapFromHBITMAP(hbmp, nullptr,
-        WICBitmapUsePremultipliedAlpha, &wic_bmp);
-    DeleteObject(hbmp);
-    if (FAILED(hr)) return nullptr;
-
-    // Convert to PBGRA
-    ComPtr<IWICFormatConverter> converter;
-    hr = wic_factory->CreateFormatConverter(&converter);
-    if (FAILED(hr)) return nullptr;
-    hr = converter->Initialize(wic_bmp.Get(), GUID_WICPixelFormat32bppPBGRA,
-        WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeMedianCut);
-    if (FAILED(hr)) return nullptr;
-
-    ComPtr<IWICBitmapSource> result;
-    converter.As(&result);
-    return result;
-}
+// REMOVED in issue #1: IShellItemImageFactory::GetImage has no timeout and can
+// block a worker thread indefinitely (hung thumbnail provider, STA-without-pump
+// deadlock). Measured on real data it is slower than WIC cold decode (213 vs
+// 173 ms p50) and its warm-cache benefit (6-9 ms) is superseded by the app's
+// own JPEG thumb cache (2 ms). WIC decode is bounded and self-contained.
 
 static void thumb_loader_worker(
     std::atomic<bool>& running,
@@ -3417,10 +3387,7 @@ static void thumb_loader_worker(
                 }
 
                 if (!cache_hit) {
-                    wic = get_shell_thumb(path, thumb_size);
-                    if (!wic) {
-                        wic = decoder.decode_scaled(path, thumb_size);
-                    }
+                    wic = decoder.decode_scaled(path, thumb_size);
                     // Save to disk cache
                     if (wic) {
                         CreateDirectoryW((get_config_dir() + L"\\thumbs").c_str(), nullptr);
