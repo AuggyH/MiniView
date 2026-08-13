@@ -9,6 +9,8 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <array>
+#include <span>
 
 namespace mv {
 
@@ -167,6 +169,8 @@ void Renderer::discard_device_resources() {
     m_text_format.Reset();
     m_dwrite_factory.Reset();
     m_image_bitmap.Reset();
+    m_image_scaled.Reset();
+    m_image_scaled_scale = -1.0f;
     m_d2d_context.Reset();
     m_d2d_device.Reset();
     m_d2d_factory.Reset();
@@ -228,6 +232,9 @@ bool Renderer::upload_image(IWICBitmapSource* wic_bitmap, bool reset_view) {
     if (FAILED(hr) || !image_bitmap) return false;
 
     m_image_bitmap = image_bitmap;
+    // The scaled-image cache is stale: force a rebuild on next draw.
+    m_image_scaled.Reset();
+    m_image_scaled_scale = -1.0f;
     m_img_width = w;
     m_img_height = h;
 
@@ -272,6 +279,7 @@ void Renderer::clear(float r, float g, float b) {
     m_d2d_context->Clear(D2D1::ColorF(r, g, b, 1.0f));
 }
 
+
 void Renderer::draw_image() {
     if (!m_d2d_context || !m_image_bitmap) return;
 
@@ -281,14 +289,57 @@ void Renderer::draw_image() {
     float y = m_content_top + (m_target_size.height - m_content_top - scaled_h) / 2.0f + m_offset_y + m_scroll_y;
 
     D2D1_RECT_F dest = {x, y, x + scaled_w, y + scaled_h};
-    D2D1_RECT_F src  = {0, 0,
-        static_cast<float>(m_img_width),
-        static_cast<float>(m_img_height)};
 
-    m_d2d_context->DrawBitmap(
-        m_image_bitmap.Get(), &dest, 1.0f,
-        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
-        &src);
+
+    // Scaled-image cache: the 4K source bitmap is re-sampled ONLY when the
+    // zoom scale changes (in ensure_image_scaled, outside the draw
+    // session); panning/scrolling and every animation frame then blit the
+    // pre-scaled bitmap 1:1 — a cheap GPU copy instead of a full
+    // 4096x4096 LINEAR resize per frame.
+    if (m_image_scaled && m_image_scaled_scale == m_scale) {
+        m_d2d_context->DrawBitmap(m_image_scaled.Get(), &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
+    } else {
+        D2D1_RECT_F src = {0, 0,
+            static_cast<float>(m_img_width),
+            static_cast<float>(m_img_height)};
+        m_d2d_context->DrawBitmap(
+            m_image_bitmap.Get(), &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_LINEAR,
+            &src);
+    }
+}
+
+void Renderer::ensure_image_scaled() {
+    if (!m_d2d_context || !m_image_bitmap) return;
+    if (m_image_scaled && m_image_scaled_scale == m_scale) return;
+    const float w = m_img_width * m_scale;
+    const float h = m_img_height * m_scale;
+    if (w <= 0.0f || h <= 0.0f || w > 16384.0f || h > 16384.0f) return;
+    ComPtr<ID2D1Bitmap1> target_bitmap;
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
+            D2D1_ALPHA_MODE_PREMULTIPLIED));
+    if (FAILED(m_d2d_context->CreateBitmap(
+            D2D1::SizeU(static_cast<UINT32>(std::ceil(w)),
+                static_cast<UINT32>(std::ceil(h))),
+            nullptr, 0, &props, &target_bitmap)))
+        return;
+    ComPtr<ID2D1Image> old_target;
+    m_d2d_context->GetTarget(&old_target);
+    m_d2d_context->SetTarget(target_bitmap.Get());
+    m_d2d_context->BeginDraw();
+    m_d2d_context->DrawBitmap(m_image_bitmap.Get(),
+        D2D1::RectF(0, 0, w, h), 1.0f, D2D1_INTERPOLATION_MODE_LINEAR,
+        D2D1::RectF(0, 0, static_cast<float>(m_img_width),
+            static_cast<float>(m_img_height)));
+    HRESULT hr = m_d2d_context->EndDraw();
+    m_d2d_context->SetTarget(old_target.Get());
+    if (SUCCEEDED(hr)) {
+        m_image_scaled = target_bitmap;
+        m_image_scaled_scale = m_scale;
+    }
 }
 
 void Renderer::draw_hint(const std::wstring& text) {
@@ -429,7 +480,7 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
         hint_fmt.Get(), &hr, dim_brush.Get());
 }
 
-void Renderer::draw_overlay() {
+void Renderer::draw_overlay(float bottom_inset) {
     if (!m_d2d_context || !m_text_format || !m_overlay_brush) return;
     if (m_img_width == 0 || m_img_height == 0) return;
 
@@ -439,7 +490,10 @@ void Renderer::draw_overlay() {
         std::to_wstring(m_img_height);
 
     float x = OVERLAY_PAD;
-    float y = static_cast<float>(m_target_size.height) - OVERLAY_FONT_SIZE - OVERLAY_PAD - 4.0f;
+    // Lift the overlay above the filmstrip when it occupies the bottom edge.
+    float inset = std::max(0.0f, bottom_inset);
+    float y = static_cast<float>(m_target_size.height) - inset
+        - OVERLAY_FONT_SIZE - OVERLAY_PAD - 4.0f;
     float max_w = static_cast<float>(m_target_size.width) - OVERLAY_PAD * 2;
     D2D1_RECT_F layout = {x, y, x + max_w, y + OVERLAY_FONT_SIZE + 4.0f};
 
@@ -910,10 +964,11 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
     m_d2d_context->PopAxisAlignedClip();
 }
 
-void Renderer::draw_selection_border(D2D1_RECT_F rc) {
+void Renderer::draw_selection_border(D2D1_RECT_F rc, float alpha) {
     if (!m_d2d_context) return;
     ComPtr<ID2D1SolidColorBrush> br;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.29f, 0.56f, 1.0f, 1.0f), &br);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.29f, 0.56f, 1.0f, alpha), &br);
     float r = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
     float sw = 2.0f * m_dpi_y / 96.0f;
     float outer_r = r + sw;
@@ -1242,6 +1297,255 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
     m_d2d_context->FillRoundedRectangle(&rr, thumb.Get());
 }
 
+void Renderer::draw_filmstrip(float x, float y, float w, float h,
+    std::span<const FilmstripRenderItem> items,
+    bool left_overflow, bool right_overflow,
+    float anim_t)
+{
+    if (!m_d2d_context) return;
+
+    const float dpi_s = m_dpi_y / 96.0f;
+    const float radius = layout::kThumbCornerRadiusDip * dpi_s;
+
+    // Strip background: vertical gradient instead of flat #141416.
+    // Bottom (0%..grad_start) is solid black at 50% opacity; from
+    // grad_start (50% or 67% height) to the top (100%) it fades to 0%.
+    // The alpha falloff uses a smoothstep "interpolator" so the fade is
+    // eased, not linear — gradient stops are plain data, so we bake the
+    // easing into per-stop alphas (no D2D gradient animation API exists).
+    if (!m_filmstrip_bg_gradient || m_filmstrip_bg_dpi != m_dpi_y
+        || m_filmstrip_bg_width != w) {
+        m_filmstrip_bg_gradient.Reset();
+        m_filmstrip_bg_dpi = m_dpi_y;
+        m_filmstrip_bg_width = w;
+        constexpr float kGradStart = 0.5f;  // fade begins at 50% height
+        std::array<D2D1_GRADIENT_STOP, 9> stops{};
+        constexpr int kFadeSegs = 7;  // eased segments from start..top
+        stops[0] = {0.0f, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.5f)};
+        stops[1] = {kGradStart, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.5f)};
+        for (int i = 0; i < kFadeSegs; ++i) {
+            const float t = static_cast<float>(i + 1) / kFadeSegs;  // 1/7..1
+            const float eased = t * t * (3.0f - 2.0f * t);  // smoothstep
+            const float pos = kGradStart + (1.0f - kGradStart) * t;
+            stops[2 + i] = {pos,
+                D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.5f * (1.0f - eased))};
+        }
+        ComPtr<ID2D1GradientStopCollection> coll;
+        if (SUCCEEDED(m_d2d_context->CreateGradientStopCollection(
+                stops.data(), static_cast<UINT32>(stops.size()), &coll))) {
+            m_d2d_context->CreateLinearGradientBrush(
+                D2D1::LinearGradientBrushProperties(
+                    D2D1::Point2F(x, y + h),  // bottom = 50% black
+                    D2D1::Point2F(x, y)),     // top = transparent
+                coll.Get(), &m_filmstrip_bg_gradient);
+        }
+    }
+    if (m_filmstrip_bg_gradient) {
+        m_d2d_context->FillRectangle(
+            D2D1::RectF(x, y, x + w, y + h), m_filmstrip_bg_gradient.Get());
+    }
+
+    // Clip slightly larger than the strip so the current item's selection
+    // border and its 1.25x top overhang (bottom-aligned magnification
+    // grows upward by ~6 DIP) are not cut off.
+    const float clip_sw = 10.0f * dpi_s;
+    D2D1_RECT_F strip_clip = {x, y - clip_sw, x + w, y + h + clip_sw};
+    m_d2d_context->PushAxisAlignedClip(&strip_clip, D2D1_ANTIALIAS_MODE_ALIASED);
+
+    // True alpha mask: the strip content's opacity follows a horizontal
+    // gradient (transparent at both edges -> opaque in the middle) applied
+    // via D2D1_LAYER_PARAMETERS1.opacityBrush, so thumbnails genuinely
+    // fade out at the edges instead of being covered by an overlay block.
+    if (!m_filmstrip_mask_gradient || m_filmstrip_mask_dpi != m_dpi_y
+        || m_filmstrip_mask_width != w) {
+        m_filmstrip_mask_gradient.Reset();
+        m_filmstrip_mask_dpi = m_dpi_y;
+        m_filmstrip_mask_width = w;
+        constexpr float kFade = 0.06f;  // 6% of strip width per edge
+        const D2D1_GRADIENT_STOP stops[4] = {
+            {0.00f, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f)},
+            {kFade, D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f)},
+            {1.0f - kFade, D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f)},
+            {1.00f, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f)},
+        };
+        ComPtr<ID2D1GradientStopCollection> coll;
+        if (SUCCEEDED(m_d2d_context->CreateGradientStopCollection(
+                stops, 4, &coll))) {
+            m_d2d_context->CreateLinearGradientBrush(
+                D2D1::LinearGradientBrushProperties(
+                    D2D1::Point2F(x, y), D2D1::Point2F(x + w, y)),
+                coll.Get(), &m_filmstrip_mask_gradient);
+        }
+    }
+    ComPtr<ID2D1Layer> mask_layer;
+    const bool mask_active = m_filmstrip_mask_gradient
+        && (m_filmstrip_mask_layer
+            || SUCCEEDED(m_d2d_context->CreateLayer(&m_filmstrip_mask_layer)));
+    if (mask_active) {
+        const D2D1_LAYER_PARAMETERS1 lp = D2D1::LayerParameters1(
+            D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_ALIASED,
+            D2D1::IdentityMatrix(), 1.0f, m_filmstrip_mask_gradient.Get(),
+            D2D1_LAYER_OPTIONS1_NONE);
+        m_d2d_context->PushLayer(lp, m_filmstrip_mask_layer.Get());
+    }
+
+    // Draw normal items first; magnified items (the previous one during
+    // its shrink animation, then the current one) are drawn last so they
+    // float above neighbors. The selection border fades in on the new
+    // item and fades out on the previous one (alpha from zoom progress).
+    int current_index = -1;
+    int shrink_index = -1;
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const FilmstripRenderItem& item = items[i];
+        if (item.current) { current_index = static_cast<int>(i); continue; }
+        if (item.zoom > 1.0f) { shrink_index = static_cast<int>(i); continue; }
+        if (item.width <= 0.0f || item.height <= 0.0f) continue;
+        const D2D1_RECT_F rc = {
+            x + item.left, y + item.top,
+            x + item.left + item.width, y + item.top + item.height};
+
+        if (item.bitmap) {
+            // Rounded-corner masked bitmap (same pattern as grid thumbnails).
+            D2D1_ROUNDED_RECT rr = {rc, radius, radius};
+            ComPtr<ID2D1RoundedRectangleGeometry> geo;
+            if (m_d2d_factory
+                && SUCCEEDED(m_d2d_factory->CreateRoundedRectangleGeometry(
+                    &rr, &geo))) {
+                m_d2d_context->PushLayer(
+                    D2D1::LayerParameters(D2D1::InfiniteRect(), geo.Get(),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                        D2D1::IdentityMatrix(), 1.0f, nullptr,
+                        D2D1_LAYER_OPTIONS_NONE),
+                    nullptr);
+                m_d2d_context->DrawBitmap(item.bitmap, &rc, 1.0f,
+                    D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
+                m_d2d_context->PopLayer();
+            } else {
+                m_d2d_context->DrawBitmap(item.bitmap, &rc, 1.0f,
+                    D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
+            }
+        } else {
+            // Skeleton placeholder with the image's dominant color.
+            D2D1_COLOR_F fill = item.placeholder_color;
+            if (std::max({fill.r, fill.g, fill.b}) < 0.18f)
+                fill = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
+            D2D1_ROUNDED_RECT rr = {rc, radius, radius};
+            ComPtr<ID2D1SolidColorBrush> brush;
+            m_d2d_context->CreateSolidColorBrush(fill, &brush);
+            m_d2d_context->FillRoundedRectangle(&rr, brush.Get());
+        }
+    }
+
+    // Magnified items float above the strip. Each carries its own
+    // selection border: the old item's border fades out (alpha 1->0)
+    // while it shrinks back to 1.0x, the new item's border fades in
+    // (alpha 0->1) while it grows to 1.25x. Border alpha uses a CUBIC
+    // ease (et^3): early in the transition the new border is nearly
+    // invisible, so the eye keeps the focus on the old item at center;
+    // the focus hands over smoothly as the strip scrolls one slot — no
+    // "border jumps right, then scrolls back" artifact.
+    const auto draw_magnified = [&](int item_index, float dpi_s,
+        float border_alpha) {
+        if (item_index < 0) return;
+        const FilmstripRenderItem& item = items[static_cast<std::size_t>(item_index)];
+        if (item.width <= 0.0f || item.height <= 0.0f) return;
+        const D2D1_RECT_F rc = {
+            x + item.left, y + item.top,
+            x + item.left + item.width, y + item.top + item.height};
+        if (item.bitmap) {
+            D2D1_ROUNDED_RECT rr = {rc, radius, radius};
+            ComPtr<ID2D1RoundedRectangleGeometry> geo;
+            if (m_d2d_factory
+                && SUCCEEDED(m_d2d_factory->CreateRoundedRectangleGeometry(
+                    &rr, &geo))) {
+                m_d2d_context->PushLayer(
+                    D2D1::LayerParameters(D2D1::InfiniteRect(), geo.Get(),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                        D2D1::IdentityMatrix(), 1.0f, nullptr,
+                        D2D1_LAYER_OPTIONS_NONE),
+                    nullptr);
+                m_d2d_context->DrawBitmap(item.bitmap, &rc, 1.0f,
+                    D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+                m_d2d_context->PopLayer();
+            } else {
+                m_d2d_context->DrawBitmap(item.bitmap, &rc, 1.0f,
+                    D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+            }
+        } else {
+            D2D1_COLOR_F fill = item.placeholder_color;
+            if (std::max({fill.r, fill.g, fill.b}) < 0.18f)
+                fill = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
+            D2D1_ROUNDED_RECT rr = {rc, radius, radius};
+            ComPtr<ID2D1SolidColorBrush> brush;
+            m_d2d_context->CreateSolidColorBrush(fill, &brush);
+            m_d2d_context->FillRoundedRectangle(&rr, brush.Get());
+        }
+        if (border_alpha > 0.0f) {
+            const float sw = layout::kFilmstripBorderDip * dpi_s;
+            // Stroke centered half-inside the bitmap edge: the border's
+            // OUTER edge lands exactly on the thumbnail edge, so it never
+            // invades the fixed gap toward the neighbor.
+            draw_selection_border(D2D1::RectF(
+                rc.left - sw * 0.5f, rc.top - sw * 0.5f,
+                rc.right + sw * 0.5f, rc.bottom + sw * 0.5f),
+                border_alpha);
+        }
+    };
+
+    const float et = 1.0f - (1.0f - anim_t) * (1.0f - anim_t)
+        * (1.0f - anim_t) * (1.0f - anim_t);  // quartic (scroll pace)
+    const float border_ease = et * et * et;   // cubic (focus handover)
+
+    // Previous item (shrink animation) floats above the strip, then the
+    // current magnified item is drawn last.
+    draw_magnified(shrink_index, dpi_s, 1.0f - border_ease);
+    draw_magnified(current_index, dpi_s, border_ease);
+
+    // Pop the alpha-mask layer: thumbnails at the strip edges are now
+    // transparent (faded by the gradient), not covered by an overlay.
+    if (mask_active) {
+        m_d2d_context->PopLayer();
+    }
+
+    // Edge arrows (drawn outside the mask so they never fade out).
+    const float arrow_zone = layout::kFilmstripArrowZoneDip * dpi_s;
+    if (left_overflow) {
+        draw_filmstrip_arrow(x + arrow_zone * 0.5f, y + h * 0.5f,
+            L"\u25C0", dpi_s);
+    }
+    if (right_overflow) {
+        draw_filmstrip_arrow(x + w - arrow_zone * 0.5f, y + h * 0.5f,
+            L"\u25B6", dpi_s);
+    }
+
+    m_d2d_context->PopAxisAlignedClip();
+}
+
+void Renderer::draw_filmstrip_arrow(float cx, float cy, const wchar_t* glyph,
+    float dpi_scale)
+{
+    if (!m_d2d_context || !m_dwrite_factory) return;
+    ComPtr<IDWriteTextFormat> tf;
+    if (FAILED(m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 12.0f * dpi_scale, L"en-US", &tf))) {
+        return;
+    }
+    tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(m_dwrite_factory->CreateTextLayout(
+            glyph, 1, tf.Get(), 24.0f * dpi_scale, 24.0f * dpi_scale, &layout))) {
+        return;
+    }
+    ComPtr<ID2D1SolidColorBrush> brush;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.82f, 0.82f, 0.85f, 1.0f), &brush);
+    m_d2d_context->DrawTextLayout(
+        D2D1::Point2F(cx - 12.0f * dpi_scale, cy - 12.0f * dpi_scale),
+        layout.Get(), brush.Get());
+}
+
 float Renderer::draw_text_line(float x, float y, float w,
     const std::wstring& text, ID2D1SolidColorBrush* brush,
     float font_size, float* out_width, int max_lines)
@@ -1472,6 +1776,32 @@ void Renderer::push_clip_below(float y) {
     D2D1_RECT_F clip = {0, y, static_cast<float>(m_target_size.width),
                         static_cast<float>(m_target_size.height)};
     m_d2d_context->PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+}
+
+void Renderer::push_clip_rect(const D2D1_RECT_F& rc) {
+    if (!m_d2d_context) return;
+    m_d2d_context->PushAxisAlignedClip(&rc, D2D1_ANTIALIAS_MODE_ALIASED);
+}
+
+void Renderer::fill_solid(float left, float top, float right, float bottom,
+    float r, float g, float b) {
+    if (!m_d2d_context) return;
+    ComPtr<ID2D1SolidColorBrush> br;
+    if (FAILED(m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(r, g, b, 1.0f), &br)))
+        return;
+    m_d2d_context->FillRectangle(D2D1::RectF(left, top, right, bottom), br.Get());
+}
+
+void Renderer::fill_solid_bg(const D2D1_RECT_F& rc) {
+    if (!m_d2d_context) return;
+    if (!m_filmstrip_bg_brush) {
+        if (FAILED(m_d2d_context->CreateSolidColorBrush(
+                D2D1::ColorF(0.078f, 0.078f, 0.086f, 1.0f),
+                &m_filmstrip_bg_brush)))
+            return;
+    }
+    m_d2d_context->FillRectangle(rc, m_filmstrip_bg_brush.Get());
 }
 
 void Renderer::pop_clip() {

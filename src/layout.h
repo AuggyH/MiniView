@@ -52,6 +52,19 @@ inline constexpr float kNavBreadcrumbGapDip       = 4.0f;  // breadcrumb segment
 // ── Scrollbar ──
 inline constexpr int kScrollbarZoneDip = 20; // grid scrollbar hit zone width
 
+// ── Filmstrip (large-image bottom strip, Issue #5 P1) ──
+inline constexpr float kFilmstripHeightDip      = 80.0f;  // strip height (8px grid: 64+8+8)
+inline constexpr float kFilmstripPadVDip        = 8.0f;   // top/bottom padding
+inline constexpr float kFilmstripThumbHeightDip = 64.0f;  // max thumb height (8px grid)
+inline constexpr float kFilmstripGapDip         = 8.0f;   // horizontal gap
+inline constexpr float kFilmstripCurrentScale   = 1.25f;  // current item zoom
+inline constexpr float kFilmstripBorderDip      = 2.0f;   // current border
+inline constexpr float kFilmstripIndicatorDip   = 4.0f;   // current indicator
+inline constexpr float kFilmstripArrowZoneDip   = 24.0f;  // edge arrow zone
+inline constexpr float kFilmstripHoverZoneDip   = 24.0f;  // fullscreen hover band
+inline constexpr float kFilmstripHideDelaySeconds = 1.5f; // fullscreen auto-hide
+inline constexpr float kFilmstripMaxAspect      = 10.0f;  // clamp w/h ratio
+
 // ── Window ──
 inline constexpr int kDefaultWindowWidthDip  = 1400;
 inline constexpr int kDefaultWindowHeightDip = 900;

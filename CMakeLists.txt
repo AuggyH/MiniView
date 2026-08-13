@@ -175,6 +175,19 @@ if(BUILD_TESTING)
     target_link_options(metadata_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME metadata.unit COMMAND metadata_tests)
 
+    add_executable(filmstrip_model_tests
+        tests/filmstrip_model_tests.cpp
+    )
+    target_include_directories(filmstrip_model_tests PRIVATE src)
+    target_compile_options(filmstrip_model_tests PRIVATE /W4 /utf-8)
+    if(MINVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(filmstrip_model_tests PRIVATE /WX)
+    endif()
+    target_compile_definitions(filmstrip_model_tests PRIVATE NOMINMAX)
+    set_target_properties(filmstrip_model_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_options(filmstrip_model_tests PRIVATE /SUBSYSTEM:CONSOLE)
+    add_test(NAME filmstrip_model.unit COMMAND filmstrip_model_tests)
+
     add_executable(renderer_state_tests
         tests/renderer_state_tests.cpp
     )

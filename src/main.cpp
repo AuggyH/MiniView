@@ -37,6 +37,23 @@ void save_last_dir(const std::wstring& dir) {
     if (f.is_open()) f << dir;
 }
 
+// Sort-mode persistence: 0=Name 1=Date 2=Size 3=Random (mirrors mv::SortMode).
+void save_sort_mode(int mode) {
+    auto path = get_config_dir() + L"\\sortmode.txt";
+    std::wofstream f(path, std::ios::trunc);
+    if (f.is_open()) f << mode;
+}
+
+int load_sort_mode() {
+    auto path = get_config_dir() + L"\\sortmode.txt";
+    std::wifstream f(path);
+    if (!f.is_open()) return 0;
+    int mode = 0;
+    f >> mode;
+    if (mode < 1 || mode > 3) return 0;
+    return mode;
+}
+
 namespace {
 
 constexpr const wchar_t* MUTEX_NAME = L"MinView_SingleInstance_Mutex";

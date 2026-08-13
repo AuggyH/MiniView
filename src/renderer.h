@@ -26,6 +26,18 @@ struct ComicPageDrawItem {
     bool failed = false;
 };
 
+struct FilmstripRenderItem {
+    int index = -1;
+    float left = 0.0f;   // strip-local coordinates (physical px)
+    float top = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    ID2D1Bitmap1* bitmap = nullptr;
+    D2D1_COLOR_F placeholder_color = {0.10f, 0.10f, 0.12f, 1.0f};
+    bool current = false;
+    float zoom = 1.0f;  // magnified zoom (border alpha + float ordering)
+};
+
 class Renderer {
 public:
     Renderer();
@@ -39,7 +51,8 @@ public:
     bool end_frame();
 
     void draw_image();
-    void draw_overlay();
+    void ensure_image_scaled();
+    void draw_overlay(float bottom_inset = 0.0f);
     void draw_hint(const std::wstring& text);
     void draw_status_message(const std::wstring& text);
     void draw_info_card(const std::vector<std::pair<std::wstring, std::wstring>>& items);
@@ -52,6 +65,10 @@ public:
         float scroll_y = 0.0f);  // returns total content height
     void draw_scrollbar(float x, float y, float w, float h,
         float total, float view, float pos, bool active = false);
+    void draw_filmstrip(float x, float y, float w, float h,
+        std::span<const FilmstripRenderItem> items,
+        bool left_overflow, bool right_overflow,
+        float anim_t);
     float draw_text_line(float x, float y, float w,
         const std::wstring& text, ID2D1SolidColorBrush* brush,
         float font_size = 0.0f, float* out_width = nullptr, int max_lines = 0);
@@ -64,7 +81,13 @@ public:
     void draw_fade_overlay(float t, bool forward);
     void draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t);
     void push_clip_below(float y);
+    void push_clip_rect(const D2D1_RECT_F& rc);
     void pop_clip();
+    void fill_solid(float left, float top, float right, float bottom,
+        float r, float g, float b);
+    // Cached opaque brush for the filmstrip animation frame base fill
+    // (avoids per-frame brush creation inside the BeginDraw session).
+    void fill_solid_bg(const D2D1_RECT_F& rc);
     float measure_text(const std::wstring& text, float font_size);
 
     // Create a D2D bitmap from a WIC source (for grid thumbnails)
@@ -79,7 +102,7 @@ public:
         std::span<const ComicPageDrawItem> pages,
         ComicRenderViewport viewport);
     void draw_comic_controls(const ComicControlsRenderInput& input);
-    void draw_selection_border(D2D1_RECT_F rc);
+    void draw_selection_border(D2D1_RECT_F rc, float alpha = 1.0f);
     void draw_label(float x, float y, float w, const std::wstring& text, float font_size,
         float r = 0.82f, float g = 0.82f, float b = 0.85f);
     float label_height(const std::wstring& text, float w, float font_size, int max_lines = 2);
@@ -120,6 +143,8 @@ private:
     void draw_comic_card_visual(
         D2D1_RECT_F destination, D2D1_RECT_F text_bounds,
         ComicPageVisual visual, const ComicRenderMetrics& metrics);
+    void draw_filmstrip_arrow(float cx, float cy, const wchar_t* glyph,
+        float dpi_scale);
 
     HWND m_hwnd = nullptr;
 
@@ -130,10 +155,20 @@ private:
     ComPtr<ID2D1Device5>           m_d2d_device;
     ComPtr<ID2D1DeviceContext5>    m_d2d_context;
     ComPtr<ID2D1Bitmap1>           m_image_bitmap;
+    ComPtr<ID2D1Bitmap1>           m_image_scaled;   // pre-scaled zoom cache
+    float m_image_scaled_scale = -1.0f;              // scale the cache was built at
 
     ComPtr<IDWriteFactory>         m_dwrite_factory;
     ComPtr<IDWriteTextFormat>      m_text_format;
     ComPtr<ID2D1SolidColorBrush>   m_overlay_brush;
+    ComPtr<ID2D1LinearGradientBrush> m_filmstrip_bg_gradient;  // cached (per dpi)
+    float m_filmstrip_bg_dpi = 0.0f;
+    float m_filmstrip_bg_width = -1.0f;
+    ComPtr<ID2D1LinearGradientBrush> m_filmstrip_mask_gradient;  // edge alpha mask
+    ComPtr<ID2D1SolidColorBrush> m_filmstrip_bg_brush;  // opaque anim-frame base
+    float m_filmstrip_mask_dpi = 0.0f;
+    float m_filmstrip_mask_width = -1.0f;
+    ComPtr<ID2D1Layer> m_filmstrip_mask_layer;  // cached, not per-frame
 
     D2D1_SIZE_U m_target_size = {0, 0};
     uint32_t    m_img_width = 0;

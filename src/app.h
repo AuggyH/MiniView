@@ -10,6 +10,7 @@
 #include "comic_reader_loader.h"
 #include "comic_reader_model.h"
 #include "navstate.h"
+#include "filmstrip_model.h"
 #include "layout.h"
 #include <cstddef>
 #include <memory>
@@ -191,6 +192,7 @@ private:
     void    select_item(int idx, bool shift, bool ctrl);
     void    begin_grid_scroll(HWND hwnd);
     void    finish_grid_scroll();
+    void    start_dim_preload();
     void    start_thumb_loader();
     void    stop_thumb_loader();
     void    request_thumb(int idx);
@@ -217,6 +219,16 @@ private:
     void    nav_tree_scroll(float delta);
     void    nav_ensure_focus_visible();
     void    reveal_active_collection();
+
+    // Filmstrip (large-image bottom strip, Issue #5 P1)
+    bool    filmstrip_showable() const;
+    bool    filmstrip_visible() const;
+    D2D1_RECT_F filmstrip_rect() const;
+    int     filmstrip_hit_test(int x, int y) const;
+    void    render_filmstrip();
+    void    render_filmstrip_animation_frame();
+    void    schedule_filmstrip_hide();
+    void    cancel_filmstrip_hide();
 
     int m_thumb_size = layout::kThumbSizeDip;  // decode resolution (WIC)
     int m_thumb_cell  = layout::kThumbCellDip;  // display cell size for column calc
@@ -251,6 +263,7 @@ private:
 
     // Preloader state
     std::thread m_preload_thread;
+    std::thread m_dim_preload;
     std::mutex  m_preload_mutex;
     std::condition_variable m_preload_cv;
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IWICBitmapSource>> m_preload_cache;
@@ -293,6 +306,30 @@ private:
 
     // Metadata extraction runs off the UI/render thread.
     std::thread m_metadata_thread;
+    // Single async big-image decoder worker: page flips update the target
+    // path and bump the generation; the worker decodes only the newest
+    // request and posts WM_IMAGE_READY. One worker only, so page-flip
+    // storms cannot spawn decode threads and stall the UI.
+    std::thread m_async_thread;
+    std::mutex m_async_mutex;
+    std::condition_variable m_async_cv;
+    std::wstring m_async_path;
+    bool m_async_pending = false;
+    bool m_async_stop = false;
+    ULONGLONG m_async_gen = 0;
+    ComPtr<IWICBitmapSource> m_async_wic;  // newest decode result
+    // Decode-in-flight watchdog: if the single worker's decode() never
+    // returns (stuck on a pathological file), the worker is detached and a
+    // fresh one is spawned on the next request — self-heal ~10s instead of
+    // hanging forever.
+    bool m_async_busy = false;
+    ULONGLONG m_async_started_ms = 0;
+    static constexpr ULONGLONG kAsyncTimeoutMs = 10000;
+    void check_async_timeout();
+    // A decoded image deferred while the filmstrip transition was running
+    // (materialized + uploaded once the animation completes, so the 4K
+    // FormatConverter never stalls an animation frame).
+    ComPtr<IWICBitmapSource> m_pending_image;
     std::mutex m_metadata_mutex;
     std::condition_variable m_metadata_cv;
     std::wstring m_metadata_request_path;
@@ -318,7 +355,8 @@ private:
     bool  m_ime_composing = false;
 
     // Transition animation
-    bool  m_animating = false;
+    LARGE_INTEGER m_last_anim_tick = {};  // real-time filmstrip animation
+    bool m_animating = false;
     float m_anim_t = 0.0f;
     UINT_PTR m_anim_timer = 0;
     ULONGLONG m_anim_start = 0;  // QPC timestamp
@@ -327,6 +365,13 @@ private:
     D2D1_RECT_F m_anim_dst = {};
     bool  m_anim_forward = true;
     float m_anim_iw = 1, m_anim_ih = 1;  // target image size for animation
+
+    // Filmstrip state (Issue #5 P1)
+    FilmstripModel m_filmstrip;
+    bool    m_filmstrip_revealed = false;  // fullscreen auto-hide state
+    UINT_PTR m_filmstrip_timer = 0;        // fullscreen hide delay (id 5)
+    uint64_t m_filmstrip_dimension_generation = 0;
+
     int   m_panel_width = layout::kPanelWidthDip;
     GridScrollPause m_grid_scroll_pause;
     int   m_toolbar_h = layout::kTitleBarHeightDip;
@@ -389,6 +434,11 @@ private:
     std::condition_variable m_thumb_cv;
     std::vector<int> m_thumb_queue;
     std::atomic<bool> m_thumb_running{false};
+    float m_last_thumb_req_scroll = -1.0f;  // for stale-request pruning
+    std::atomic<uint64_t> m_thumb_request_gen{0};  // worker batch versioning
+    std::wstring m_debounce_path;   // rapid-paging deferred decode target
+    int m_debounce_idx = -1;
+    ULONGLONG m_last_open_tick = 0; // for rapid-paging detection
     std::atomic<uint64_t> m_thumb_dimension_generation{0};
 
     // ── Left navigation panel (Issue #5 P2) ──

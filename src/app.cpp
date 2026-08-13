@@ -20,6 +20,8 @@
 #include <limits>
 
 extern void save_last_dir(const std::wstring& dir);
+extern void save_sort_mode(int mode);
+extern int  load_sort_mode();
 extern std::wstring get_config_dir();
 
 namespace mv {
@@ -30,7 +32,11 @@ constexpr UINT WM_RENDER_RETRY = WM_APP + 3;
 constexpr UINT WM_COMIC_READY = WM_APP + 4;
 constexpr UINT WM_NAV_SCAN_READY = WM_APP + 5;
 constexpr UINT WM_NAV_TREE_READY = WM_APP + 6;
+constexpr UINT WM_IMAGE_READY = WM_APP + 7;  // async big-image decode done
 constexpr UINT_PTR kComicTimerId = 5;
+constexpr UINT_PTR kImageDebounceTimerId = 6;
+constexpr UINT_PTR kAsyncWatchdogTimerId = 7;  // async decode watchdog (1s tick)
+constexpr UINT_PTR kFilmstripHideTimerId = 8;  // filmstrip auto-hide (avoids id-5 collision with kComicTimerId)
 
 std::size_t current_private_bytes() {
     PROCESS_MEMORY_COUNTERS_EX counters = {};
@@ -554,18 +560,37 @@ App::~App() {
     m_comic_loader.stop();
     stop_metadata_loader();
     stop_preloader();
+    if (m_dim_preload.joinable()) m_dim_preload.join();
     stop_thumb_loader();
+    {
+        std::lock_guard lock(m_async_mutex);
+        m_async_stop = true;
+    }
+    m_async_cv.notify_all();
+    if (m_async_thread.joinable()) m_async_thread.join();
 }
 
 int App::run(const std::wstring& initial_path) {
-    // Scale window size by DPI
-    float dpi = static_cast<float>(GetDpiForSystem());
+    // Scale window size by the primary monitor DPI. GetDpiForSystem() can
+    // report 96 while the actual display runs at 168/192 (system DPI vs
+    // monitor DPI divergence), which creates an oversized window whose
+    // bottom edge (filmstrip, status area) lands outside the screen.
+    const HWND desktop = GetDesktopWindow();
+    const UINT monitor_dpi = GetDpiForWindow(desktop);
+    const float dpi = static_cast<float>(
+        monitor_dpi > 0 ? monitor_dpi : GetDpiForSystem());
     int ww = static_cast<int>(layout::kDefaultWindowWidthDip * dpi / 96.0f);
     int wh = static_cast<int>(layout::kDefaultWindowHeightDip * dpi / 96.0f);
+    // Clamp to the screen so the whole window (incl. bottom filmstrip)
+    // stays on screen regardless of display configuration.
+    const int avail_w = GetSystemMetrics(SM_CXSCREEN);
+    const int avail_h = GetSystemMetrics(SM_CYSCREEN);
+    if (avail_w > 0) ww = std::min(ww, avail_w);
+    if (avail_h > 0) wh = std::min(wh, avail_h);
     if (!m_window.create(L"MinView", ww, wh))
         throw std::runtime_error("Failed to create window");
 
-    dpi = static_cast<float>(GetDpiForWindow(m_window.handle()));
+    const float window_dpi = static_cast<float>(GetDpiForWindow(m_window.handle()));
 
     m_window.set_message_callback(
         [this](HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) -> LRESULT {
@@ -573,13 +598,13 @@ int App::run(const std::wstring& initial_path) {
         });
 
     // Set DPI before renderer init so fonts scale correctly
-    m_renderer.set_dpi(dpi, dpi);
+    m_renderer.set_dpi(window_dpi, window_dpi);
 
     if (!m_renderer.init(m_window.handle()))
         throw std::runtime_error("Failed to init Direct2D renderer");
     m_renderer_generation = m_renderer.device_generation();
 
-    apply_dpi_layout(dpi);
+    apply_dpi_layout(window_dpi);
     update_content_viewport(false);
 
     // No native menu bar — custom toolbar drawn via D2D
@@ -772,10 +797,21 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
-    case WM_PAINT:
+    case WM_PAINT: {
         render_frame();
         ValidateRect(hwnd, nullptr);
+        // Re-arm the transition: while the filmstrip animation runs, keep
+        // invalidating so the next animation frame is painted. FULL-window
+        // invalidation is required — filmstrip_rect() returns PHYSICAL
+        // coordinates (renderer target size) while InvalidateRect takes
+        // window-client coordinates (DPI-virtualized, e.g. 1414 vs 2474),
+        // so a strip-region rect lands outside the client area and the
+        // animation would freeze after one frame ("flash" appearance).
+        if (m_filmstrip.animating()) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         return 0;
+    }
 
     case WM_ERASEBKGND:
         return 0;
@@ -880,6 +916,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == kComicTimerId && m_comic_timer) {
             handle_comic_timer(hwnd);
         }
+        if (wp == kImageDebounceTimerId) {
+            KillTimer(hwnd, kImageDebounceTimerId);
+            if (!m_debounce_path.empty()) {
+                std::wstring pending = m_debounce_path;
+                m_debounce_path.clear();
+                open_image(pending);  // full decode after paging stops
+            }
+        }
         if (wp == 1 && m_grid_mode) {
             finish_grid_scroll();
             m_window.invalidate();
@@ -911,10 +955,28 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             m_window.invalidate();
         }
+        if (wp == kFilmstripHideTimerId) {
+            if (m_filmstrip_timer) {
+                KillTimer(hwnd, kFilmstripHideTimerId);
+                m_filmstrip_timer = 0;
+            }
+            if (m_filmstrip_revealed) {
+                m_filmstrip_revealed = false;
+                m_window.invalidate();
+            }
+        }
+        if (wp == kAsyncWatchdogTimerId) {
+            check_async_timeout();
+            if (m_async_busy) {
+                SetTimer(hwnd, kAsyncWatchdogTimerId, 1000, nullptr);
+            } else {
+                KillTimer(hwnd, kAsyncWatchdogTimerId);
+            }
+        }
         return 0;
 
     case WM_THUMB_READY:
-        if (m_grid_mode) m_window.invalidate();
+        if (m_grid_mode || filmstrip_visible()) m_window.invalidate();
         return 0;
 
     case WM_METADATA_READY:
@@ -932,6 +994,42 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_NAV_TREE_READY:
         apply_nav_tree_result();
         return 0;
+
+    case WM_IMAGE_READY: {
+        // Async big-image decode finished on a worker. Finish on the UI
+        // thread: materialize + upload + commit. Stale generations (user
+        // paged again) are dropped.
+        const ULONGLONG gen = static_cast<ULONGLONG>(wp);
+        ComPtr<IWICBitmapSource> decoded;
+        {
+            std::lock_guard lock(m_async_mutex);
+            if (gen != m_async_gen || !m_async_wic) return 0;
+            decoded = m_async_wic;
+            m_async_wic.Reset();
+            m_async_busy = false;
+        }
+        try {
+            // Defer the heavy materialize/upload while the filmstrip
+            // transition is still running — doing it here would stall the
+            // animation (the 4K FormatConverter takes 30-50ms).
+            if (m_filmstrip.animating()) {
+                m_pending_image = decoded;
+                return 0;
+            }
+            auto materialized = m_decoder.materialize(decoded.Get());
+            if (!materialized) return 0;
+            if (!m_renderer.upload_image(materialized.Get())) return 0;
+            m_current_wic = materialized;
+            m_has_image = true;
+            update_content_viewport(false);
+            fit_to_window();
+            preload_neighbors();
+            m_window.invalidate();
+        } catch (...) {
+            // Keep the previous image on decode/materialize failure.
+        }
+        return 0;
+    }
 
     case WM_RENDER_RETRY:
         m_window.invalidate();
@@ -1030,6 +1128,30 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
 
+        // Shift+wheel: horizontal filmstrip scroll while hovering the strip;
+        // no-op elsewhere in large-image mode (NAVIGATION_DESIGN 2.1.3).
+        // The plain wheel below keeps its existing semantics untouched.
+        if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+            if (filmstrip_visible()) {
+                const D2D1_RECT_F fs = filmstrip_rect();
+                if (wheel_pt.x >= fs.left && wheel_pt.x < fs.right
+                    && wheel_pt.y >= fs.top && wheel_pt.y < fs.bottom) {
+                    const int before = m_filmstrip.current();
+                    // Wheel direction: scrolling down (delta<0) advances to
+                    // the next image (to the right), like the plain wheel.
+                    m_filmstrip.scroll_by(-delta);
+                    // Wheel browsing steps the current item and keeps it
+                    // centered; sync the big view with the new selection.
+                    if (m_filmstrip.current() != before
+                        && m_filmstrip.current() != m_current_idx) {
+                        navigate_to(m_filmstrip.current());
+                    }
+                    m_window.invalidate();
+                }
+            }
+            return 0;
+        }
+
         if (ctrl) {
             // Ctrl+Wheel = zoom (cursor-centered)
             float factor = (delta > 0) ? 1.15f : 1.0f / 1.15f;
@@ -1076,8 +1198,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (sy < min_scroll) sy = min_scroll;
                 m_renderer.set_scroll_y(sy);
             } else {
-                // Not zoomed: flip images
-                navigate_to(m_current_idx + (delta > 0 ? 1 : -1));
+                // Not zoomed: flip images. Scroll down (delta<0) advances
+                // to the next image; scroll up goes to the previous one.
+                navigate_to(m_current_idx + (delta < 0 ? 1 : -1));
                 return 0;
             }
         }
@@ -1167,6 +1290,15 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     request_comic_pages();
                 }
                 m_window.invalidate();
+                return 0;
+            }
+        }
+        // Filmstrip: click jumps to the item; any click inside the strip is
+        // consumed (never starts an OLE drag, spec 2.1.3 / 2.3).
+        if (filmstrip_visible()) {
+            int fs_hit = filmstrip_hit_test(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            if (fs_hit >= -1) {
+                if (fs_hit >= 0 && fs_hit != m_current_idx) navigate_to(fs_hit);
                 return 0;
             }
         }
@@ -1277,6 +1409,29 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_toolbar_revealed = reveal;
                 update_content_viewport(false);
                 m_window.invalidate();
+            }
+            // Filmstrip: bottom 24 DIP band reveals it; leaving the strip
+            // schedules a 1.5s auto-hide (symmetric with the top toolbar).
+            if (filmstrip_showable()) {
+                const float dpi_s =
+                    static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+                const float strip_h = layout::kFilmstripHeightDip * dpi_s;
+                const float hover_h = layout::kFilmstripHoverZoneDip * dpi_s;
+                const int win_h =
+                    static_cast<int>(m_renderer.target_size().height);
+                const bool in_hover_zone =
+                    mouse_y >= win_h - static_cast<int>(hover_h);
+                const bool inside_strip =
+                    mouse_y >= win_h - static_cast<int>(strip_h);
+                if (!m_filmstrip_revealed && in_hover_zone) {
+                    m_filmstrip_revealed = true;
+                    cancel_filmstrip_hide();
+                    m_window.invalidate();
+                } else if (m_filmstrip_revealed && inside_strip) {
+                    cancel_filmstrip_hide();
+                } else if (m_filmstrip_revealed) {
+                    schedule_filmstrip_hide();
+                }
             }
         }
         if (m_comic_reader.middle_autoscroll_active()) {
@@ -1443,6 +1598,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_LBUTTONDBLCLK:
         if (m_animating) return 0;  // TODO: re-enable interrupt
+        // Double-click on the filmstrip: no-op (single click already jumps).
+        if (filmstrip_visible()
+            && filmstrip_hit_test(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) >= -1) {
+            return 0;
+        }
         if (m_grid_mode) {
             GridEntryRouteState route_state;
             route_state.grid_mode = true;
@@ -1820,6 +1980,15 @@ void App::open_directory(const std::wstring& path) {
     }
     m_index.sort_by(nav_memory.sort);
     save_last_dir(path);
+    // Restore the last-used sort mode (persisted via sortmode.txt).
+    const int saved_sort = load_sort_mode();
+    if (saved_sort > 0) {
+        m_index.sort_by(static_cast<SortMode>(saved_sort));
+    }
+    // Preload real dimensions in the background so the initial skeleton grid
+    // is laid out at (or near) the true aspect ratios instead of 1:1, which
+    // removes the drift when the first thumbnails stream in.
+    start_dim_preload();
     if (!m_index.empty()) {
         if (!recursive_empty_root) {
             m_current_idx = 0;
@@ -1860,6 +2029,94 @@ bool App::open_image(const std::wstring& path) {
         // A recursive grid can contain files from many child directories.  Keep
         // that root index intact when opening one of its existing entries.
         int indexed_position = m_index.index_of(path);
+
+        // Rapid-paging debounce: while the user flips pages faster than the
+        // synchronous decode keeps up (<200ms cadence), update the index only
+        // (instant) and defer the full decode until paging stops (250ms quiet
+        // period). This keeps wheel/keyboard paging responsive.
+        const ULONGLONG now_tick = GetTickCount64();
+        const bool rapid_paging = m_last_open_tick != 0
+            && (now_tick - m_last_open_tick) < 200;
+        m_last_open_tick = now_tick;
+        if (rapid_paging && m_has_image && !m_grid_mode) {
+            m_debounce_path = path;
+            m_debounce_idx = indexed_position;
+            if (indexed_position >= 0) m_current_idx = indexed_position;
+            m_current_path = path;
+            SetTimer(m_window.handle(), kImageDebounceTimerId, 250, nullptr);
+            m_window.invalidate();
+            return true;
+        }
+        if (!m_debounce_path.empty()) {
+            m_debounce_path.clear();
+            KillTimer(m_window.handle(), kImageDebounceTimerId);
+        }
+
+        // Async decode path: when the target isn't already in the preload
+        // cache, hand it to the single decoder worker so the UI thread
+        // never blocks on a 300-500ms decode — filmstrip animation and
+        // paging stay smooth while the bitmap lands via WM_IMAGE_READY.
+        auto cached_preload = get_preloaded(path);
+        if (!cached_preload && m_has_image && !m_grid_mode) {
+            m_current_path = path;
+            if (indexed_position >= 0) m_current_idx = indexed_position;
+            {
+                std::lock_guard lock(m_async_mutex);
+                m_async_path = path;
+                ++m_async_gen;
+                m_async_pending = true;
+                m_async_busy = true;
+                m_async_started_ms = GetTickCount64();
+            }
+            m_async_cv.notify_one();
+            SetTimer(m_window.handle(), kAsyncWatchdogTimerId, 1000, nullptr);
+            if (!m_async_thread.joinable()) {
+                m_async_thread = std::thread([this]() {
+                    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+                    try {
+                        Decoder decoder;  // worker-owned decoder
+                        while (true) {
+                            std::wstring job_path;
+                            ULONGLONG job_gen = 0;
+                            {
+                                std::unique_lock lock(m_async_mutex);
+                                m_async_cv.wait(lock, [&] {
+                                    return m_async_stop || m_async_pending;
+                                });
+                                if (m_async_stop) break;
+                                // Serve only the newest request; stale page
+                                // flips are dropped (their generation will be
+                                // rejected by the WM_IMAGE_READY handler).
+                                job_path = m_async_path;
+                                job_gen = m_async_gen;
+                                m_async_pending = false;
+                            }
+                            ComPtr<IWICBitmapSource> decoded;
+                            try {
+                                decoded = decoder.decode(job_path);
+                            } catch (...) {
+                                decoded.Reset();
+                            }
+                            {
+                                std::lock_guard lock(m_async_mutex);
+                                if (!m_async_stop && job_gen == m_async_gen) {
+                                    m_async_wic = decoded;
+                                }
+                            }
+                            PostMessageW(m_window.handle(), WM_IMAGE_READY,
+                                static_cast<WPARAM>(job_gen), 0);
+                        }
+                    } catch (...) {
+                        // Decoder creation failed — worker exits cleanly;
+                        // the UI keeps showing the previous image.
+                    }
+                    CoUninitialize();
+                });
+            }
+            m_window.invalidate();
+            return true;
+        }
+
 
         ComPtr<IWICBitmapSource> bitmap;
         const auto resolved_route = resolve_open_input_route(route, [&]() {
@@ -1923,6 +2180,19 @@ bool App::open_image(const std::wstring& path) {
         show_open_error(OpenInputRoute::ReadOrDecodeFailed);
         return false;
     }
+}
+
+void App::check_async_timeout() {
+    if (!m_async_busy || !m_async_thread.joinable()) return;
+    if (GetTickCount64() - m_async_started_ms < kAsyncTimeoutMs) return;
+    // The single decoder worker appears stuck (decode() never returned).
+    // Detach the zombie thread (if it ever finishes, its stale generation
+    // is dropped by the WM_IMAGE_READY handler) and clear the in-flight
+    // state so the next request spawns a fresh worker. Self-heals ~10s
+    // instead of hanging forever.
+    m_async_thread.detach();
+    m_async_busy = false;
+    m_async_pending = false;
 }
 
 void App::show_open_error(OpenInputRoute route) {
@@ -2071,6 +2341,7 @@ void App::set_sort_mode(SortMode mode) {
         if (m_grid_sel >= 0) grid_ensure_visible();
     }
 
+    save_sort_mode(static_cast<int>(mode));
     update_title();
     m_window.invalidate();
 }
@@ -3399,6 +3670,8 @@ bool App::enter_grid_image(HWND hwnd, const GridEntryRequest& request) {
 void App::toggle_fullscreen(HWND hwnd) {
     m_fullscreen = !m_fullscreen;
     m_toolbar_revealed = false;
+    m_filmstrip_revealed = false;
+    cancel_filmstrip_hide();
 
     if (m_fullscreen) {
         GetWindowPlacement(hwnd, &m_saved_placement);
@@ -3534,35 +3807,53 @@ static void thumb_loader_worker(
     ImageIndex& index,
     int thumb_size,
     std::atomic<uint64_t>& dimension_generation,
+    std::atomic<uint64_t>& request_generation,
     HWND notify_window)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     try {
         Decoder decoder;
         while (running) {
-            int idx;
+            std::vector<int> batch;
+            uint64_t batch_gen = 0;
             {
                 std::unique_lock lock(mtx);
                 cv.wait(lock, [&] { return !running || !queue.empty(); });
                 if (!running) break;
                 if (queue.empty()) continue;
-                idx = queue.back();
-                queue.pop_back();
+                // Snapshot the whole queue (replaced each frame with the
+                // current window's requests, nearest-first). Processing a
+                // stale batch is abandoned as soon as a newer generation
+                // lands, so fast scrolling always serves the newest window.
+                batch.swap(queue);
+                batch_gen = request_generation.load(std::memory_order_relaxed);
             }
-            {
-                std::lock_guard lock(mtx);
-                if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
-                if (thumbs[idx].loaded) continue;
-            }
+            for (int idx : batch) {
+                {
+                    std::lock_guard lock(mtx);
+                    if (!running) break;
+                    if (request_generation.load(std::memory_order_relaxed)
+                        != batch_gen) break;  // newer window arrived
+                    if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
+                    if (thumbs[idx].loaded) continue;
+                }
 
             try {
                 auto path = index.path_at(idx);
 
-                // Probe dimensions early (before decode) for accurate layout
+                // Probe dimensions early (before decode) for accurate layout.
+                // Skip probing when the directory preload already supplied them.
                 uint32_t orig_w = 0, orig_h = 0;
-                if (auto info = decoder.probe(path)) {
-                    orig_w = info->width;
-                    orig_h = info->height;
+                {
+                    std::lock_guard lock(mtx);
+                    orig_w = thumbs[idx].orig_w;
+                    orig_h = thumbs[idx].orig_h;
+                }
+                if (orig_w == 0) {
+                    if (auto info = decoder.probe(path)) {
+                        orig_w = info->width;
+                        orig_h = info->height;
+                    }
                 }
 
                 // Check disk cache first
@@ -3619,11 +3910,51 @@ static void thumb_loader_worker(
                     PostMessageW(notify_window, WM_THUMB_READY, 0, 0);
                 }
             }
-        }
+            }  // for batch
+        }  // while running
     } catch (...) {
         // Decoder creation failed — thread exits cleanly
     }
     CoUninitialize();
+}
+
+void App::start_dim_preload() {
+    if (m_dim_preload.joinable()) m_dim_preload.join();
+    if (m_index.empty()) return;
+    const size_t total = m_index.size();
+    m_dim_preload = std::thread([this, total]() {
+        std::vector<std::pair<uint32_t, uint32_t>> dims(total, {0, 0});
+        try {
+            Decoder probe_decoder;
+            for (size_t i = 0; i < total; ++i) {
+                try {
+                    if (auto info = probe_decoder.probe(m_index.path_at(i))) {
+                        dims[i] = {info->width, info->height};
+                    }
+                } catch (...) {}
+            }
+        } catch (...) {}
+        bool any_changed = false;
+        {
+            std::lock_guard lock(m_thumb_mutex);
+            const size_t count = dims.size() < m_thumbs.size()
+                ? dims.size() : m_thumbs.size();
+            for (size_t i = 0; i < count; ++i) {
+                if (dims[i].first == 0) continue;
+                if (m_thumbs[i].orig_w != dims[i].first
+                    || m_thumbs[i].orig_h != dims[i].second) {
+                    m_thumbs[i].orig_w = dims[i].first;
+                    m_thumbs[i].orig_h = dims[i].second;
+                    any_changed = true;
+                }
+            }
+        }
+        if (any_changed) {
+            m_thumb_dimension_generation.fetch_add(1,
+                std::memory_order_relaxed);
+            PostMessageW(m_window.handle(), WM_THUMB_READY, 0, 0);
+        }
+    });
 }
 
 void App::start_thumb_loader() {
@@ -3642,6 +3973,7 @@ void App::start_thumb_loader() {
                 std::ref(m_index),
                 m_thumb_size,
                 std::ref(m_thumb_dimension_generation),
+                std::ref(m_thumb_request_gen),
                 m_window.handle());
         } catch (...) {
             m_thumb_running = false;
@@ -3669,13 +4001,19 @@ void App::request_thumb(int idx) {
         if (idx < 0 || idx >= static_cast<int>(m_thumbs.size())) return;
         if (m_thumbs[idx].loaded) return;
         for (int q : m_thumb_queue) if (q == idx) return;
+        if (m_thumb_queue.size() >= 64) {
+            // Drop the oldest/farthest pending request (FIFO back): the
+            // front holds nearest-to-current items the worker should serve
+            // first, so evict from the back instead.
+            m_thumb_queue.pop_back();
+        }
         m_thumb_queue.push_back(idx);
     }
     m_thumb_cv.notify_one();
 }
 
 void App::trim_thumb_cache(int visible_start, int visible_end) {
-    constexpr size_t max_d2d_entries = 64;
+    constexpr size_t max_d2d_entries = 256;
     while (m_thumb_d2d.size() > max_d2d_entries) {
         auto victim = m_thumb_d2d.end();
         uint64_t oldest_use = std::numeric_limits<uint64_t>::max();
@@ -3900,6 +4238,235 @@ void App::clamp_grid_scroll() {
     m_grid_scroll_y = clamp_grid_scroll_position(
         m_grid_scroll_y, m_grid_total_h, visible_height);
 }
+// ── Filmstrip (large-image bottom strip, Issue #5 P1) ────────────────
+
+bool App::filmstrip_showable() const {
+    if (m_grid_mode || m_comic_reader.enabled() || !m_has_image) return false;
+    if (m_index.empty() || m_current_idx < 0) return false;
+    return true;
+}
+
+bool App::filmstrip_visible() const {
+    if (m_animating) return false;
+    if (!filmstrip_showable()) return false;
+    if (m_fullscreen) return m_filmstrip_revealed;
+    return true;  // windowed large-image mode: always on
+}
+
+D2D1_RECT_F App::filmstrip_rect() const {
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const float strip_h = layout::kFilmstripHeightDip * dpi_s;
+    const D2D1_SIZE_U ts = m_renderer.target_size();
+    const float width = static_cast<float>(ts.width)
+        - static_cast<float>(visible_panel_width());
+    return {0.0f, static_cast<float>(ts.height) - strip_h,
+        width, static_cast<float>(ts.height)};
+}
+
+// Returns -2 outside the strip, -1 inside the strip but between items,
+// or the hit item index.
+int App::filmstrip_hit_test(int x, int y) const {
+    const D2D1_RECT_F rect = filmstrip_rect();
+    if (x < static_cast<int>(rect.left) || x >= static_cast<int>(rect.right)
+        || y < static_cast<int>(rect.top) || y >= static_cast<int>(rect.bottom)) {
+        return -2;
+    }
+    return m_filmstrip.hit_test(static_cast<float>(x) - rect.left);
+}
+
+void App::schedule_filmstrip_hide() {
+    if (m_filmstrip_timer) return;
+    m_filmstrip_timer = SetTimer(m_window.handle(), kFilmstripHideTimerId,
+        static_cast<UINT>(layout::kFilmstripHideDelaySeconds * 1000.0f),
+        nullptr);
+}
+
+void App::cancel_filmstrip_hide() {
+    if (m_filmstrip_timer) {
+        KillTimer(m_window.handle(), kFilmstripHideTimerId);
+        m_filmstrip_timer = 0;
+    }
+}
+
+
+void App::render_filmstrip_animation_frame() {
+    if (m_grid_mode) return;
+    if (!filmstrip_visible()) return;  // hidden strip: skip drawing
+    if (!m_renderer.begin_frame()) {
+        m_renderer.end_frame();
+        m_window.invalidate();  // fall back to full draw pass
+        return;
+    }
+    if (!synchronize_renderer_generation()) {
+        m_renderer.end_frame();
+        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
+        return;
+    }
+    const D2D1_RECT_F strip = filmstrip_rect();
+    // Opaque base so the semi-transparent gradient and alpha fade don't
+    // stack over the previous frame's pixels (cached brush, no per-frame
+    // resource creation inside the BeginDraw session).
+    m_renderer.fill_solid_bg(strip);
+    render_filmstrip();
+    m_renderer.end_frame();
+    // Note: the next animation frame is driven by the LOCAL re-arm in
+    // WM_PAINT (strip region only); no invalidation here.
+}
+
+void App::render_filmstrip() {
+    if (!m_renderer.is_valid()) return;
+    const D2D1_RECT_F strip = filmstrip_rect();
+    const float strip_w = strip.right - strip.left;
+    if (strip_w < 40.0f || strip.bottom - strip.top <= 0.0f) return;
+    const float dpi_scale =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const int total = static_cast<int>(m_index.size());
+
+    // The thumb array is owned by the grid/filmstrip shared cache; rebuild it
+    // when the index changed under us (new directory, deletion, sort).
+    if (static_cast<int>(m_thumbs.size()) != total) {
+        stop_thumb_loader();
+        m_thumbs.clear();
+        m_thumbs.resize(total);
+        m_thumb_d2d.clear();
+        m_thumb_d2d_use.clear();
+        m_filmstrip_dimension_generation = 0;  // force aspect re-sync
+    }
+
+    // Sync model with the current index / current item.
+    m_filmstrip.set_viewport(strip_w, dpi_scale);
+    if (m_filmstrip.item_count() != total) m_filmstrip.set_items(total);
+    if (m_filmstrip.current() != m_current_idx) {
+        m_filmstrip.set_current(m_current_idx);
+    }
+
+    // Sync aspect ratios when the background probe produced new dimensions.
+    const uint64_t dim_gen =
+        m_thumb_dimension_generation.load(std::memory_order_relaxed);
+    if (dim_gen != m_filmstrip_dimension_generation) {
+        std::lock_guard lock(m_thumb_mutex);
+        for (int i = 0; i < total && i < static_cast<int>(m_thumbs.size()); ++i) {
+            if (m_thumbs[i].orig_w > 0 && m_thumbs[i].orig_h > 0) {
+                m_filmstrip.set_item_aspect(i,
+                    static_cast<float>(m_thumbs[i].orig_w)
+                        / static_cast<float>(m_thumbs[i].orig_h));
+            }
+        }
+        m_filmstrip_dimension_generation = dim_gen;
+    }
+
+    const auto [first_visible, last_visible] = m_filmstrip.visible_range();
+
+    // Prefetch window: request/retain thumbnails beyond the visible viewport
+    // so that wheel scrolling does not flash empty/black frames before the
+    // decoder catches up (issue: "跨页之后前面的胶片会变黑").
+    const int visible_count = std::max(1, last_visible - first_visible);
+    const int prefetch = visible_count * 2;
+    const int request_first = std::max(0, first_visible - prefetch);
+    const int request_last = std::min(total, last_visible + prefetch);
+
+    // Request thumbnails for the prefetch window; keep the loader alive.
+    // The queue is REPLACED every frame with the current window's requests
+    // (nearest-to-current first), and the worker snapshots it in batches,
+    // abandoning a batch when a newer generation arrives. This keeps the
+    // centered item loading first under fast scrolling without starving
+    // the worker (a plain per-frame clear would discard everything it is
+    // about to process).
+    std::vector<int> to_request;
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        m_thumb_queue.clear();
+        for (int i = request_first; i < request_last; ++i) {
+            if (i >= 0 && i < static_cast<int>(m_thumbs.size())
+                && !m_thumbs[i].loaded) {
+                to_request.push_back(i);
+            }
+        }
+    }
+    if (!to_request.empty()) {
+        std::sort(to_request.begin(), to_request.end(),
+            [this](int a, int b) {
+                const int da = std::abs(a - m_current_idx);
+                const int db = std::abs(b - m_current_idx);
+                return da != db ? da < db : a < b;
+            });
+        {
+            std::lock_guard lock(m_thumb_mutex);
+            m_thumb_queue = to_request;
+            m_thumb_request_gen.fetch_add(1, std::memory_order_relaxed);
+        }
+        m_thumb_cv.notify_all();  // wake workers for the new window
+        if (!m_thumb_running.load(std::memory_order_relaxed)) {
+            start_thumb_loader();
+        }
+    }
+
+    // Upload newly-decoded WIC bitmaps (bounded per frame, grid pattern).
+    std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        for (int i = first_visible; i < last_visible; ++i) {
+            if (i < 0 || i >= static_cast<int>(m_thumbs.size())) continue;
+            if (m_thumbs[i].loaded && !m_thumb_d2d.count(i) && m_thumbs[i].wic) {
+                ready.push_back({i, m_thumbs[i].wic});
+            }
+        }
+    }
+    std::size_t uploaded = 0;
+    for (auto& [index, wic] : ready) {
+        if (uploaded >= 8) break;
+        ++uploaded;
+        ComPtr<ID2D1Bitmap1> bitmap;
+        if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &bitmap))
+            && bitmap) {
+            m_thumb_d2d[index] = bitmap;
+            m_thumb_d2d_use[index] = ++m_thumb_use_clock;
+            {
+                std::lock_guard lock(m_thumb_mutex);
+                if (index >= 0 && index < static_cast<int>(m_thumbs.size())) {
+                    m_thumbs[index].wic.Reset();
+                }
+            }
+        }
+    }
+    if (ready.size() > uploaded) {
+        PostMessageW(m_window.handle(), WM_THUMB_READY, 0, 0);
+    }
+
+    // Collect draw items (visible window only).
+    std::vector<FilmstripRenderItem> items;
+    {
+        std::lock_guard lock(m_thumb_mutex);
+        for (int i = first_visible; i < last_visible; ++i) {
+            if (i < 0 || i >= static_cast<int>(m_thumbs.size())) continue;
+            const FilmstripItemRect rect = m_filmstrip.item_rect(i);
+            FilmstripRenderItem item;
+            item.index = i;
+            item.left = rect.left;
+            item.top = rect.top;
+            item.width = rect.width;
+            item.height = rect.height;
+            item.current = (i == m_filmstrip.current());
+            item.zoom = rect.zoom;
+            item.placeholder_color = m_thumbs[i].dominant_color;
+            const auto it = m_thumb_d2d.find(i);
+            if (it != m_thumb_d2d.end() && it->second) {
+                item.bitmap = it->second.Get();
+                m_thumb_d2d_use[i] = ++m_thumb_use_clock;
+            }
+            items.push_back(item);
+        }
+    }
+
+    trim_thumb_cache(request_first, request_last);
+
+    m_renderer.draw_filmstrip(strip.left, strip.top, strip_w,
+        strip.bottom - strip.top, items,
+        m_filmstrip.left_overflow(), m_filmstrip.right_overflow(),
+        m_filmstrip.anim_t());
+}
+
 bool App::toolbar_visible() const {
     return !m_fullscreen || m_grid_mode || m_toolbar_revealed;
 }
@@ -4112,6 +4679,20 @@ void App::select_range(int start, int end) {
 
 void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
     int total = static_cast<int>(m_index.size());
+    // Anchor the first visible row before dimension-driven rebuilds so that
+    // skeleton -> real-thumbnail aspect changes do not push the viewport
+    // (fast scroll stops, then rows above grow and content drifts down).
+    int anchor_item = -1;
+    int anchor_offset = 0;
+    if (reason == GridRebuildReason::BackgroundDimensions) {
+        for (const auto& row : m_grid_rows) {
+            if (row.row_y + row.row_h + row.label_extra > m_grid_scroll_y) {
+                anchor_item = row.start_idx;
+                anchor_offset = m_grid_scroll_y - row.row_y;
+                break;
+            }
+        }
+    }
     m_grid_dims.assign(static_cast<size_t>(total), {0, 0});
     uint64_t applied_dimension_generation = 0;
     {
@@ -4197,6 +4778,17 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
         ? m_grid_sel / m_grid_cols : -1;
     const bool has_selected_row =
         selected_row >= 0 && selected_row < static_cast<int>(m_grid_rows.size());
+    // Dimension-driven rebuild without a selection: keep the anchored row
+    // pinned so the viewport does not drift while thumbnails stream in.
+    if (reason == GridRebuildReason::BackgroundDimensions && !has_selected_row
+        && anchor_item >= 0 && anchor_item < total && m_grid_cols > 0) {
+        const int anchor_row = anchor_item / m_grid_cols;
+        if (anchor_row >= 0
+            && anchor_row < static_cast<int>(m_grid_rows.size())) {
+            m_grid_scroll_y = m_grid_rows[static_cast<size_t>(anchor_row)].row_y
+                + anchor_offset;
+        }
+    }
     if (has_selected_row) {
         const auto& row = m_grid_rows[static_cast<size_t>(selected_row)];
         m_grid_scroll_y = reconcile_grid_scroll_after_rebuild(
@@ -4416,10 +5008,15 @@ void App::grid_render() {
 }
 
 void App::render_frame() {
+    check_async_timeout();
     if (m_grid_mode) {
         grid_render();
         return;
     }
+    // Refresh the pre-scaled image cache before the draw session starts
+    // (its rebuild runs its own BeginDraw/EndDraw on the offscreen
+    // target, so it must not happen inside the main session).
+    m_renderer.ensure_image_scaled();
     if (!m_renderer.begin_frame()) {
         // GDI fallback — paint dark background with status text
         PAINTSTRUCT ps;
@@ -4446,6 +5043,42 @@ void App::render_frame() {
         PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
         return;
     }
+
+    // Advance filmstrip scroll/zoom transition using REAL elapsed time so
+    // dropped frames slow the rendering but never stretch the animation.
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    float anim_dt = 1.0f / 60.0f;
+    if (m_last_anim_tick.QuadPart != 0) {
+        anim_dt = static_cast<float>(now.QuadPart - m_last_anim_tick.QuadPart)
+            / static_cast<float>(freq.QuadPart);
+        anim_dt = std::clamp(anim_dt, 0.0f, 0.05f);
+    }
+    m_last_anim_tick = now;
+    if (m_filmstrip.advance_animation(anim_dt)) {
+        m_window.invalidate();
+    }
+    // A decoded image that arrived DURING the transition is materialized
+    // now that the animation is over — never between animation frames
+    // (the 4K FormatConverter + GPU upload would stall the transition).
+    if (!m_filmstrip.animating() && m_pending_image) {
+        ComPtr<IWICBitmapSource> decoded = m_pending_image;
+        m_pending_image.Reset();
+        try {
+            auto materialized = m_decoder.materialize(decoded.Get());
+            if (materialized && m_renderer.upload_image(materialized.Get())) {
+                m_current_wic = materialized;
+                m_has_image = true;
+                update_content_viewport(false);
+                fit_to_window();
+                preload_neighbors();
+                m_window.invalidate();
+            }
+        } catch (...) {
+            // Keep the previous image on failure.
+        }
+    }
     m_renderer.clear();
     float tw = static_cast<float>(m_renderer.target_size().width);
     float content_top = m_renderer.content_top();
@@ -4454,7 +5087,11 @@ void App::render_frame() {
         render_comic_reader(content_top);
     } else if (m_has_image) {
         m_renderer.draw_image();
-        m_renderer.draw_overlay();
+        const float filmstrip_h = filmstrip_visible()
+            ? layout::kFilmstripHeightDip
+                * (static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f)
+            : 0.0f;
+        m_renderer.draw_overlay(filmstrip_h);
         uint32_t image_w = 0, image_h = 0;
         m_renderer.image_size(image_w, image_h);
         draw_panel(m_current_path, m_renderer.image_bitmap(), image_w, image_h, content_top);
@@ -4493,6 +5130,7 @@ void App::render_frame() {
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
+    if (filmstrip_visible()) render_filmstrip();
     m_renderer.draw_status_message(m_open_error);
     if (toolbar_visible()) {
         m_renderer.draw_title_bar(tw, m_title_btn_hover, m_title_btn_press,
