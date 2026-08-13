@@ -264,10 +264,8 @@ private:
     std::vector<std::wstring> m_drag_paths;
     int   m_drag_deferred_select = -1;
 
-    // Preloader state: 3-item decoded-neighbor cache fed by the async pool.
+    // Background dimension prober (skeleton-size pre-read, Issue #5-P1).
     std::thread m_dim_preload;
-    std::mutex  m_preload_mutex;
-    std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IWICBitmapSource>> m_preload_cache;
 
     struct ComicPageEntry {
         Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
@@ -322,17 +320,29 @@ private:
         ULONGLONG   started_ms = 0;
         bool        current    = false;
     };
-    static constexpr int       kAsyncWorkers = 3;
-    std::vector<AsyncSlot>     m_async_slots;
-    std::mutex                 m_async_mutex;
-    std::condition_variable    m_async_cv;
-    std::deque<AsyncJob>       m_async_queue;
-    bool         m_async_stop = false;
-    ULONGLONG    m_async_gen  = 0;   // newest current-image generation
-    ComPtr<IWICBitmapSource> m_async_wic;  // newest decode result
+    // Pool state is heap-shared: each worker holds its own shared_ptr copy,
+    // so a worker still stuck in decode() at shutdown (detached) keeps the
+    // state alive instead of touching freed App members — app exit never
+    // blocks on a frozen decode.
+    struct AsyncPoolState {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        std::deque<AsyncJob>    queue;
+        std::vector<AsyncSlot>  slots;
+        bool        stop = false;
+        ULONGLONG   gen  = 0;   // newest current-image generation
+        ComPtr<IWICBitmapSource> wic;  // newest decode result
+        // Decoded-neighbor cache (3 items), shared with the UI thread.
+        std::mutex preload_mutex;
+        std::unordered_map<std::wstring,
+            Microsoft::WRL::ComPtr<IWICBitmapSource>> preload_cache;
+    };
+    static constexpr int kAsyncWorkers = 3;
+    std::shared_ptr<AsyncPoolState> m_async;
     // Watchdog: a decode that never returns (stuck on a pathological file)
     // abandons its slot — the zombie thread is detached (its stale result is
     // dropped via slot generation) and the slot respawns — self-heal ~10s.
+    // These two are UI-thread-only bookkeeping for the current image.
     bool       m_async_busy = false;      // current decode in flight
     ULONGLONG m_async_started_ms = 0;
     static constexpr ULONGLONG kAsyncTimeoutMs = 10000;

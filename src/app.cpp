@@ -956,14 +956,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         const ULONGLONG gen = static_cast<ULONGLONG>(wp);
         ComPtr<IWICBitmapSource> decoded;
         {
-            std::lock_guard lock(m_async_mutex);
-            if (gen != m_async_gen) return 0;  // stale page flip — drop
-            if (!m_async_wic) {                // decode failed — keep previous
+            std::lock_guard lock(m_async->mutex);
+            if (gen != m_async->gen) return 0;  // stale page flip — drop
+            if (!m_async->wic) {                // decode failed — keep previous
                 m_async_busy = false;
                 return 0;
             }
-            decoded = m_async_wic;
-            m_async_wic.Reset();
+            decoded = m_async->wic;
+            m_async->wic.Reset();
             m_async_busy = false;
         }
         try {
@@ -2021,19 +2021,19 @@ bool App::open_image(const std::wstring& path) {
             m_current_path = path;
             if (indexed_position >= 0) m_current_idx = indexed_position;
             {
-                std::lock_guard lock(m_async_mutex);
-                if (!m_async_queue.empty() && m_async_queue.front().current)
-                    m_async_queue.pop_front();
-                ++m_async_gen;
-                m_async_queue.push_front(AsyncJob{path, m_async_gen, true});
+                std::lock_guard lock(m_async->mutex);
+                if (!m_async->queue.empty() && m_async->queue.front().current)
+                    m_async->queue.pop_front();
+                ++m_async->gen;
+                m_async->queue.push_front(AsyncJob{path, m_async->gen, true});
                 m_async_busy = true;
                 m_async_started_ms = GetTickCount64();
             }
-            for (int i = 0; i < static_cast<int>(m_async_slots.size()); ++i) {
-                if (!m_async_slots[i].thread.joinable())
+            for (int i = 0; i < static_cast<int>(m_async->slots.size()); ++i) {
+                if (!m_async->slots[i].thread.joinable())
                     start_async_worker(i);
             }
-            m_async_cv.notify_all();
+            m_async->cv.notify_all();
             SetTimer(m_window.handle(), kAsyncWatchdogTimerId, 1000, nullptr);
             m_window.invalidate();
             return true;
@@ -2111,10 +2111,10 @@ void App::check_async_timeout() {
     // ~10s instead of hanging forever. Runs on the UI thread.
     std::vector<int> stuck;
     {
-        std::lock_guard lock(m_async_mutex);
+        std::lock_guard lock(m_async->mutex);
         const ULONGLONG now = GetTickCount64();
-        for (int i = 0; i < static_cast<int>(m_async_slots.size()); ++i) {
-            AsyncSlot& s = m_async_slots[i];
+        for (int i = 0; i < static_cast<int>(m_async->slots.size()); ++i) {
+            AsyncSlot& s = m_async->slots[i];
             if (!s.busy || now - s.started_ms < kAsyncTimeoutMs) continue;
             ++s.slot_gen;
             if (s.current) m_async_busy = false;
@@ -2125,7 +2125,7 @@ void App::check_async_timeout() {
         }
     }
     for (int i : stuck) {
-        AsyncSlot& s = m_async_slots[i];
+        AsyncSlot& s = m_async->slots[i];
         if (s.thread.joinable()) s.thread.detach();
         start_async_worker(i);
     }
@@ -2285,47 +2285,57 @@ void App::set_sort_mode(SortMode mode) {
 // ── Preloader ────────────────────────────────────────────────
 
 void App::start_async_pool() {
-    m_async_slots.resize(kAsyncWorkers);
-    for (int i = 0; i < static_cast<int>(m_async_slots.size()); ++i)
+    m_async = std::make_shared<AsyncPoolState>();
+    m_async->slots.resize(kAsyncWorkers);
+    for (int i = 0; i < static_cast<int>(m_async->slots.size()); ++i)
         start_async_worker(i);
 }
 
 void App::stop_async_pool() {
+    if (!m_async) return;
+    // Prompt shutdown even when a worker is frozen in decode(): detach all
+    // slots instead of joining. Idle workers exit on the stop flag; frozen
+    // ones keep the shared pool state alive and are reaped at process exit.
     {
-        std::lock_guard lock(m_async_mutex);
-        m_async_stop = true;
+        std::lock_guard lock(m_async->mutex);
+        m_async->stop = true;
     }
-    m_async_cv.notify_all();
-    for (auto& slot : m_async_slots) {
+    m_async->cv.notify_all();
+    for (auto& slot : m_async->slots) {
         if (slot.thread.joinable())
-            slot.thread.join();
+            slot.thread.detach();
     }
 }
 
 void App::start_async_worker(int slot_index) {
-    AsyncSlot& slot = m_async_slots[slot_index];
+    AsyncSlot& slot = m_async->slots[slot_index];
     if (slot.thread.joinable()) return;  // already running
     const ULONGLONG slot_gen = slot.slot_gen;
+    // The worker keeps its own shared_ptr to the pool state and the HWND by
+    // value — it never dereferences App, so it stays safe even after App is
+    // destroyed (frozen decode at shutdown).
+    const std::shared_ptr<AsyncPoolState> pool = m_async;
+    const HWND hwnd = m_window.handle();
     try {
-        slot.thread = std::thread([this, slot_index, slot_gen]() {
+        slot.thread = std::thread([pool, hwnd, slot_index, slot_gen]() {
             CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
             try {
                 Decoder decoder;  // each worker owns its WIC factory
                 while (true) {
                     AsyncJob job;
                     {
-                        std::unique_lock lock(m_async_mutex);
-                        m_async_cv.wait(lock, [&] {
-                            return m_async_stop || !m_async_queue.empty();
+                        std::unique_lock lock(pool->mutex);
+                        pool->cv.wait(lock, [&] {
+                            return pool->stop || !pool->queue.empty();
                         });
-                        if (m_async_stop) break;
-                        AsyncSlot& s = m_async_slots[slot_index];
+                        if (pool->stop) break;
+                        AsyncSlot& s = pool->slots[slot_index];
                         if (s.slot_gen != slot_gen) break;  // replaced — exit
-                        if (m_async_queue.empty()) continue;
-                        job = std::move(m_async_queue.front());
-                        m_async_queue.pop_front();
+                        if (pool->queue.empty()) continue;
+                        job = std::move(pool->queue.front());
+                        pool->queue.pop_front();
                         // A current job superseded while queued is stale.
-                        if (job.current && job.gen != m_async_gen) continue;
+                        if (job.current && job.gen != pool->gen) continue;
                         s.busy = true;
                         s.path = job.path;
                         s.started_ms = GetTickCount64();
@@ -2338,25 +2348,25 @@ void App::start_async_worker(int slot_index) {
                         decoded.Reset();
                     }
                     {
-                        std::lock_guard lock(m_async_mutex);
-                        AsyncSlot& s = m_async_slots[slot_index];
+                        std::lock_guard lock(pool->mutex);
+                        AsyncSlot& s = pool->slots[slot_index];
                         if (s.slot_gen != slot_gen) continue;  // zombie: drop
                         s.busy = false;
                         s.path.clear();
                         s.current = false;
                         if (job.current) {
-                            if (!m_async_stop && job.gen == m_async_gen) {
-                                m_async_wic = decoded;
+                            if (!pool->stop && job.gen == pool->gen) {
+                                pool->wic = decoded;
                             }
                         } else if (decoded) {
-                            std::lock_guard plock(m_preload_mutex);
-                            if (m_preload_cache.size() >= 3)
-                                m_preload_cache.erase(m_preload_cache.begin());
-                            m_preload_cache[job.path] = decoded;
+                            std::lock_guard plock(pool->preload_mutex);
+                            if (pool->preload_cache.size() >= 3)
+                                pool->preload_cache.erase(pool->preload_cache.begin());
+                            pool->preload_cache[job.path] = decoded;
                         }
                     }
                     if (job.current)
-                        PostMessageW(m_window.handle(), WM_IMAGE_READY,
+                        PostMessageW(hwnd, WM_IMAGE_READY,
                             static_cast<WPARAM>(job.gen), 0);
                 }
             } catch (...) {
@@ -2371,40 +2381,42 @@ void App::start_async_worker(int slot_index) {
 }
 
 bool App::async_slots_active() {
-    std::lock_guard lock(m_async_mutex);
+    if (!m_async) return false;
+    std::lock_guard lock(m_async->mutex);
     if (m_async_busy) return true;
-    for (const auto& s : m_async_slots)
+    for (const auto& s : m_async->slots)
         if (s.busy) return true;
     return false;
 }
 
 void App::request_preload(const std::wstring& path) {
-    if (path.empty()) return;
+    if (path.empty() || !m_async) return;
     {
-        std::lock_guard plock(m_preload_mutex);
-        if (m_preload_cache.count(path)) return;  // already cached
+        std::lock_guard plock(m_async->preload_mutex);
+        if (m_async->preload_cache.count(path)) return;  // already cached
     }
     {
-        std::lock_guard lock(m_async_mutex);
+        std::lock_guard lock(m_async->mutex);
         // Skip if already queued or being decoded
-        for (const auto& j : m_async_queue)
+        for (const auto& j : m_async->queue)
             if (!j.current && j.path == path) return;
-        for (const auto& s : m_async_slots)
+        for (const auto& s : m_async->slots)
             if (s.busy && !s.current && s.path == path) return;
-        m_async_queue.push_back(AsyncJob{path, 0, false});
+        m_async->queue.push_back(AsyncJob{path, 0, false});
     }
-    m_async_cv.notify_one();
+    m_async->cv.notify_one();
     // Keep the watchdog tick alive while only preloads are in flight, so a
     // stuck preload decode still gets abandoned.
     SetTimer(m_window.handle(), kAsyncWatchdogTimerId, 1000, nullptr);
 }
 
 Microsoft::WRL::ComPtr<IWICBitmapSource> App::get_preloaded(const std::wstring& path) {
-    std::lock_guard lock(m_preload_mutex);
-    auto it = m_preload_cache.find(path);
-    if (it != m_preload_cache.end()) {
+    if (!m_async) return nullptr;
+    std::lock_guard lock(m_async->preload_mutex);
+    auto it = m_async->preload_cache.find(path);
+    if (it != m_async->preload_cache.end()) {
         auto result = it->second;
-        m_preload_cache.erase(it);  // consumed
+        m_async->preload_cache.erase(it);  // consumed
         return result;
     }
     return nullptr;
