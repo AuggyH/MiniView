@@ -4184,6 +4184,33 @@ void App::trim_thumb_cache(int visible_start, int visible_end) {
     }
 }
 
+// Drives the grid<->big-image transition from the render loop (QPC
+// elapsed) instead of relying on WM_TIMER(4) delivery: under message-queue
+// pressure (e.g. thumb-loader posts during the big->grid switch) the
+// low-priority timer messages starve and the animation froze forever.
+// The timer stays as a redundant safety net.
+void App::advance_transition_animation() {
+    if (!m_animating) return;
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    const float elapsed =
+        static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
+    m_anim_t = elapsed / 0.30f;  // 300ms
+    if (m_anim_t >= 1.0f) {
+        m_anim_t = 1.0f;
+        m_animating = false;
+        m_anim_thumb.Reset();
+        if (m_anim_timer) {
+            KillTimer(m_window.handle(), 4);
+            m_anim_timer = 0;
+        }
+    } else {
+        // Keep frames flowing until the transition finishes.
+        m_window.invalidate();
+    }
+}
+
 void App::toggle_grid() {
     m_grid_mode = !m_grid_mode;
     m_grid_layout_dirty = true;
@@ -5128,6 +5155,7 @@ void App::grid_render() {
 }
 
 void App::render_frame() {
+    advance_transition_animation();
     check_async_timeout();
     if (m_grid_mode) {
         grid_render();

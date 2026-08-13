@@ -358,6 +358,7 @@ private:
     ULONGLONG m_async_started_ms = 0;
     static constexpr ULONGLONG kAsyncTimeoutMs = 10000;
     void check_async_timeout();
+    void advance_transition_animation();
     // An already-materialized image deferred while the filmstrip transition
     // was running (uploaded once the animation completes, so the GPU upload
     // never stalls an animation frame).
