@@ -281,7 +281,26 @@ void Renderer::clear(float r, float g, float b) {
 
 
 void Renderer::draw_image() {
-    if (!m_d2d_context || !m_image_bitmap) return;
+    if (!m_d2d_context) return;
+    if (m_placeholder_bitmap) {
+        // Provisional upscaled thumbnail while the full decode is in flight
+        // (progressive paging: instant feedback, replaced on upload).
+        const D2D1_SIZE_F bsz = m_placeholder_bitmap->GetSize();
+        if (bsz.width <= 0.0f || bsz.height <= 0.0f) return;
+        const float avail_w = content_width();
+        const float avail_h =
+            static_cast<float>(m_target_size.height) - m_content_top;
+        const float fit = std::min(avail_w / bsz.width, avail_h / bsz.height);
+        const float w = bsz.width * fit;
+        const float h = bsz.height * fit;
+        const float x = m_content_left + (avail_w - w) / 2.0f;
+        const float y = m_content_top + (avail_h - h) / 2.0f;
+        const D2D1_RECT_F dest = {x, y, x + w, y + h};
+        m_d2d_context->DrawBitmap(m_placeholder_bitmap.Get(), &dest, 1.0f,
+            D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
+        return;
+    }
+    if (!m_image_bitmap) return;
 
     float scaled_w = m_img_width  * m_scale;
     float scaled_h = m_img_height * m_scale;
@@ -308,6 +327,14 @@ void Renderer::draw_image() {
             D2D1_INTERPOLATION_MODE_LINEAR,
             &src);
     }
+}
+
+void Renderer::set_placeholder(ID2D1Bitmap1* bmp) {
+    m_placeholder_bitmap = bmp;
+}
+
+void Renderer::clear_placeholder() {
+    m_placeholder_bitmap.Reset();
 }
 
 void Renderer::ensure_image_scaled() {

@@ -133,6 +133,7 @@ private:
     void    request_preload(const std::wstring& path);
     Microsoft::WRL::ComPtr<IWICBitmapSource> get_preloaded(const std::wstring& path);
     void    preload_neighbors();
+    void    show_placeholder_thumb(int idx);
 
     // Continuous comic layout inside large-image mode
     void    toggle_comic_reader();
@@ -361,6 +362,9 @@ private:
     // was running (uploaded once the animation completes, so the GPU upload
     // never stalls an animation frame).
     ComPtr<IWICBitmapSource> m_pending_image;
+    // Progressive-loading placeholder: index whose filmstrip thumbnail is
+    // drawn while the full decode is in flight (cleared on upload).
+    int m_placeholder_idx = -1;
     std::mutex m_metadata_mutex;
     std::condition_variable m_metadata_cv;
     std::wstring m_metadata_request_path;

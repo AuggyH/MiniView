@@ -46,6 +46,10 @@ public:
     bool init(HWND hwnd);
     bool resize(uint32_t width, uint32_t height);
     bool upload_image(IWICBitmapSource* wic_bitmap, bool reset_view = true);
+    // Provisional thumbnail placeholder (progressive paging): drawn instead
+    // of the full image while its decode is still in flight.
+    void set_placeholder(ID2D1Bitmap1* bmp);
+    void clear_placeholder();
 
     bool begin_frame();
     bool end_frame();
@@ -150,6 +154,7 @@ private:
     ComPtr<ID2D1Device5>           m_d2d_device;
     ComPtr<ID2D1DeviceContext5>    m_d2d_context;
     ComPtr<ID2D1Bitmap1>           m_image_bitmap;
+    ComPtr<ID2D1Bitmap1>           m_placeholder_bitmap;  // provisional thumb
     ComPtr<ID2D1Bitmap1>           m_image_scaled;   // pre-scaled zoom cache
     float m_image_scaled_scale = -1.0f;              // scale the cache was built at
 

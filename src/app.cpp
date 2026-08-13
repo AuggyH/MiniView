@@ -933,6 +933,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_THUMB_READY:
         if (m_grid_mode || filmstrip_visible()) m_window.invalidate();
+        // A placeholder waiting for its thumbnail gets it now.
+        if (!m_grid_mode && m_placeholder_idx >= 0) {
+            auto pit = m_thumb_d2d.find(m_placeholder_idx);
+            if (pit != m_thumb_d2d.end())
+                m_renderer.set_placeholder(pit->second.Get());
+        }
         return 0;
 
     case WM_METADATA_READY:
@@ -978,6 +984,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!m_renderer.upload_image(decoded.Get())) return 0;
             m_current_wic = decoded;
             m_has_image = true;
+            m_renderer.clear_placeholder();
+            m_placeholder_idx = -1;
             update_content_viewport(false);
             fit_to_window();
             preload_neighbors();
@@ -1889,6 +1897,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 void App::open_directory(const std::wstring& path) {
     if (path.empty()) return;
+    m_renderer.clear_placeholder();
+    m_placeholder_idx = -1;
     if (m_comic_reader.enabled()) leave_comic_reader(false);
     if (m_thumb_running) stop_thumb_loader();
     finish_grid_scroll();
@@ -2000,6 +2010,7 @@ bool App::open_image(const std::wstring& path) {
             m_debounce_idx = indexed_position;
             if (indexed_position >= 0) m_current_idx = indexed_position;
             m_current_path = path;
+            show_placeholder_thumb(indexed_position);
             SetTimer(m_window.handle(), kImageDebounceTimerId, 250, nullptr);
             m_window.invalidate();
             return true;
@@ -2034,6 +2045,7 @@ bool App::open_image(const std::wstring& path) {
             }
             m_async->cv.notify_all();
             SetTimer(m_window.handle(), kAsyncWatchdogTimerId, 1000, nullptr);
+            show_placeholder_thumb(indexed_position);
             m_window.invalidate();
             return true;
         }
@@ -2080,6 +2092,8 @@ bool App::open_image(const std::wstring& path) {
         update_content_viewport(false);
         fit_to_window();
         m_current_wic = bitmap;
+        m_renderer.clear_placeholder();
+        m_placeholder_idx = -1;
 
         fs::path p(path);
         std::wstring dir = p.parent_path().wstring();
@@ -2445,6 +2459,19 @@ void App::request_preload(const std::wstring& path) {
     // Keep the watchdog tick alive while only preloads are in flight, so a
     // stuck preload decode still gets abandoned.
     SetTimer(m_window.handle(), kAsyncWatchdogTimerId, 1000, nullptr);
+}
+
+void App::show_placeholder_thumb(int idx) {
+    // Progressive-loading placeholder (Issue #5-P1 C): while the full decode
+    // of a page-flip target is in flight, show its filmstrip thumbnail
+    // upscaled — instant visual feedback, replaced by the real image on
+    // WM_IMAGE_READY. If the thumbnail isn't ready yet, keep the previous
+    // image; WM_THUMB_READY retries the lookup.
+    if (idx < 0 || m_grid_mode || m_comic_reader.enabled()) return;
+    m_placeholder_idx = idx;
+    auto it = m_thumb_d2d.find(idx);
+    if (it != m_thumb_d2d.end())
+        m_renderer.set_placeholder(it->second.Get());
 }
 
 static std::uint64_t wic_source_bytes(IWICBitmapSource* src) {
@@ -5138,6 +5165,8 @@ void App::render_frame() {
             if (m_renderer.upload_image(decoded.Get())) {
                 m_current_wic = decoded;
                 m_has_image = true;
+                m_renderer.clear_placeholder();
+                m_placeholder_idx = -1;
                 update_content_viewport(false);
                 fit_to_window();
                 preload_neighbors();
