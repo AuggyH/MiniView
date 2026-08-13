@@ -4306,31 +4306,6 @@ void App::cancel_filmstrip_hide() {
     }
 }
 
-
-void App::render_filmstrip_animation_frame() {
-    if (m_grid_mode) return;
-    if (!filmstrip_visible()) return;  // hidden strip: skip drawing
-    if (!m_renderer.begin_frame()) {
-        m_renderer.end_frame();
-        m_window.invalidate();  // fall back to full draw pass
-        return;
-    }
-    if (!synchronize_renderer_generation()) {
-        m_renderer.end_frame();
-        PostMessageW(m_window.handle(), WM_RENDER_RETRY, 0, 0);
-        return;
-    }
-    const D2D1_RECT_F strip = filmstrip_rect();
-    // Opaque base so the semi-transparent gradient and alpha fade don't
-    // stack over the previous frame's pixels (cached brush, no per-frame
-    // resource creation inside the BeginDraw session).
-    m_renderer.fill_solid_bg(strip);
-    render_filmstrip();
-    m_renderer.end_frame();
-    // Note: the next animation frame is driven by the LOCAL re-arm in
-    // WM_PAINT (strip region only); no invalidation here.
-}
-
 void App::render_filmstrip() {
     if (!m_renderer.is_valid()) return;
     const D2D1_RECT_F strip = filmstrip_rect();

@@ -1783,27 +1783,6 @@ void Renderer::push_clip_rect(const D2D1_RECT_F& rc) {
     m_d2d_context->PushAxisAlignedClip(&rc, D2D1_ANTIALIAS_MODE_ALIASED);
 }
 
-void Renderer::fill_solid(float left, float top, float right, float bottom,
-    float r, float g, float b) {
-    if (!m_d2d_context) return;
-    ComPtr<ID2D1SolidColorBrush> br;
-    if (FAILED(m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(r, g, b, 1.0f), &br)))
-        return;
-    m_d2d_context->FillRectangle(D2D1::RectF(left, top, right, bottom), br.Get());
-}
-
-void Renderer::fill_solid_bg(const D2D1_RECT_F& rc) {
-    if (!m_d2d_context) return;
-    if (!m_filmstrip_bg_brush) {
-        if (FAILED(m_d2d_context->CreateSolidColorBrush(
-                D2D1::ColorF(0.078f, 0.078f, 0.086f, 1.0f),
-                &m_filmstrip_bg_brush)))
-            return;
-    }
-    m_d2d_context->FillRectangle(rc, m_filmstrip_bg_brush.Get());
-}
-
 void Renderer::pop_clip() {
     if (!m_d2d_context) return;
     m_d2d_context->PopAxisAlignedClip();

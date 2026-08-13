@@ -230,7 +230,6 @@ private:
     D2D1_RECT_F filmstrip_rect() const;
     int     filmstrip_hit_test(int x, int y) const;
     void    render_filmstrip();
-    void    render_filmstrip_animation_frame();
     void    schedule_filmstrip_hide();
     void    cancel_filmstrip_hide();
 

@@ -83,11 +83,6 @@ public:
     void push_clip_below(float y);
     void push_clip_rect(const D2D1_RECT_F& rc);
     void pop_clip();
-    void fill_solid(float left, float top, float right, float bottom,
-        float r, float g, float b);
-    // Cached opaque brush for the filmstrip animation frame base fill
-    // (avoids per-frame brush creation inside the BeginDraw session).
-    void fill_solid_bg(const D2D1_RECT_F& rc);
     float measure_text(const std::wstring& text, float font_size);
 
     // Create a D2D bitmap from a WIC source (for grid thumbnails)
@@ -165,7 +160,6 @@ private:
     float m_filmstrip_bg_dpi = 0.0f;
     float m_filmstrip_bg_width = -1.0f;
     ComPtr<ID2D1LinearGradientBrush> m_filmstrip_mask_gradient;  // edge alpha mask
-    ComPtr<ID2D1SolidColorBrush> m_filmstrip_bg_brush;  // opaque anim-frame base
     float m_filmstrip_mask_dpi = 0.0f;
     float m_filmstrip_mask_width = -1.0f;
     ComPtr<ID2D1Layer> m_filmstrip_mask_layer;  // cached, not per-frame
