@@ -362,6 +362,7 @@ private:
     // was running (uploaded once the animation completes, so the GPU upload
     // never stalls an animation frame).
     ComPtr<IWICBitmapSource> m_pending_image;
+    std::wstring m_pending_path;  // identity check: paged past = stale
     // Progressive-loading placeholder: index whose filmstrip thumbnail is
     // drawn while the full decode is in flight (cleared on upload).
     int m_placeholder_idx = -1;

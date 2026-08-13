@@ -979,6 +979,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // running — the heavy decode already happened on a worker.
             if (m_filmstrip.animating()) {
                 m_pending_image = decoded;
+                m_pending_path = m_current_path;
                 return 0;
             }
             if (!m_renderer.upload_image(decoded.Get())) return 0;
@@ -2010,6 +2011,15 @@ bool App::open_image(const std::wstring& path) {
             m_debounce_idx = indexed_position;
             if (indexed_position >= 0) m_current_idx = indexed_position;
             m_current_path = path;
+            // Drop any in-flight decode for an image we just scrolled past:
+            // it must not flash on screen while the debounce timer waits.
+            {
+                std::lock_guard lock(m_async->mutex);
+                ++m_async->gen;
+                m_async_busy = false;
+            }
+            m_pending_image.Reset();
+            m_pending_path.clear();
             show_placeholder_thumb(indexed_position);
             SetTimer(m_window.handle(), kImageDebounceTimerId, 250, nullptr);
             m_window.invalidate();
@@ -2094,6 +2104,8 @@ bool App::open_image(const std::wstring& path) {
         m_current_wic = bitmap;
         m_renderer.clear_placeholder();
         m_placeholder_idx = -1;
+        m_pending_image.Reset();
+        m_pending_path.clear();
 
         fs::path p(path);
         std::wstring dir = p.parent_path().wstring();
@@ -5161,19 +5173,25 @@ void App::render_frame() {
     if (!m_filmstrip.animating() && m_pending_image) {
         ComPtr<IWICBitmapSource> decoded = m_pending_image;
         m_pending_image.Reset();
-        try {
-            if (m_renderer.upload_image(decoded.Get())) {
-                m_current_wic = decoded;
-                m_has_image = true;
-                m_renderer.clear_placeholder();
-                m_placeholder_idx = -1;
-                update_content_viewport(false);
-                fit_to_window();
-                preload_neighbors();
-                m_window.invalidate();
+        const bool still_current = (m_pending_path == m_current_path);
+        m_pending_path.clear();
+        // A pending image whose page was already flipped past would flash
+        // a stale frame — only show it when it is still the current target.
+        if (still_current) {
+            try {
+                if (m_renderer.upload_image(decoded.Get())) {
+                    m_current_wic = decoded;
+                    m_has_image = true;
+                    m_renderer.clear_placeholder();
+                    m_placeholder_idx = -1;
+                    update_content_viewport(false);
+                    fit_to_window();
+                    preload_neighbors();
+                    m_window.invalidate();
+                }
+            } catch (...) {
+                // Keep the previous image on failure.
             }
-        } catch (...) {
-            // Keep the previous image on failure.
         }
     }
     m_renderer.clear();
