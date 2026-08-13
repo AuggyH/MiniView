@@ -1046,6 +1046,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             nav_tree_scroll(delta);
             return 0;
         }
+        // Wheel over the main area releases any navigation-panel focus.
+        if (m_nav_panel_state.focused()) {
+            m_nav_panel_state.release_focus();
+            m_window.invalidate();
+        }
         int panel_w = visible_panel_width();
         int panel_x = static_cast<int>(m_renderer.target_size().width) - panel_w;
         if (panel_w > 0 && wheel_pt.x >= panel_x) {
@@ -1226,6 +1231,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Left navigation panel + grid breadcrumb clicks (Issue #5 P2)
         if (nav_panel_visible() && GET_X_LPARAM(lp) < nav_panel_width()) {
             if (nav_panel_hit_test(GET_X_LPARAM(lp), ty)) return 0;
+        }
+        // Clicking outside the navigation panel returns focus to the main
+        // area — otherwise a stray panel hover/click leaves the panel
+        // focused and main-area shortcuts (Space/N/D/S/R/A/L) stop working.
+        if (m_nav_panel_state.focused()) {
+            m_nav_panel_state.release_focus();
+            m_window.invalidate();
         }
         if (m_grid_mode
             && grid_breadcrumb_hit_test(GET_X_LPARAM(lp), ty)) {
