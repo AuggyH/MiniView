@@ -20,6 +20,7 @@
 #include <condition_variable>
 #include <unordered_map>
 #include <vector>
+#include <deque>
 #include <atomic>
 
 namespace mv {
@@ -123,9 +124,12 @@ private:
     void    create_file_copies();
     void    show_context_menu(HWND hwnd, int x, int y);
 
-    // Preloader
-    void    start_preloader();
-    void    stop_preloader();
+    // Async decode pool (Issue #5-P1 lag fix): 3 workers decode the current
+    // big image (front of queue, generation-guarded) plus neighbor preloads.
+    void    start_async_pool();
+    void    stop_async_pool();
+    void    start_async_worker(int slot);
+    bool    async_slots_active();
     void    request_preload(const std::wstring& path);
     Microsoft::WRL::ComPtr<IWICBitmapSource> get_preloaded(const std::wstring& path);
     void    preload_neighbors();
@@ -261,14 +265,10 @@ private:
     std::vector<std::wstring> m_drag_paths;
     int   m_drag_deferred_select = -1;
 
-    // Preloader state
-    std::thread m_preload_thread;
+    // Preloader state: 3-item decoded-neighbor cache fed by the async pool.
     std::thread m_dim_preload;
     std::mutex  m_preload_mutex;
-    std::condition_variable m_preload_cv;
     std::unordered_map<std::wstring, Microsoft::WRL::ComPtr<IWICBitmapSource>> m_preload_cache;
-    std::vector<std::wstring> m_preload_queue;
-    std::atomic<bool> m_preload_running{false};
 
     struct ComicPageEntry {
         Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
@@ -306,23 +306,35 @@ private:
 
     // Metadata extraction runs off the UI/render thread.
     std::thread m_metadata_thread;
-    // Single async big-image decoder worker: page flips update the target
-    // path and bump the generation; the worker decodes only the newest
-    // request and posts WM_IMAGE_READY. One worker only, so page-flip
-    // storms cannot spawn decode threads and stall the UI.
-    std::thread m_async_thread;
-    std::mutex m_async_mutex;
-    std::condition_variable m_async_cv;
-    std::wstring m_async_path;
-    bool m_async_pending = false;
-    bool m_async_stop = false;
-    ULONGLONG m_async_gen = 0;
+    // Async decode pool: a fixed set of 3 workers decodes both the current
+    // big image (front-of-queue, generation-guarded so stale page flips are
+    // dropped) and neighbor preloads. Page-flip storms no longer serialize
+    // behind one 300-500ms 4K decode.
+    struct AsyncJob {
+        std::wstring path;
+        ULONGLONG    gen     = 0;
+        bool         current = false;  // current-image decode vs preload
+    };
+    struct AsyncSlot {
+        std::thread thread;
+        ULONGLONG   slot_gen   = 0;   // bumped when the slot is respawned
+        bool        busy       = false;
+        std::wstring path;            // in-flight job (dedup / diagnostics)
+        ULONGLONG   started_ms = 0;
+        bool        current    = false;
+    };
+    static constexpr int       kAsyncWorkers = 3;
+    std::vector<AsyncSlot>     m_async_slots;
+    std::mutex                 m_async_mutex;
+    std::condition_variable    m_async_cv;
+    std::deque<AsyncJob>       m_async_queue;
+    bool         m_async_stop = false;
+    ULONGLONG    m_async_gen  = 0;   // newest current-image generation
     ComPtr<IWICBitmapSource> m_async_wic;  // newest decode result
-    // Decode-in-flight watchdog: if the single worker's decode() never
-    // returns (stuck on a pathological file), the worker is detached and a
-    // fresh one is spawned on the next request — self-heal ~10s instead of
-    // hanging forever.
-    bool m_async_busy = false;
+    // Watchdog: a decode that never returns (stuck on a pathological file)
+    // abandons its slot — the zombie thread is detached (its stale result is
+    // dropped via slot generation) and the slot respawns — self-heal ~10s.
+    bool       m_async_busy = false;      // current decode in flight
     ULONGLONG m_async_started_ms = 0;
     static constexpr ULONGLONG kAsyncTimeoutMs = 10000;
     void check_async_timeout();
