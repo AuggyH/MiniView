@@ -28,6 +28,8 @@ constexpr UINT WM_THUMB_READY = WM_APP + 1;
 constexpr UINT WM_METADATA_READY = WM_APP + 2;
 constexpr UINT WM_RENDER_RETRY = WM_APP + 3;
 constexpr UINT WM_COMIC_READY = WM_APP + 4;
+constexpr UINT WM_NAV_SCAN_READY = WM_APP + 5;
+constexpr UINT WM_NAV_TREE_READY = WM_APP + 6;
 constexpr UINT_PTR kComicTimerId = 5;
 
 std::size_t current_private_bytes() {
@@ -188,6 +190,7 @@ enum {
     IDM_COMIC_SPEED_10 = 1042,
     IDM_COMIC_SPEED_15 = 1043,
     IDM_COMIC_SPEED_20 = 1044,
+    IDM_NAV_PANEL     = 1050,
 };
 
 HMENU build_menu_bar() {
@@ -372,6 +375,129 @@ static void metadata_worker(
     }
 }
 
+// ── Async collection scan worker (Issue #5 P2) ──────────────
+// Scans into a private ImageIndex off the UI thread; the generation is
+// checked at apply time (App::apply_nav_scan_result) so stale results
+// from superseded switches are dropped.
+
+static void nav_scan_worker(
+    std::atomic<bool>& running,
+    std::mutex& mutex,
+    std::condition_variable& cv,
+    bool& queued,
+    NavScanJob& job,
+    bool& result_ready,
+    NavScanResult& result,
+    HWND notify_window)
+{
+    while (running) {
+        NavScanJob current;
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return !running || queued; });
+            if (!running) break;
+            current = job;
+            queued = false;
+        }
+
+        NavScanResult scanned;
+        scanned.path = current.path;
+        scanned.recursive = current.recursive;
+        scanned.generation = current.generation;
+        scanned.scan_result =
+            scanned.index.scan(current.path, current.recursive);
+        if (scanned.scan_result >= 0)
+            scanned.index.sort_by(current.sort);
+
+        {
+            std::lock_guard lock(mutex);
+            if (!running) break;
+            result = std::move(scanned);
+            result_ready = true;
+        }
+        PostMessageW(notify_window, WM_NAV_SCAN_READY, 0, 0);
+    }
+}
+
+// ── Async directory-tree enumeration worker (Issue #5 P2) ───
+// Lists subdirectories + counts direct image files in one pass. The
+// NavTreeModel generation check drops results superseded by newer
+// requests.
+
+static void nav_tree_worker(
+    std::atomic<bool>& running,
+    std::mutex& mutex,
+    std::condition_variable& cv,
+    bool& queued,
+    NavTreeJob& job,
+    bool& outcome_ready,
+    NavTreeOutcome& outcome,
+    HWND notify_window)
+{
+    namespace fs = std::filesystem;
+    while (running) {
+        NavTreeJob current;
+        {
+            std::unique_lock lock(mutex);
+            cv.wait(lock, [&] { return !running || queued; });
+            if (!running) break;
+            current = job;
+            queued = false;
+        }
+
+        NavTreeOutcome result;
+        result.node_id = current.node_id;
+        result.generation = current.generation;
+        std::error_code error;
+        if (fs::is_directory(current.path, error) && !error) {
+            std::vector<NavChildInfo> children;
+            int count = 0;
+            fs::directory_iterator it(current.path,
+                fs::directory_options::skip_permission_denied, error);
+            for (; !error && it != fs::directory_iterator();
+                 it.increment(error)) {
+                std::error_code entry_error;
+                if (it->is_directory(entry_error)) {
+                    NavChildInfo child;
+                    child.path = it->path().wstring();
+                    child.name = it->path().filename().wstring();
+                    children.push_back(std::move(child));
+                } else if (!entry_error && it->is_regular_file(entry_error)) {
+                    std::wstring ext =
+                        it->path().extension().wstring();
+                    for (auto& ch : ext)
+                        ch = static_cast<wchar_t>(std::towlower(ch));
+                    if (ImageIndex::is_supported_image_extension(ext))
+                        ++count;
+                }
+            }
+            if (error) {
+                result.ok = false;
+                result.error = L"\u65E0\u6CD5\u8BFB\u53D6\u8BE5\u76EE\u5F55";
+            } else {
+                std::sort(children.begin(), children.end(),
+                    [](const NavChildInfo& left, const NavChildInfo& right) {
+                        return _wcsicmp(left.name.c_str(), right.name.c_str()) < 0;
+                    });
+                result.ok = true;
+                result.children = std::move(children);
+                result.image_count = count;
+            }
+        } else {
+            result.ok = false;
+            result.error = L"\u76EE\u5F55\u4E0D\u5B58\u5728\u6216\u65E0\u6CD5\u8BBF\u95EE";
+        }
+
+        {
+            std::lock_guard lock(mutex);
+            if (!running) break;
+            outcome = std::move(result);
+            outcome_ready = true;
+        }
+        PostMessageW(notify_window, WM_NAV_TREE_READY, 0, 0);
+    }
+}
+
 static void FreeOwnerItemData(HMENU menu) {
     int count = GetMenuItemCount(menu);
     for (int i = 0; i < count; ++i) {
@@ -462,6 +588,7 @@ int App::run(const std::wstring& initial_path) {
     start_preloader();
     m_comic_loader.start(m_window.handle(), WM_COMIC_READY);
     start_metadata_loader();
+    start_nav_workers();
 
     if (!initial_path.empty()) {
         DWORD attr = GetFileAttributesW(initial_path.c_str());
@@ -476,6 +603,7 @@ int App::run(const std::wstring& initial_path) {
     reset_comic_controls(ComicAppCancelTrigger::ExitMode);
     m_comic_loader.stop();
     stop_metadata_loader();
+    stop_nav_workers();
     stop_preloader();
     return ret;
 }
@@ -491,6 +619,10 @@ void App::apply_dpi_layout(float dpi) {
     m_thumb_pad   = static_cast<int>(layout::kThumbPadDip * scale);   // uniform padding
     m_panel_width = static_cast<int>(layout::kPanelWidthDip * scale);
     m_toolbar_h   = static_cast<int>(m_title_h * scale);
+    m_nav_visible_width = static_cast<int>(layout::kNavPanelWidthDip * scale);
+    m_nav_breadcrumb_h = static_cast<int>(
+        layout::kNavBreadcrumbBarHeightDip * scale);
+    m_grid_top = m_toolbar_h + m_nav_breadcrumb_h;
 }
 
 void App::begin_grid_scroll(HWND hwnd) {
@@ -613,6 +745,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
         case IDM_INFO:         toggle_info(); return 0;
+        case IDM_NAV_PANEL:    toggle_nav_panel(); return 0;
         case IDM_LABELS:       toggle_grid_labels(); return 0;
         case IDM_SORT_NAME:   if (m_grid_mode) set_sort_mode(SortMode::Name);   return 0;
         case IDM_SORT_DATE:   if (m_grid_mode) set_sort_mode(SortMode::Date);   return 0;
@@ -792,6 +925,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         apply_comic_results();
         return 0;
 
+    case WM_NAV_SCAN_READY:
+        apply_nav_scan_result();
+        return 0;
+
+    case WM_NAV_TREE_READY:
+        apply_nav_tree_result();
+        return 0;
+
     case WM_RENDER_RETRY:
         m_window.invalidate();
         return 0;
@@ -835,6 +976,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA;
         POINT wheel_pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ScreenToClient(hwnd, &wheel_pt);
+        // Left navigation panel wheel → tree scroll
+        if (nav_panel_visible() && wheel_pt.x < nav_panel_width()
+            && wheel_pt.y >= m_toolbar_h) {
+            nav_tree_scroll(delta);
+            return 0;
+        }
         int panel_w = visible_panel_width();
         int panel_x = static_cast<int>(m_renderer.target_size().width) - panel_w;
         if (panel_w > 0 && wheel_pt.x >= panel_x) {
@@ -860,7 +1007,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
             m_grid_scroll_y -= static_cast<int>(delta * 60);
             if (m_grid_scroll_y < 0) m_grid_scroll_y = 0;
-            int max_scroll = std::max(0, m_grid_total_h - (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h));
+            int max_scroll = std::max(0, m_grid_total_h - (static_cast<int>(m_renderer.target_size().height) - m_grid_top));
             if (m_grid_scroll_y > max_scroll) m_grid_scroll_y = max_scroll;
             begin_grid_scroll(hwnd);
             m_window.invalidate();
@@ -987,6 +1134,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (toolbar_visible() && ty < m_toolbar_h) {
             return 0;  // title bar area already handled above
         }
+        // Left navigation panel + grid breadcrumb clicks (Issue #5 P2)
+        if (nav_panel_visible() && GET_X_LPARAM(lp) < nav_panel_width()) {
+            if (nav_panel_hit_test(GET_X_LPARAM(lp), ty)) return 0;
+        }
+        if (m_grid_mode
+            && grid_breadcrumb_hit_test(GET_X_LPARAM(lp), ty)) {
+            return 0;
+        }
         if (m_comic_reader.enabled()) {
             const ComicControlsLayout controls =
                 build_comic_controls_layout(comic_controls_snapshot());
@@ -1053,7 +1208,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int sb_zone2 = static_cast<int>(layout::kScrollbarZoneDip * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
             int sb_x = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone2;
             int sx = GET_X_LPARAM(lp);
-            if (sx >= sb_x && sx < sb_x + sb_zone2 && ty >= m_toolbar_h &&
+            if (sx >= sb_x && sx < sb_x + sb_zone2 && ty >= m_grid_top &&
                 ty < static_cast<int>(m_renderer.target_size().height)) {
                 handle_scrollbar_click(hwnd, sx, ty);
                 return 0;
@@ -1151,7 +1306,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_scrollbar_dragging) {
             int dy = GET_Y_LPARAM(lp) - m_scrollbar_drag_y;
             int view_h = static_cast<int>(m_renderer.target_size().height);
-            int sb_h = view_h - m_toolbar_h;
+            int sb_h = view_h - m_grid_top;
             float total = static_cast<float>(m_grid_total_h);
             float view  = static_cast<float>(view_h);
             if (total > view) {
@@ -1168,7 +1323,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int sb_zone2 = static_cast<int>(layout::kScrollbarZoneDip * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
             int sb_x2 = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone2;
             int tx2 = GET_X_LPARAM(lp);
-            bool in_sb = (tx2 >= sb_x2 && tx2 < sb_x2 + sb_zone2 && ty2 >= m_toolbar_h &&
+            bool in_sb = (tx2 >= sb_x2 && tx2 < sb_x2 + sb_zone2 && ty2 >= m_grid_top &&
                           ty2 < static_cast<int>(m_renderer.target_size().height));
             if (in_sb != m_scrollbar_hover) {
                 m_scrollbar_hover = in_sb;
@@ -1187,6 +1342,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_window.invalidate();
             }
         }
+        // Nav panel hover tracking (breadcrumb segments + tree rows)
+        nav_panel_mouse_move(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
         // Menu hover tracking (in title bar)
         {
             int ty = GET_Y_LPARAM(lp);
@@ -1359,6 +1516,20 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_delete_composition->handle_key(
                 static_cast<UINT>(wp), lp, delete_guards))
             return 0;
+
+        // ── Left navigation panel keys (Issue #5 P2) ──
+        if (!m_ime_composing && !ctrl && !shift && wp == 'B') {
+            toggle_nav_panel();
+            return 0;
+        }
+        if (!m_ime_composing && !ctrl && !shift && wp == VK_TAB) {
+            cycle_nav_focus();
+            return 0;
+        }
+        if (m_nav_panel_state.focused()
+            && handle_nav_panel_key(hwnd, wp, ctrl, shift)) {
+            return 0;
+        }
 
         if (ctrl) {
             if (m_comic_reader.enabled()) {
@@ -1586,6 +1757,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SetCursor(LoadCursor(nullptr, IDC_HAND));
             return TRUE;
         }
+        if (LOWORD(lp) == HTCLIENT
+            && (m_nav_row_hover >= 0 || m_nav_breadcrumb_hover_panel >= 0
+                || m_nav_breadcrumb_hover_grid >= 0)) {
+            SetCursor(LoadCursor(nullptr, IDC_HAND));
+            return TRUE;
+        }
         break;  // fall through to DefWindowProc for other areas
     }
     return -1;
@@ -1598,6 +1775,17 @@ void App::open_directory(const std::wstring& path) {
     if (m_comic_reader.enabled()) leave_comic_reader(false);
     if (m_thumb_running) stop_thumb_loader();
     finish_grid_scroll();
+
+    // Remember the current collection's sort/recursive state, then cancel
+    // any in-flight async nav switch (this entry is synchronous).
+    if (!m_index.directory().empty()) {
+        m_collection_memory.remember(m_index.directory(),
+            {m_index.sort_mode(), m_recursive});
+    }
+    m_nav_switch.invalidate();
+    const CollectionMemory nav_memory =
+        m_collection_memory.memory_for(path);
+    m_recursive = nav_memory.recursive;
 
     m_grid_mode = false;
     m_from_grid = false;
@@ -1630,6 +1818,7 @@ void App::open_directory(const std::wstring& path) {
         m_window.invalidate();
         return;
     }
+    m_index.sort_by(nav_memory.sort);
     save_last_dir(path);
     if (!m_index.empty()) {
         if (!recursive_empty_root) {
@@ -1644,6 +1833,7 @@ void App::open_directory(const std::wstring& path) {
         m_window.invalidate();
     }
     static_cast<void>(complete_directory_open(result, m_open_error));
+    sync_nav_collection();
 }
 
 bool App::open_image(const std::wstring& path) {
@@ -1711,10 +1901,12 @@ bool App::open_image(const std::wstring& path) {
 
         if (indexed_position < 0) {
             if (m_thumb_running) stop_thumb_loader();
+            m_nav_switch.invalidate();  // cancel any in-flight nav switch
             m_index.scan(dir, m_recursive);
             save_last_dir(dir);
             indexed_position = m_index.index_of(path);
         }
+        sync_nav_collection();
         commit_current_image_identity(path, indexed_position,
             m_current_path, m_current_idx, m_has_image);
         m_from_grid = m_current_idx >= 0;
@@ -1770,6 +1962,7 @@ void App::toggle_recursive() {
         dir = fs::path(m_current_path).parent_path().wstring();
     }
     if (dir.empty()) return;
+    m_collection_memory.remember(dir, {m_index.sort_mode(), m_recursive});
 
     std::wstring selected_path;
     if (m_grid_mode && m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
@@ -1835,12 +2028,15 @@ void App::toggle_recursive() {
 
     update_title();
     m_window.invalidate();
+    sync_nav_collection();
 }
 
 // ── Sort mode ────────────────────────────────────────────────
 
 void App::set_sort_mode(SortMode mode) {
     if (m_index.empty()) return;
+    m_collection_memory.remember(m_index.directory(),
+        {mode, m_recursive});
     std::wstring current = m_current_path;
     std::wstring selected_path;
     if (m_grid_mode && m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
@@ -2748,6 +2944,8 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
             !m_grid_mode, m_show_labels);
         AddOwnerSeparator(popup);
         AddOwnerItem(popup, IDM_INFO, L"展开/收起信息面板	I", false, m_panel_expanded);
+        AddOwnerItem(popup, IDM_NAV_PANEL, L"展开/收起导航面板	B", false,
+            m_nav_panel_state.expanded());
         break;
     case 2: // 编辑
         {
@@ -3077,7 +3275,8 @@ std::optional<GridTransitionRect> App::grid_transition_source_rect(int index) co
     geometry.image_width = image_width;
     geometry.image_height = image_height;
     geometry.thumb_padding = m_thumb_pad;
-    geometry.toolbar_height = m_toolbar_h;
+    geometry.toolbar_height = m_grid_top;  // grid content top (toolbar + breadcrumb)
+    geometry.nav_offset = nav_panel_width();
     geometry.scroll_y = m_grid_scroll_y;
     return calculate_grid_transition_rect(geometry);
 }
@@ -3095,7 +3294,8 @@ bool App::capture_grid_transition_source(int index) {
     const int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     const int grid_area_width = std::max(1,
         static_cast<int>(m_renderer.target_size().width)
-            - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+            - nav_panel_width() - visible_panel_width()
+            - scrollbar_zone - m_thumb_pad);
     const uint64_t dimension_generation =
         m_thumb_dimension_generation.load(std::memory_order_relaxed);
     const GridRebuildReason rebuild_reason = classify_grid_rebuild_reason(
@@ -3520,7 +3720,7 @@ void App::toggle_grid() {
         float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
         int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
         int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
-            - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+            - nav_panel_width() - visible_panel_width() - scrollbar_zone - m_thumb_pad);
         rebuild_grid_layout(grid_width, GridRebuildReason::Structural);
         // Smart scroll restoration
         if (m_current_idx == m_grid_saved_idx) {
@@ -3541,14 +3741,15 @@ void App::toggle_grid() {
 
         // Request first visible page of thumbnails
         int sb_zone3 = static_cast<int>(layout::kScrollbarZoneDip * static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f);
-        int gw = static_cast<int>(m_renderer.target_size().width) - visible_panel_width() - sb_zone3;
+        int gw = static_cast<int>(m_renderer.target_size().width)
+            - nav_panel_width() - visible_panel_width() - sb_zone3;
         int cols = std::max(1, (gw + m_thumb_gap_h) / (m_thumb_cell + m_thumb_gap_h));
         m_grid_cols = cols;
         int thumb_w = (gw - (cols - 1) * m_thumb_gap_h) / cols;
         int cell = thumb_w + m_thumb_gap_h;
         int total_rows = (n + cols - 1) / cols;
         m_grid_total_rows = total_rows;
-        int rows = (static_cast<int>(m_renderer.target_size().height) - m_toolbar_h) / cell;
+        int rows = (static_cast<int>(m_renderer.target_size().height) - m_grid_top) / cell;
 
         for (int i = 0; i < std::min(n, cols * (rows + 2)); ++i)
             request_thumb(i);
@@ -3570,7 +3771,7 @@ int App::grid_hit_test(int x, int y) const {
     int total = static_cast<int>(m_index.size());
     if (m_grid_cols <= 0 || total == 0 || m_grid_rows.empty()) return -1;
 
-    int content_y = y - m_toolbar_h + m_grid_scroll_y;
+    int content_y = y - m_grid_top + m_grid_scroll_y;
     auto row_it = std::lower_bound(m_grid_rows.begin(), m_grid_rows.end(), content_y,
         [](const GridRow& row, int value) {
             return row.row_y + row.row_h + row.label_extra < value;
@@ -3580,7 +3781,7 @@ int App::grid_hit_test(int x, int y) const {
         return -1;
     }
 
-    float content_x = static_cast<float>(x - m_thumb_pad);
+    float content_x = static_cast<float>(x - nav_panel_width() - m_thumb_pad);
     for (int index = row_it->start_idx; index < row_it->end_idx; ++index) {
         float left = m_grid_item_x[static_cast<size_t>(index)];
         float right = left + m_grid_item_w[static_cast<size_t>(index)];
@@ -3604,8 +3805,8 @@ void App::select_item(int idx, bool shift, bool ctrl) {
 
 void App::handle_scrollbar_click(HWND hwnd, int /*mx*/, int my) {
     int view_h = static_cast<int>(m_renderer.target_size().height);
-    int sb_h = view_h - m_toolbar_h;
-    int sb_y = m_toolbar_h;
+    int sb_h = view_h - m_grid_top;
+    int sb_y = m_grid_top;
 
     // Compute thumb position (same as draw_scrollbar)
     float total = static_cast<float>(m_grid_total_h);
@@ -3677,7 +3878,7 @@ void App::grid_ensure_visible() {
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
-        - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+        - nav_panel_width() - visible_panel_width() - scrollbar_zone - m_thumb_pad);
     uint64_t generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
     if (m_grid_layout_dirty || m_grid_layout_width != grid_width
         || m_grid_dims.size() != m_index.size()
@@ -3687,7 +3888,7 @@ void App::grid_ensure_visible() {
 
     int row_index = m_grid_sel / m_grid_cols;
     if (row_index < 0 || row_index >= static_cast<int>(m_grid_rows.size())) return;
-    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_grid_top;
     const auto& row = m_grid_rows[static_cast<size_t>(row_index)];
     m_grid_scroll_y = row.row_y + row.row_h / 2 - visible_height / 2;
     int max_scroll = std::max(0, m_grid_total_h - visible_height);
@@ -3695,7 +3896,7 @@ void App::grid_ensure_visible() {
 }
 
 void App::clamp_grid_scroll() {
-    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_grid_top;
     m_grid_scroll_y = clamp_grid_scroll_position(
         m_grid_scroll_y, m_grid_total_h, visible_height);
 }
@@ -3710,7 +3911,8 @@ int App::visible_panel_width() const {
 void App::update_content_viewport(bool refit) {
     float top = toolbar_visible() ? static_cast<float>(m_toolbar_h) : 0.0f;
     float right = m_grid_mode ? 0.0f : static_cast<float>(visible_panel_width());
-    m_renderer.set_content_viewport(top, right);
+    float left = m_grid_mode ? 0.0f : static_cast<float>(nav_panel_width());
+    m_renderer.set_content_viewport(top, right, left);
     if (m_comic_reader.enabled()) {
         if (!m_comic_scrollbar_dragging) m_comic_scrollbar_hover = false;
         update_comic_viewport();
@@ -3990,7 +4192,7 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
 
     m_grid_total_rows = static_cast<int>(m_grid_rows.size());
     m_grid_total_h = current_y;
-    const int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    const int visible_height = static_cast<int>(m_renderer.target_size().height) - m_grid_top;
     const int selected_row = m_grid_sel >= 0 && m_grid_cols > 0
         ? m_grid_sel / m_grid_cols : -1;
     const bool has_selected_row =
@@ -4028,7 +4230,7 @@ void App::grid_render() {
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     int grid_area_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
-        - visible_panel_width() - scrollbar_zone - m_thumb_pad);
+        - nav_panel_width() - visible_panel_width() - scrollbar_zone - m_thumb_pad);
     uint64_t dimension_generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
     const GridRebuildReason rebuild_reason = classify_grid_rebuild_reason(
         m_grid_layout_dirty, m_grid_layout_width != grid_area_width,
@@ -4038,7 +4240,7 @@ void App::grid_render() {
         rebuild_grid_layout(grid_area_width, rebuild_reason);
 
     auto& rows = m_grid_rows;
-    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_toolbar_h;
+    int visible_height = static_cast<int>(m_renderer.target_size().height) - m_grid_top;
     int top_pixel = m_grid_scroll_y;
     auto top_it = std::lower_bound(rows.begin(), rows.end(), top_pixel,
         [](const GridRow& row, int value) {
@@ -4106,14 +4308,18 @@ void App::grid_render() {
             : D2D1_RECT_F{};
     }
 
+    // Grid breadcrumb strip (top of the grid content area) + left nav panel
+    render_grid_breadcrumb();
+
     float target_width = static_cast<float>(m_renderer.target_size().width);
     float target_height = static_cast<float>(m_renderer.target_size().height);
-    m_renderer.push_clip_below(static_cast<float>(m_toolbar_h));
+    m_renderer.push_clip_below(static_cast<float>(m_grid_top));
     for (int r = top_row; r <= bottom_row; ++r) {
         const auto& row = rows[static_cast<size_t>(r)];
-        float row_y = static_cast<float>(m_toolbar_h + row.row_y - m_grid_scroll_y);
+        float row_y = static_cast<float>(m_grid_top + row.row_y - m_grid_scroll_y);
         for (int index = row.start_idx; index < row.end_idx; ++index) {
-            float x = m_grid_item_x[static_cast<size_t>(index)] + m_thumb_pad;
+            float x = static_cast<float>(nav_panel_width())
+                + m_grid_item_x[static_cast<size_t>(index)] + m_thumb_pad;
             float width = m_grid_item_w[static_cast<size_t>(index)];
             auto bitmap = m_thumb_d2d.find(index);
             if (bitmap != m_thumb_d2d.end() && bitmap->second) {
@@ -4156,8 +4362,8 @@ void App::grid_render() {
     float scrollbar_x = target_width - visible_panel_width() - scrollbar_zone;
     float scrollbar_width = scrollbar_zone * 0.6f;
     float scrollbar_left = scrollbar_x + (scrollbar_zone - scrollbar_width) * 0.5f;
-    m_renderer.draw_scrollbar(scrollbar_left, static_cast<float>(m_toolbar_h),
-        scrollbar_width, target_height - m_toolbar_h, static_cast<float>(m_grid_total_h),
+    m_renderer.draw_scrollbar(scrollbar_left, static_cast<float>(m_grid_top),
+        scrollbar_width, target_height - m_grid_top, static_cast<float>(m_grid_total_h),
         target_height, static_cast<float>(m_grid_scroll_y),
         m_scrollbar_dragging || m_scrollbar_hover);
 
@@ -4172,20 +4378,28 @@ void App::grid_render() {
         preview_h = m_grid_dims[static_cast<size_t>(m_grid_sel)].second;
     }
     draw_panel(panel_path, preview, preview_w, preview_h,
-        static_cast<float>(m_toolbar_h), total);
+        static_cast<float>(m_grid_top), total);
     m_renderer.pop_clip();
+
+    // Left navigation panel (over content, right side of the title bar)
+    if (nav_panel_visible()) {
+        render_nav_panel(0.0f, static_cast<float>(m_toolbar_h),
+            static_cast<float>(m_nav_visible_width),
+            target_height - m_toolbar_h);
+    }
 
     if (m_animating) {
         uint32_t image_w = static_cast<uint32_t>(m_anim_iw);
         uint32_t image_h = static_cast<uint32_t>(m_anim_ih);
         if (image_w == 0 || image_h == 0) m_renderer.image_size(image_w, image_h);
         if (image_w > 0 && image_h > 0) {
-            float view_width = target_width - visible_panel_width();
+            float view_width = target_width - nav_panel_width()
+                - visible_panel_width();
             float view_height = target_height - m_toolbar_h;
             float scale = std::min(view_width / image_w, view_height / image_h);
             float width = image_w * scale;
             float height = image_h * scale;
-            float x = (view_width - width) * 0.5f;
+            float x = nav_panel_width() + (view_width - width) * 0.5f;
             float y = m_toolbar_h + (view_height - height) * 0.5f;
             if (m_anim_forward) m_anim_dst = {x, y, x + width, y + height};
             else { m_anim_dst = m_anim_src; m_anim_src = {x, y, x + width, y + height}; }
@@ -4251,6 +4465,12 @@ void App::render_frame() {
         draw_panel(L"", nullptr, 0, 0, content_top);
     }
     m_renderer.pop_clip();
+    // Left navigation panel (over content, right side of the title bar)
+    if (nav_panel_visible()) {
+        render_nav_panel(0.0f, content_top,
+            static_cast<float>(m_nav_visible_width),
+            static_cast<float>(m_renderer.target_size().height) - content_top);
+    }
     if (m_animating) {
         uint32_t iw = static_cast<uint32_t>(m_anim_iw);
         uint32_t ih = static_cast<uint32_t>(m_anim_ih);
@@ -4260,7 +4480,7 @@ void App::render_frame() {
             float view_h = static_cast<float>(m_renderer.target_size().height) - content_top;
             float s = std::min(view_w / iw, view_h / ih);
             float dw = iw * s, dh = ih * s;
-            float dx = (view_w - dw) * 0.5f;
+            float dx = m_renderer.content_left() + (view_w - dw) * 0.5f;
             float dy = content_top + (view_h - dh) * 0.5f;
             if (m_anim_forward)
                 m_anim_dst = {dx, dy, dx + dw, dy + dh};
@@ -4302,6 +4522,565 @@ bool App::synchronize_renderer_generation() {
 
     m_renderer_generation = current_generation;
     return true;
+}
+
+// ── Left navigation panel + breadcrumbs (Issue #5 P2) ────────
+
+bool App::nav_panel_visible() const {
+    return m_nav_panel_state.visible(m_grid_mode);
+}
+
+int App::nav_panel_width() const {
+    return nav_panel_visible() ? m_nav_visible_width : 0;
+}
+
+void App::toggle_nav_panel() {
+    m_nav_panel_state.toggle();
+    if (!m_nav_panel_state.expanded()) {
+        m_nav_row_hover = -1;
+        m_nav_breadcrumb_hover_panel = -1;
+        m_nav_breadcrumb_hover_grid = -1;
+        m_nav_tree_focus_id = 0;
+    }
+    m_grid_layout_dirty = true;
+    update_content_viewport(!m_grid_mode);
+    m_window.invalidate();
+}
+
+void App::cycle_nav_focus() {
+    const bool now_focused = m_nav_panel_state.cycle_focus();
+    if (now_focused && m_nav_tree_focus_id == 0)
+        m_nav_tree_focus_id = m_nav_highlight_id;
+    m_window.invalidate();
+}
+
+bool App::handle_nav_panel_key(HWND hwnd, WPARAM wp, bool ctrl, bool shift) {
+    (void)hwnd;
+    (void)shift;
+    if (ctrl) return false;  // Ctrl shortcuts keep working (Ctrl+R/C/O)
+    switch (wp) {
+    case VK_ESCAPE:
+        m_nav_panel_state.release_focus();
+        m_window.invalidate();
+        return true;
+    case VK_UP:
+        if (m_nav_tree_focus_id == 0)
+            m_nav_tree_focus_id = m_nav_highlight_id;
+        m_nav_tree_focus_id = m_nav_tree.focus_prev(m_nav_tree_focus_id);
+        nav_ensure_focus_visible();
+        m_window.invalidate();
+        return true;
+    case VK_DOWN:
+        if (m_nav_tree_focus_id == 0)
+            m_nav_tree_focus_id = m_nav_highlight_id;
+        m_nav_tree_focus_id = m_nav_tree.focus_next(m_nav_tree_focus_id);
+        nav_ensure_focus_visible();
+        m_window.invalidate();
+        return true;
+    case VK_RIGHT:
+        if (m_nav_tree_focus_id != 0)
+            request_nav_tree_expand(m_nav_tree_focus_id);
+        m_window.invalidate();
+        return true;
+    case VK_LEFT:
+        if (m_nav_tree_focus_id != 0)
+            m_nav_tree.collapse(m_nav_tree_focus_id);
+        m_window.invalidate();
+        return true;
+    case VK_RETURN: {
+        const NavTreeNode* node = m_nav_tree.node(m_nav_tree_focus_id);
+        if (node) switch_collection(node->path, false);
+        return true;
+    }
+    default:
+        // Panel focus consumes main shortcuts (N/D/S/R/A/L/Space …)
+        return true;
+    }
+}
+
+void App::start_nav_workers() {
+    m_nav_scan_running = true;
+    try {
+        m_nav_scan_thread = std::thread(nav_scan_worker,
+            std::ref(m_nav_scan_running), std::ref(m_nav_scan_mutex),
+            std::ref(m_nav_scan_cv), std::ref(m_nav_scan_queued),
+            std::ref(m_nav_scan_job), std::ref(m_nav_scan_ready),
+            std::ref(m_nav_scan_result), m_window.handle());
+    } catch (...) {
+        m_nav_scan_running = false;
+    }
+    m_nav_tree_running = true;
+    try {
+        m_nav_tree_thread = std::thread(nav_tree_worker,
+            std::ref(m_nav_tree_running), std::ref(m_nav_tree_mutex),
+            std::ref(m_nav_tree_cv), std::ref(m_nav_tree_queued),
+            std::ref(m_nav_tree_job), std::ref(m_nav_tree_outcome_ready),
+            std::ref(m_nav_tree_outcome), m_window.handle());
+    } catch (...) {
+        m_nav_tree_running = false;
+    }
+}
+
+void App::stop_nav_workers() {
+    m_nav_scan_running = false;
+    m_nav_scan_cv.notify_all();
+    if (m_nav_scan_thread.joinable()) m_nav_scan_thread.join();
+    m_nav_tree_running = false;
+    m_nav_tree_cv.notify_all();
+    if (m_nav_tree_thread.joinable()) m_nav_tree_thread.join();
+}
+
+void App::switch_collection(const std::wstring& path, bool recursive) {
+    if (path.empty()) return;
+    const std::wstring target_id = normalize_collection_key(path);
+    const std::wstring current_id =
+        normalize_collection_key(m_index.directory());
+    if (!current_id.empty() && current_id == target_id
+        && m_recursive == recursive) {
+        // Same collection: clicking the current node just returns to the
+        // grid view (D-10); in grid mode this is a no-op.
+        if (!m_grid_mode) {
+            m_from_grid = false;
+            toggle_grid();
+        }
+        return;
+    }
+    if (m_comic_reader.enabled()) leave_comic_reader(false);
+    finish_grid_scroll();
+
+    if (!current_id.empty()) {
+        m_collection_memory.remember(m_index.directory(),
+            {m_index.sort_mode(), m_recursive});
+    }
+    const CollectionMemory memory = m_collection_memory.memory_for(path);
+    const std::uint64_t generation = m_nav_switch.request();
+    {
+        std::lock_guard lock(m_nav_scan_mutex);
+        m_nav_scan_job = NavScanJob{path, recursive, generation, memory.sort};
+        m_nav_scan_queued = true;
+    }
+    m_nav_scan_cv.notify_one();
+    // Old frame stays visible until the scan lands (D-13).
+    m_window.invalidate();
+}
+
+void App::apply_nav_scan_result() {
+    NavScanResult result;
+    {
+        std::lock_guard lock(m_nav_scan_mutex);
+        if (!m_nav_scan_ready) return;
+        result = std::move(m_nav_scan_result);
+        m_nav_scan_ready = false;
+    }
+    if (!m_nav_switch.finish(result.generation)) return;  // stale
+
+    const CollectionApplyAction action =
+        plan_collection_apply({result.scan_result, m_grid_mode});
+    if (action == CollectionApplyAction::ShowOpenError) {
+        m_open_error = open_input_error_message(OpenInputRoute::MissingPath);
+        m_window.invalidate();
+        return;
+    }
+    if (m_thumb_running) stop_thumb_loader();
+    m_index = std::move(result.index);
+    m_recursive = result.recursive;
+    reset_collection_selection(m_current_idx, m_grid_sel, m_grid_saved_idx,
+        m_selected, m_sel_anchor);
+    m_current_path.clear();
+    m_current_wic.Reset();
+    m_has_image = false;
+    m_from_grid = false;
+    m_grid_scroll_y = 0;
+    m_grid_scroll_saved = 0;
+    m_panel_path.clear();
+    m_panel_scroll_y = 0.0f;
+    m_open_error.clear();
+    save_last_dir(result.path);
+    m_thumbs.clear();
+    m_thumbs.resize(m_index.size());
+    m_thumb_d2d.clear();
+    m_thumb_d2d_use.clear();
+    m_grid_layout_dirty = true;
+    m_last_cached_sel = -1;
+    if (action == CollectionApplyAction::EnterGrid) {
+        toggle_grid();  // enters grid with no default selection
+    } else {
+        start_thumb_loader();
+        clamp_grid_scroll();
+    }
+    sync_nav_collection();
+    update_content_viewport(!m_grid_mode);
+    update_title();
+    m_window.invalidate();
+}
+
+void App::request_nav_tree_expand(std::uint64_t node_id) {
+    const NavTreeNode* node = m_nav_tree.node(node_id);
+    if (!node) return;
+    const std::uint64_t generation = m_nav_tree.request_expand(node_id);
+    if (generation == 0) return;  // cached expand or already loading
+    {
+        std::lock_guard lock(m_nav_tree_mutex);
+        if (m_nav_tree_queued) {
+            // Replace the pending job; drop the superseded one silently.
+            const NavTreeJob previous = m_nav_tree_job;
+            m_nav_tree_job = NavTreeJob{node_id, node->path, generation};
+            m_nav_tree_queued = true;
+            (void)m_nav_tree.finish_expand(previous.node_id,
+                previous.generation, {}, 0, false, L"", true);
+        } else {
+            m_nav_tree_job = NavTreeJob{node_id, node->path, generation};
+            m_nav_tree_queued = true;
+            m_nav_tree_cv.notify_one();
+        }
+    }
+    m_window.invalidate();  // show loading state
+}
+
+void App::apply_nav_tree_result() {
+    NavTreeOutcome outcome;
+    {
+        std::lock_guard lock(m_nav_tree_mutex);
+        if (!m_nav_tree_outcome_ready) return;
+        outcome = std::move(m_nav_tree_outcome);
+        m_nav_tree_outcome_ready = false;
+    }
+    if (!m_nav_tree.finish_expand(outcome.node_id, outcome.generation,
+            outcome.children, outcome.image_count, outcome.ok,
+            outcome.error)) {
+        return;  // stale
+    }
+    // Continue revealing the active collection path if needed.
+    if (!m_index.directory().empty()) {
+        const auto plan = m_nav_tree.reveal(m_index.directory());
+        m_nav_highlight_id = plan.highlight_id;
+        for (auto id : plan.expansions) request_nav_tree_expand(id);
+    }
+    m_window.invalidate();
+}
+
+void App::ensure_nav_root() {
+    const std::wstring dir = m_index.directory();
+    if (dir.empty()) return;
+    // C1: only the current drive root (+ favorites tab, P3 placeholder).
+    std::wstring root;
+    if (dir.size() >= 2 && dir[1] == L':') {
+        root = dir.substr(0, 2) + L"\\";
+    } else {
+        const std::vector<std::wstring> segments = split_path_segments(dir);
+        if (!segments.empty()) root = path_from_segments(segments, 0);
+    }
+    if (root.empty()) return;
+    std::wstring name = root;
+    if (name.size() > 2 && name.back() == L'\\') name.pop_back();
+    m_nav_tree.add_root(root, name);
+}
+
+void App::sync_nav_collection() {
+    const std::wstring dir = m_index.directory();
+    rebuild_nav_breadcrumbs();  // refresh path + [递归] tail marker
+    if (dir.empty()) {
+        m_nav_highlight_id = 0;
+        m_window.invalidate();
+        return;
+    }
+    if (normalize_collection_key(dir) == m_nav_synced_key) return;
+    m_nav_synced_key = normalize_collection_key(dir);
+    ensure_nav_root();
+    reveal_active_collection();
+    m_window.invalidate();
+}
+
+void App::reveal_active_collection() {
+    const std::wstring dir = m_index.directory();
+    if (dir.empty()) {
+        m_nav_highlight_id = 0;
+        return;
+    }
+    const auto plan = m_nav_tree.reveal(dir);
+    m_nav_highlight_id = plan.highlight_id;
+    for (auto id : plan.expansions) request_nav_tree_expand(id);
+}
+
+void App::rebuild_nav_breadcrumbs() {
+    const std::wstring dir = m_index.directory();
+    m_nav_segments = split_path_segments(dir);
+    m_nav_display_segments = m_nav_segments;
+    if (m_recursive && !m_nav_display_segments.empty())
+        m_nav_display_segments.back() += L" [\u9012\u5F52]";
+}
+
+void App::render_nav_panel(float x, float y, float w, float h) {
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    m_nav_panel_geometry = build_nav_panel_geometry(x, y, w, h, dpi_s);
+    const auto& g = m_nav_panel_geometry;
+    const float pad = layout::kNavPadDip * dpi_s;
+    const float fs = layout::kNavFontSizeDip * dpi_s;
+    const float gap = layout::kNavBreadcrumbGapDip * dpi_s;
+    const float ellipsis_w = m_renderer.measure_text(L"\u2026", fs);
+
+    // Panel breadcrumb (single path source: m_nav_display_segments)
+    const float bc_w = std::max(1.0f, g.w - pad * 2.0f);
+    m_nav_panel_breadcrumb = layout_breadcrumb(
+        m_nav_display_segments, bc_w, gap, ellipsis_w,
+        [this, fs](const std::wstring& text) {
+            return m_renderer.measure_text(text, fs);
+        });
+    for (auto& item : m_nav_panel_breadcrumb.items)
+        item.x += g.x + pad;
+
+    // Tree rows (lazy model projection)
+    const float row_h = layout::kNavRowHeightDip * dpi_s;
+    m_nav_tree_total = m_nav_tree.content_height(row_h);
+    m_nav_tree_scroll = std::clamp(m_nav_tree_scroll, 0.0f,
+        std::max(0.0f, m_nav_tree_total - g.tree_h));
+    m_nav_rows = m_nav_tree.layout_rows(m_nav_tree_scroll, g.tree_h, row_h);
+    for (auto& row : m_nav_rows) {
+        if (row.node_id == m_nav_highlight_id) row.highlighted = true;
+    }
+    if (m_nav_row_hover >= static_cast<int>(m_nav_rows.size()))
+        m_nav_row_hover = -1;
+
+    std::wstring stats;
+    if (!m_index.directory().empty()) {
+        stats = std::to_wstring(m_index.size()) + L" \u5F20";
+        if (m_recursive) stats += L" [\u9012\u5F52]";
+    }
+
+    NavPanelRenderInput input;
+    input.geometry = g;
+    input.breadcrumb = &m_nav_panel_breadcrumb;
+    input.segments = &m_nav_display_segments;
+    input.breadcrumb_hover = m_nav_breadcrumb_hover_panel;
+    input.tab = m_nav_panel_state.tab();
+    input.rows = &m_nav_rows;
+    input.row_hover = m_nav_row_hover;
+    input.highlight_id = m_nav_highlight_id;
+    input.highlight_recursive = m_recursive;
+    input.tree_scroll = m_nav_tree_scroll;
+    input.tree_total = m_nav_tree_total;
+    input.stats_text = stats.empty() ? nullptr : &stats;
+    input.dpi_scale = dpi_s;
+    m_renderer.draw_nav_panel(input);
+}
+
+void App::render_grid_breadcrumb() {
+    if (!m_grid_mode || m_nav_display_segments.empty()) return;
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const float nav_w = static_cast<float>(nav_panel_width());
+    const float right_w = static_cast<float>(visible_panel_width());
+    const int sb_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_s);
+    const float pad = layout::kNavPadDip * dpi_s;
+    const float strip_x = nav_w;
+    const float strip_w = std::max(1.0f,
+        static_cast<float>(m_renderer.target_size().width)
+            - nav_w - right_w - sb_zone);
+    const float gap = layout::kNavBreadcrumbGapDip * dpi_s;
+    const float fs = layout::kNavFontSizeDip * dpi_s;
+    const float ellipsis_w = m_renderer.measure_text(L"\u2026", fs);
+
+    m_nav_grid_breadcrumb = layout_breadcrumb(
+        m_nav_display_segments, strip_w - pad * 2.0f, gap, ellipsis_w,
+        [this, fs](const std::wstring& text) {
+            return m_renderer.measure_text(text, fs);
+        });
+    for (auto& item : m_nav_grid_breadcrumb.items)
+        item.x += strip_x + pad;
+
+    NavBreadcrumbRenderInput input;
+    input.x = strip_x;
+    input.y = static_cast<float>(m_toolbar_h);
+    input.width = strip_w;
+    input.height = static_cast<float>(m_nav_breadcrumb_h);
+    input.layout = &m_nav_grid_breadcrumb;
+    input.segments = &m_nav_display_segments;
+    input.hover_item = m_nav_breadcrumb_hover_grid;
+    input.dpi_scale = dpi_s;
+    m_renderer.draw_breadcrumb(input);
+}
+
+bool App::nav_panel_hit_test(int x, int y) {
+    const auto& g = m_nav_panel_geometry;
+    if (g.w <= 0.0f) return false;  // no frame rendered yet
+    if (x < g.x || x >= g.x + g.w || y < g.y) return false;
+    m_nav_panel_state.set_focus(NavFocusTarget::LeftPanel);
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+
+    // Breadcrumb strip
+    if (y < g.breadcrumb_y + g.breadcrumb_h) {
+        const int item = breadcrumb_hit_item(
+            m_nav_panel_breadcrumb, static_cast<float>(x));
+        if (item >= 0) {
+            const int seg = m_nav_panel_breadcrumb
+                .items[static_cast<size_t>(item)].segment_index;
+            if (seg >= 0) {
+                const std::wstring path =
+                    path_from_segments(m_nav_segments, seg);
+                if (!path.empty()) switch_collection(path, false);
+            }
+        }
+        m_window.invalidate();
+        return true;
+    }
+    // Tab row: 目录 | 收藏
+    if (y < g.tabs_y + g.tabs_h) {
+        const float pad = layout::kNavPadDip * dpi_s;
+        const float fs = layout::kNavFontSizeDip * dpi_s;
+        float tx = g.x + pad;
+        const float w_dirs = m_renderer.measure_text(L"\u76EE\u5F55", fs);
+        if (x >= tx && x < tx + w_dirs)
+            m_nav_panel_state.set_tab(NavPanelTab::Directories);
+        tx += w_dirs + 16.0f * dpi_s;
+        const float w_fav = m_renderer.measure_text(L"\u6536\u85CF", fs);
+        if (x >= tx && x < tx + w_fav)
+            m_nav_panel_state.set_tab(NavPanelTab::Favorites);
+        m_window.invalidate();
+        return true;
+    }
+    // Bottom stats row: consume, no action
+    if (y >= g.stats_y) return true;
+    // Tree viewport
+    if (y >= g.tree_y && y < g.tree_y + g.tree_h) {
+        const float indent = layout::kNavIndentDip * dpi_s;
+        const float arrow_w = layout::kNavArrowWidthDip * dpi_s;
+        const float row_left = g.tree_x + layout::kNavPadDip * dpi_s;
+        int row_idx = -1;
+        for (int i = 0; i < static_cast<int>(m_nav_rows.size()); ++i) {
+            const auto& row = m_nav_rows[static_cast<size_t>(i)];
+            const float row_y = row.y + g.tree_y - m_nav_tree_scroll;
+            if (y >= row_y && y < row_y + row.height) {
+                row_idx = i;
+                break;
+            }
+        }
+        if (row_idx >= 0) {
+            const auto& row = m_nav_rows[static_cast<size_t>(row_idx)];
+            const NavTreeRowZone zone = hit_nav_tree_row(
+                row_left, static_cast<float>(x), row.depth, indent, arrow_w);
+            if (zone == NavTreeRowZone::Arrow) {
+                if (row.loading) {
+                    // enumeration in flight — nothing to do
+                } else if (row.expanded) {
+                    m_nav_tree.collapse(row.node_id);
+                } else {
+                    request_nav_tree_expand(row.node_id);  // expand or retry
+                }
+                m_window.invalidate();
+                return true;
+            }
+            if (zone == NavTreeRowZone::Body) {
+                switch_collection(row.path, false);
+                return true;
+            }
+        }
+        return true;
+    }
+    return true;
+}
+
+bool App::grid_breadcrumb_hit_test(int x, int y) {
+    if (!m_grid_mode || m_nav_display_segments.empty()) return false;
+    if (y < m_toolbar_h || y >= m_grid_top) return false;
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const float nav_w = static_cast<float>(nav_panel_width());
+    const int sb_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_s);
+    const float right_w = static_cast<float>(visible_panel_width());
+    const float strip_w = static_cast<float>(m_renderer.target_size().width)
+        - nav_w - right_w - sb_zone;
+    if (x < nav_w || x >= nav_w + strip_w) return false;
+    const int item = breadcrumb_hit_item(
+        m_nav_grid_breadcrumb, static_cast<float>(x));
+    if (item >= 0) {
+        const int seg = m_nav_grid_breadcrumb
+            .items[static_cast<size_t>(item)].segment_index;
+        if (seg >= 0) {
+            const std::wstring path =
+                path_from_segments(m_nav_segments, seg);
+            if (!path.empty()) switch_collection(path, false);
+        }
+    }
+    return true;
+}
+
+void App::nav_panel_mouse_move(int x, int y) {
+    const int prev_row = m_nav_row_hover;
+    const int prev_panel = m_nav_breadcrumb_hover_panel;
+    const int prev_grid = m_nav_breadcrumb_hover_grid;
+    m_nav_row_hover = -1;
+    m_nav_breadcrumb_hover_panel = -1;
+    m_nav_breadcrumb_hover_grid = -1;
+
+    if (nav_panel_visible() && x < nav_panel_width() && y >= m_toolbar_h) {
+        const auto& g = m_nav_panel_geometry;
+        if (g.w > 0.0f) {
+            if (y < g.breadcrumb_y + g.breadcrumb_h) {
+                m_nav_breadcrumb_hover_panel = breadcrumb_hit_item(
+                    m_nav_panel_breadcrumb, static_cast<float>(x));
+            } else if (y >= g.tree_y && y < g.tree_y + g.tree_h) {
+                for (int i = 0; i < static_cast<int>(m_nav_rows.size()); ++i) {
+                    const auto& row = m_nav_rows[static_cast<size_t>(i)];
+                    const float row_y = row.y + g.tree_y - m_nav_tree_scroll;
+                    if (y >= row_y && y < row_y + row.height) {
+                        m_nav_row_hover = i;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (m_grid_mode && y >= m_toolbar_h && y < m_grid_top) {
+        const float dpi_s =
+            static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+        const float nav_w = static_cast<float>(nav_panel_width());
+        const int sb_zone =
+            static_cast<int>(layout::kScrollbarZoneDip * dpi_s);
+        const float right_w = static_cast<float>(visible_panel_width());
+        const float strip_w = static_cast<float>(
+            m_renderer.target_size().width) - nav_w - right_w - sb_zone;
+        if (x >= nav_w && x < nav_w + strip_w) {
+            m_nav_breadcrumb_hover_grid = breadcrumb_hit_item(
+                m_nav_grid_breadcrumb, static_cast<float>(x));
+        }
+    }
+    if (m_nav_row_hover != prev_row
+        || m_nav_breadcrumb_hover_panel != prev_panel
+        || m_nav_breadcrumb_hover_grid != prev_grid) {
+        m_window.invalidate();
+    }
+}
+
+void App::nav_tree_scroll(float delta) {
+    if (!nav_panel_visible()) return;
+    m_nav_tree_scroll -= delta * 60.0f;
+    m_nav_tree_scroll = std::clamp(m_nav_tree_scroll, 0.0f,
+        std::max(0.0f, m_nav_tree_total - m_nav_panel_geometry.tree_h));
+    m_window.invalidate();
+}
+
+void App::nav_ensure_focus_visible() {
+    if (m_nav_tree_focus_id == 0) return;
+    for (const auto& row : m_nav_rows) {
+        if (row.node_id == m_nav_tree_focus_id) return;  // already visible
+    }
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const float row_h = layout::kNavRowHeightDip * dpi_s;
+    const auto all = m_nav_tree.layout_rows(0.0f, 1.0e9f, row_h, 0.0f);
+    const float view_h = m_nav_panel_geometry.tree_h;
+    for (const auto& row : all) {
+        if (row.node_id != m_nav_tree_focus_id) continue;
+        if (row.y < m_nav_tree_scroll) {
+            m_nav_tree_scroll = row.y;
+        } else if (row.y + row_h > m_nav_tree_scroll + view_h) {
+            m_nav_tree_scroll = row.y + row_h - view_h;
+        }
+        break;
+    }
+    m_nav_tree_scroll = std::max(0.0f, m_nav_tree_scroll);
 }
 
 } // namespace mv

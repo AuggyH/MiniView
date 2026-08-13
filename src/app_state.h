@@ -295,6 +295,7 @@ struct GridTransitionGeometry {
     uint32_t image_height = 0;
     int thumb_padding = 0;
     int toolbar_height = 0;
+    int nav_offset = 0;  // left nav panel width (grid content x origin)
     int scroll_y = 0;
 };
 
@@ -370,8 +371,8 @@ inline std::optional<GridTransitionRect> calculate_grid_transition_rect(
         ? 1.0f : static_cast<float>(geometry.image_width);
     const float image_height = geometry.image_height == 0
         ? 1.0f : static_cast<float>(geometry.image_height);
-    const float center_x = geometry.item_x + geometry.thumb_padding
-        + geometry.item_width * 0.5f;
+    const float center_x = geometry.nav_offset + geometry.item_x
+        + geometry.thumb_padding + geometry.item_width * 0.5f;
     const float center_y = static_cast<float>(geometry.toolbar_height
         + geometry.row_y - geometry.scroll_y)
         + geometry.row_height * 0.5f;

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "comic_reader_model.h"
+#include "layout.h"
+#include "navstate.h"
 
 #include <algorithm>
 #include <cmath>
@@ -633,5 +635,76 @@ inline ComicRenderPlan build_comic_render_plan(
     }
     return plan;
 }
+
+// ── Left navigation panel render geometry (Issue #5 P2) ─────
+
+struct NavPanelGeometry {
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+    float breadcrumb_y = 0.0f;
+    float breadcrumb_h = 0.0f;
+    float tabs_y = 0.0f;
+    float tabs_h = 0.0f;
+    float tree_x = 0.0f;
+    float tree_y = 0.0f;
+    float tree_w = 0.0f;
+    float tree_h = 0.0f;
+    float scrollbar_x = 0.0f;
+    float scrollbar_w = 0.0f;
+    float stats_y = 0.0f;
+    float stats_h = 0.0f;
+};
+
+inline NavPanelGeometry build_nav_panel_geometry(
+    float x, float y, float w, float h, float dpi_scale) {
+    NavPanelGeometry g;
+    g.x = x;
+    g.y = y;
+    g.w = w;
+    g.h = h;
+    g.breadcrumb_h = layout::kNavBreadcrumbBarHeightDip * dpi_scale;
+    g.breadcrumb_y = y;
+    g.tabs_h = layout::kNavTabHeightDip * dpi_scale;
+    g.tabs_y = g.breadcrumb_y + g.breadcrumb_h;
+    g.stats_h = layout::kNavStatsHeightDip * dpi_scale;
+    g.stats_y = y + h - g.stats_h;
+    g.tree_x = x;
+    g.tree_y = g.tabs_y + g.tabs_h;
+    g.tree_h = std::max(0.0f, g.stats_y - g.tree_y);
+    g.tree_w = w;
+    g.scrollbar_w = std::max(4.0f, layout::kNavScrollbarWidthDip * dpi_scale);
+    g.scrollbar_x = x + w - g.scrollbar_w;
+    return g;
+}
+
+struct NavBreadcrumbRenderInput {
+    float x = 0.0f;            // strip left edge (absolute client coords)
+    float y = 0.0f;            // strip top edge
+    float width = 0.0f;        // strip width (for the separator line)
+    float height = 0.0f;
+    const NavBreadcrumbLayout* layout = nullptr;
+    const std::vector<std::wstring>* segments = nullptr;
+    int hover_item = -1;       // breadcrumb item index under cursor
+    float dpi_scale = 1.0f;
+};
+
+struct NavPanelRenderInput {
+    NavPanelGeometry geometry;
+    const NavBreadcrumbLayout* breadcrumb = nullptr;
+    const std::vector<std::wstring>* segments = nullptr;
+    int breadcrumb_hover = -1;
+    NavPanelTab tab = NavPanelTab::Directories;
+    const std::vector<NavTreeRow>* rows = nullptr;
+    int row_hover = -1;        // visible row index under cursor
+    std::uint64_t highlight_id = 0;   // active collection node id
+    bool highlight_recursive = false; // active collection is recursive → badge
+    float tree_scroll = 0.0f;
+    float tree_total = 0.0f;
+    bool tree_scroll_active = false;
+    const std::wstring* stats_text = nullptr;  // bottom stats line
+    float dpi_scale = 1.0f;
+};
 
 } // namespace mv

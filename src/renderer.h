@@ -59,6 +59,8 @@ public:
         int active_idx, float y = 0);
     void draw_title_bar(float w, int hover_btn, int press_btn,
         const std::vector<std::wstring>& menu_items, int active_menu);
+    void draw_breadcrumb(const NavBreadcrumbRenderInput& input);
+    void draw_nav_panel(const NavPanelRenderInput& input);
     void draw_fade_overlay(float t, bool forward);
     void draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t);
     void push_clip_below(float y);
@@ -92,7 +94,7 @@ public:
 
     void  set_scale(float s);
     void  set_offset(float x, float y);
-    void  set_content_viewport(float top, float right);
+    void set_content_viewport(float top, float right, float left = 0.0f);
     void  set_scroll_y(float y);
     float scale()    const { return m_scale; }
     float fit_scale() const { return m_fit_scale; }
@@ -100,6 +102,7 @@ public:
     float offset_y() const { return m_offset_y; }
     float scroll_y() const { return m_scroll_y; }
     float content_top() const { return m_content_top; }
+    float content_left() const { return m_content_left; }
     float content_width() const;
     ID2D1Bitmap1* image_bitmap() const { return m_image_bitmap.Get(); }
 
@@ -142,6 +145,7 @@ private:
     float       m_scroll_y = 0.0f;
     float       m_content_top = 0.0f;  // title bar height, for centering below
     float       m_content_right = 0.0f;  // side panel width reserved from image viewport
+    float       m_content_left = 0.0f;   // left nav panel width reserved from image viewport
     float       m_dpi_x = 96.0f;
     float       m_dpi_y = 96.0f;
     uint64_t    m_device_generation = 0;

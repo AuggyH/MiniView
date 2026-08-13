@@ -9,6 +9,7 @@
 #include "file_operation.h"
 #include "comic_reader_loader.h"
 #include "comic_reader_model.h"
+#include "navstate.h"
 #include "layout.h"
 #include <cstddef>
 #include <memory>
@@ -23,6 +24,38 @@
 namespace mv {
 
 class AppComicPort;
+
+// Async collection-scan job/result (Issue #5 P2). Kept at namespace scope so
+// the worker functions can use them.
+struct NavScanJob {
+    std::wstring path;
+    bool recursive = false;
+    std::uint64_t generation = 0;
+    SortMode sort = SortMode::Name;
+};
+
+struct NavScanResult {
+    ImageIndex index;
+    std::wstring path;
+    bool recursive = false;
+    std::uint64_t generation = 0;
+    int scan_result = -1;
+};
+
+struct NavTreeJob {
+    std::uint64_t node_id = 0;
+    std::wstring path;
+    std::uint64_t generation = 0;
+};
+
+struct NavTreeOutcome {
+    std::uint64_t node_id = 0;
+    std::uint64_t generation = 0;
+    std::vector<NavChildInfo> children;
+    int image_count = 0;
+    bool ok = false;
+    std::wstring error;
+};
 
 class App : private DeleteCompositionHost {
 public:
@@ -130,6 +163,8 @@ private:
     void    toggle_info();
     bool    toolbar_visible() const;
     int     visible_panel_width() const;
+    int     nav_panel_width() const;
+    bool    nav_panel_visible() const;
     void    update_content_viewport(bool refit);
     void    update_panel_data(const std::wstring& path);
     void    start_metadata_loader();
@@ -160,6 +195,28 @@ private:
     void    stop_thumb_loader();
     void    request_thumb(int idx);
     void    trim_thumb_cache(int visible_start, int visible_end);
+
+    // Left navigation panel + breadcrumbs (Issue #5 P2)
+    void    toggle_nav_panel();
+    void    cycle_nav_focus();
+    bool    handle_nav_panel_key(HWND hwnd, WPARAM wp, bool ctrl, bool shift);
+    void    switch_collection(const std::wstring& path, bool recursive);
+    void    apply_nav_scan_result();
+    void    start_nav_workers();
+    void    stop_nav_workers();
+    void    request_nav_tree_expand(std::uint64_t node_id);
+    void    apply_nav_tree_result();
+    void    sync_nav_collection();
+    void    ensure_nav_root();
+    void    render_nav_panel(float x, float y, float w, float h);
+    void    render_grid_breadcrumb();
+    void    rebuild_nav_breadcrumbs();
+    bool    nav_panel_hit_test(int x, int y);
+    bool    grid_breadcrumb_hit_test(int x, int y);
+    void    nav_panel_mouse_move(int x, int y);
+    void    nav_tree_scroll(float delta);
+    void    nav_ensure_focus_visible();
+    void    reveal_active_collection();
 
     int m_thumb_size = layout::kThumbSizeDip;  // decode resolution (WIC)
     int m_thumb_cell  = layout::kThumbCellDip;  // display cell size for column calc
@@ -333,6 +390,52 @@ private:
     std::vector<int> m_thumb_queue;
     std::atomic<bool> m_thumb_running{false};
     std::atomic<uint64_t> m_thumb_dimension_generation{0};
+
+    // ── Left navigation panel (Issue #5 P2) ──
+    int  m_nav_visible_width = 0;    // DPI-scaled nav panel width (240 DIP)
+    int  m_nav_breadcrumb_h = 0;     // DPI-scaled breadcrumb bar height
+    int  m_grid_top = 0;             // grid content top = toolbar + breadcrumb bar
+    NavPanelState m_nav_panel_state;
+    NavSwitchController m_nav_switch;
+    CollectionSortMemory m_collection_memory;
+    NavTreeModel m_nav_tree;
+
+    // Single path source shared by the panel breadcrumb and the grid
+    // breadcrumb (they are two projections of the same active collection).
+    std::vector<std::wstring> m_nav_segments;
+    std::vector<std::wstring> m_nav_display_segments;  // tail carries [递归]
+    NavBreadcrumbLayout m_nav_panel_breadcrumb;  // absolute x (panel space)
+    NavBreadcrumbLayout m_nav_grid_breadcrumb;   // absolute x (grid space)
+    int m_nav_breadcrumb_hover_panel = -1;
+    int m_nav_breadcrumb_hover_grid = -1;
+    NavPanelGeometry m_nav_panel_geometry;
+    std::vector<NavTreeRow> m_nav_rows;          // visible rows (per frame)
+    int m_nav_row_hover = -1;
+    std::uint64_t m_nav_highlight_id = 0;        // active collection tree node
+    std::uint64_t m_nav_tree_focus_id = 0;       // keyboard focus row
+    std::wstring m_nav_synced_key;               // tree already revealed for this dir
+    float m_nav_tree_scroll = 0.0f;
+    float m_nav_tree_total = 0.0f;
+
+    // Async collection scan (generation-cancelled)
+    std::thread m_nav_scan_thread;
+    std::mutex m_nav_scan_mutex;
+    std::condition_variable m_nav_scan_cv;
+    std::atomic<bool> m_nav_scan_running{false};
+    bool m_nav_scan_queued = false;
+    NavScanJob m_nav_scan_job;
+    bool m_nav_scan_ready = false;
+    NavScanResult m_nav_scan_result;
+
+    // Async directory-tree enumeration (lazy expand)
+    std::thread m_nav_tree_thread;
+    std::mutex m_nav_tree_mutex;
+    std::condition_variable m_nav_tree_cv;
+    std::atomic<bool> m_nav_tree_running{false};
+    bool m_nav_tree_queued = false;
+    NavTreeJob m_nav_tree_job;
+    bool m_nav_tree_outcome_ready = false;
+    NavTreeOutcome m_nav_tree_outcome;
 };
 
 } // namespace mv

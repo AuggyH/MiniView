@@ -277,7 +277,7 @@ void Renderer::draw_image() {
 
     float scaled_w = m_img_width  * m_scale;
     float scaled_h = m_img_height * m_scale;
-    float x = (content_width() - scaled_w) / 2.0f + m_offset_x;
+    float x = m_content_left + (content_width() - scaled_w) / 2.0f + m_offset_x;
     float y = m_content_top + (m_target_size.height - m_content_top - scaled_h) / 2.0f + m_offset_y + m_scroll_y;
 
     D2D1_RECT_F dest = {x, y, x + scaled_w, y + scaled_h};
@@ -463,14 +463,17 @@ void Renderer::set_offset(float x, float y) {
     m_offset_y = y;
 }
 
-void Renderer::set_content_viewport(float top, float right) {
+void Renderer::set_content_viewport(float top, float right, float left) {
     m_content_top = std::max(0.0f, top);
     m_content_right = std::max(0.0f, right);
+    m_content_left = std::max(0.0f, left);
     update_fit_scale();
 }
 
 float Renderer::content_width() const {
-    return std::max(1.0f, static_cast<float>(m_target_size.width) - m_content_right);
+    return std::max(1.0f,
+        static_cast<float>(m_target_size.width) - m_content_right
+            - m_content_left);
 }
 
 void Renderer::update_fit_scale() {
@@ -1474,6 +1477,226 @@ void Renderer::push_clip_below(float y) {
 void Renderer::pop_clip() {
     if (!m_d2d_context) return;
     m_d2d_context->PopAxisAlignedClip();
+}
+
+// ── Left navigation panel + breadcrumb (Issue #5 P2) ────────
+
+void Renderer::draw_breadcrumb(const NavBreadcrumbRenderInput& input) {
+    if (!m_d2d_context || !m_dwrite_factory) return;
+    if (!input.layout || !input.segments) return;
+    const float dpi_s = input.dpi_scale > 0.0f ? input.dpi_scale : m_dpi_y / 96.0f;
+    const float fs = layout::kNavFontSizeDip;
+
+    ComPtr<ID2D1SolidColorBrush> text_br, hover_br, dim_br, line_br;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &text_br);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.97f, 0.97f, 0.98f, 1.0f), &hover_br);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.55f, 0.55f, 0.60f, 1.0f), &dim_br);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.20f, 0.20f, 0.22f, 1.0f), &line_br);
+
+    for (int i = 0; i < static_cast<int>(input.layout->items.size()); ++i) {
+        const auto& item = input.layout->items[i];
+        if (item.segment_index < 0 && !item.ellipsis) continue;
+        const std::wstring text = item.ellipsis
+            ? L"\u2026"
+            : (*input.segments)[static_cast<size_t>(item.segment_index)];
+        if (text.empty()) continue;
+        ID2D1SolidColorBrush* brush = item.ellipsis
+            ? dim_br.Get()
+            : (i == input.hover_item ? hover_br.Get() : text_br.Get());
+        const float tw = std::max(1.0f, item.width + 4.0f * dpi_s);
+        const float th = label_height(text, tw, fs, 1);
+        draw_text_line(item.x, input.y + (input.height - th) * 0.5f,
+            tw, text, brush, fs, nullptr, 1);
+    }
+
+    const float line_y = input.y + input.height - 1.0f;
+    m_d2d_context->DrawLine(
+        D2D1::Point2F(input.x, line_y),
+        D2D1::Point2F(input.x + std::max(0.0f, input.width), line_y),
+        line_br.Get(), 1.0f);
+}
+
+void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
+    if (!m_d2d_context || !m_dwrite_factory) return;
+    const auto& g = input.geometry;
+    const float dpi_s = input.dpi_scale > 0.0f ? input.dpi_scale : m_dpi_y / 96.0f;
+    const float pad = layout::kNavPadDip * dpi_s;
+    const float fs = layout::kNavFontSizeDip;
+    const float small_fs = layout::kNavSmallFontSizeDip;
+
+    ComPtr<ID2D1SolidColorBrush> bg_br, line_br, text_br, dim_br,
+        bright_br, hover_bg, sel_bg, accent_br, badge_br, error_br;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.11f, 0.11f, 0.13f, 1.0f), &bg_br);       // #1c1c21
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.16f, 0.16f, 0.19f, 1.0f), &line_br);     // #292931
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &text_br);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.50f, 0.50f, 0.55f, 1.0f), &dim_br);      // #80808c
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.93f, 0.93f, 0.95f, 1.0f), &bright_br);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.15f, 0.15f, 0.18f, 1.0f), &hover_bg);    // #26262e
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.18f, 0.18f, 0.22f, 1.0f), &sel_bg);      // #2e2e38
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.29f, 0.56f, 0.89f, 1.0f), &accent_br);   // #4A90E2
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.42f, 0.62f, 0.85f, 1.0f), &badge_br);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.69f, 0.50f, 0.50f, 1.0f), &error_br);    // #b08080
+
+    // Panel background + right edge
+    m_d2d_context->FillRectangle(
+        D2D1::RectF(g.x, g.y, g.x + g.w, g.y + g.h), bg_br.Get());
+    m_d2d_context->DrawLine(
+        D2D1::Point2F(g.x + g.w - 1.0f, g.y),
+        D2D1::Point2F(g.x + g.w - 1.0f, g.y + g.h), line_br.Get(), 1.0f);
+
+    // Breadcrumb strip
+    NavBreadcrumbRenderInput bc;
+    bc.x = g.x;
+    bc.y = g.breadcrumb_y;
+    bc.width = g.w;
+    bc.height = g.breadcrumb_h;
+    bc.layout = input.breadcrumb;
+    bc.segments = input.segments;
+    bc.hover_item = input.breadcrumb_hover;
+    bc.dpi_scale = dpi_s;
+    draw_breadcrumb(bc);
+
+    // Tab row: 目录 | 收藏
+    const std::wstring tab_dirs = L"\u76EE\u5F55";
+    const std::wstring tab_fav = L"\u6536\u85CF";
+    const float w_dirs = measure_text(tab_dirs, fs * dpi_s);
+    const float w_fav = measure_text(tab_fav, fs * dpi_s);
+    float tx = g.x + pad;
+    const auto draw_tab = [&](const std::wstring& label, float label_w,
+                              float x, bool active) {
+        ID2D1SolidColorBrush* brush = active ? bright_br.Get() : dim_br.Get();
+        const float th = label_height(label, label_w + 4.0f, fs, 1);
+        draw_text_line(x, g.tabs_y + (g.tabs_h - th) * 0.5f,
+            label_w + 4.0f, label, brush, fs, nullptr, 1);
+        if (active) {
+            m_d2d_context->FillRectangle(
+                D2D1::RectF(x, g.tabs_y + g.tabs_h - 2.0f * dpi_s,
+                    x + label_w, g.tabs_y + g.tabs_h),
+                accent_br.Get());
+        }
+    };
+    draw_tab(tab_dirs, w_dirs, tx, input.tab == NavPanelTab::Directories);
+    tx += w_dirs + 16.0f * dpi_s;
+    draw_tab(tab_fav, w_fav, tx, input.tab == NavPanelTab::Favorites);
+    m_d2d_context->DrawLine(
+        D2D1::Point2F(g.x, g.tabs_y + g.tabs_h),
+        D2D1::Point2F(g.x + g.w, g.tabs_y + g.tabs_h), line_br.Get(), 1.0f);
+
+    if (input.tab == NavPanelTab::Favorites) {
+        // P3 placeholder: favorites persistence is out of scope this phase.
+        const std::wstring msg =
+            L"\u6536\u85CF\u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B";
+        const float mw = measure_text(msg, fs * dpi_s);
+        draw_text_line(g.x + (g.w - mw) * 0.5f, g.tree_y + 24.0f * dpi_s,
+            mw + 4.0f, msg, dim_br.Get(), fs, nullptr, 1);
+    } else if (input.rows) {
+        const float indent = layout::kNavIndentDip * dpi_s;
+        const float arrow_w = layout::kNavArrowWidthDip * dpi_s;
+        const float row_left = g.tree_x + pad;
+        const float row_right = g.tree_x + g.tree_w - pad
+            - g.scrollbar_w - 4.0f * dpi_s;
+        const D2D1_RECT_F clip =
+            D2D1::RectF(g.tree_x, g.tree_y, g.tree_x + g.tree_w,
+                g.tree_y + g.tree_h);
+        m_d2d_context->PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_ALIASED);
+        for (int i = 0; i < static_cast<int>(input.rows->size()); ++i) {
+            const auto& row = (*input.rows)[static_cast<size_t>(i)];
+            const float y = row.y + g.tree_y - input.tree_scroll;
+            if (row.highlighted) {
+                m_d2d_context->FillRectangle(
+                    D2D1::RectF(g.tree_x, y, g.tree_x + g.tree_w,
+                        y + row.height),
+                    sel_bg.Get());
+            } else if (i == input.row_hover) {
+                m_d2d_context->FillRectangle(
+                    D2D1::RectF(g.tree_x, y, g.tree_x + g.tree_w,
+                        y + row.height),
+                    hover_bg.Get());
+            }
+
+            const float arrow_x =
+                row_left + indent * static_cast<float>(row.depth);
+            if (row.expandable) {
+                const std::wstring glyph = row.loading
+                    ? L"\u2026"
+                    : (row.expanded ? L"\u25BE" : L"\u25B6");
+                ID2D1SolidColorBrush* glyph_br =
+                    row.loading ? dim_br.Get() : text_br.Get();
+                const float gw = measure_text(glyph, fs * dpi_s);
+                const float gh = label_height(glyph, gw + 4.0f, fs, 1);
+                draw_text_line(arrow_x + (arrow_w - gw) * 0.5f,
+                    y + (row.height - gh) * 0.5f, gw + 4.0f, glyph,
+                    glyph_br, fs, nullptr, 1);
+            }
+
+            const float name_x = arrow_x + arrow_w;
+            const float avail = std::max(0.0f, row_right - name_x);
+            const std::wstring display =
+                row.error_text.empty() ? row.name : row.error_text;
+            ID2D1SolidColorBrush* name_br =
+                row.error ? error_br.Get() : text_br.Get();
+            float badge_w = 0.0f;
+            float count_w = 0.0f;
+            std::wstring count_text;
+            if (!row.error && row.highlighted && input.highlight_recursive) {
+                badge_w = measure_text(L"[\u9012\u5F52]", small_fs * dpi_s);
+            }
+            if (!row.error && row.image_count >= 0) {
+                count_text = L"(" + std::to_wstring(row.image_count) + L")";
+                count_w = measure_text(count_text, small_fs * dpi_s);
+            }
+            const float reserved = badge_w + count_w
+                + ((badge_w > 0.0f || count_w > 0.0f) ? 6.0f * dpi_s : 0.0f);
+            const float name_w = std::max(8.0f, avail - reserved);
+            const float th = label_height(display, name_w, fs, 1);
+            const float ty = y + (row.height - th) * 0.5f;
+            draw_text_line(name_x, ty, name_w, display, name_br, fs,
+                nullptr, 1);
+            if (badge_w > 0.0f) {
+                draw_text_line(name_x + name_w + 6.0f * dpi_s, ty,
+                    badge_w + 4.0f, L"[\u9012\u5F52]", badge_br.Get(),
+                    small_fs, nullptr, 1);
+            }
+            if (count_w > 0.0f) {
+                draw_text_line(row_right - count_w, ty, count_w + 4.0f,
+                    count_text, dim_br.Get(), small_fs, nullptr, 1);
+            }
+        }
+        m_d2d_context->PopAxisAlignedClip();
+
+        // Tree scrollbar (passive thumb; wheel-driven, drag is P4)
+        if (input.tree_total > 0.0f && g.tree_h > 0.0f) {
+            draw_scrollbar(g.scrollbar_x, g.tree_y, g.scrollbar_w, g.tree_h,
+                input.tree_total, g.tree_h, input.tree_scroll,
+                input.tree_scroll_active);
+        }
+    }
+
+    // Bottom stats row
+    m_d2d_context->DrawLine(
+        D2D1::Point2F(g.x, g.stats_y),
+        D2D1::Point2F(g.x + g.w, g.stats_y), line_br.Get(), 1.0f);
+    if (input.stats_text && !input.stats_text->empty()) {
+        const float sw = measure_text(*input.stats_text, small_fs * dpi_s);
+        const float sh = label_height(*input.stats_text, sw + 4.0f,
+            small_fs, 1);
+        draw_text_line(g.x + pad, g.stats_y + (g.stats_h - sh) * 0.5f,
+            sw + 4.0f, *input.stats_text, dim_br.Get(), small_fs, nullptr, 1);
+    }
 }
 
 } // namespace mv

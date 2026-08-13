@@ -109,6 +109,20 @@ if(BUILD_TESTING)
     target_link_options(app_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME app_state.unit COMMAND app_state_tests)
 
+    add_executable(navstate_tests
+        tests/navstate_tests.cpp
+        src/indexer.cpp
+    )
+    target_include_directories(navstate_tests PRIVATE src)
+    target_compile_options(navstate_tests PRIVATE /W4 /utf-8)
+    if(MINVIEW_WARNINGS_AS_ERRORS)
+        target_compile_options(navstate_tests PRIVATE /WX)
+    endif()
+    target_compile_definitions(navstate_tests PRIVATE NOMINMAX)
+    set_target_properties(navstate_tests PROPERTIES WIN32_EXECUTABLE FALSE)
+    target_link_options(navstate_tests PRIVATE /SUBSYSTEM:CONSOLE)
+    add_test(NAME navstate.unit COMMAND navstate_tests)
+
     add_executable(comic_reader_model_tests
         tests/comic_reader_model_tests.cpp
     )

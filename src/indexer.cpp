@@ -43,6 +43,10 @@ static bool is_image_ext(const std::wstring& ext) {
            ext == L".tiff" || ext == L".tif";
 }
 
+bool ImageIndex::is_supported_image_extension(const std::wstring& ext) {
+    return is_image_ext(ext);
+}
+
 void ImageIndex::clear() {
     m_files.clear();
     m_path_to_idx.clear();

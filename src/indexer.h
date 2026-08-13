@@ -45,6 +45,9 @@ public:
     /// Get current sort mode.
     SortMode sort_mode() const { return m_sort_mode; }
 
+    /// True for the image extensions MinView indexes (lowercase, includes dot).
+    static bool is_supported_image_extension(const std::wstring& ext);
+
 private:
     void sort_by_name();
     void sort_by_path();
