@@ -33,6 +33,8 @@ constexpr UINT WM_COMIC_READY = WM_APP + 4;
 constexpr UINT WM_NAV_SCAN_READY = WM_APP + 5;
 constexpr UINT WM_NAV_TREE_READY = WM_APP + 6;
 constexpr UINT WM_IMAGE_READY = WM_APP + 7;  // async big-image decode done
+
+static std::uint64_t wic_source_bytes(IWICBitmapSource* src);
 constexpr UINT_PTR kComicTimerId = 5;
 constexpr UINT_PTR kImageDebounceTimerId = 6;
 constexpr UINT_PTR kAsyncWatchdogTimerId = 7;  // async decode watchdog (1s tick)
@@ -967,17 +969,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_async_busy = false;
         }
         try {
-            // Defer the heavy materialize/upload while the filmstrip
-            // transition is still running — doing it here would stall the
-            // animation (the 4K FormatConverter takes 30-50ms).
+            // Defer the GPU upload while the filmstrip transition is still
+            // running — the heavy decode already happened on a worker.
             if (m_filmstrip.animating()) {
                 m_pending_image = decoded;
                 return 0;
             }
-            auto materialized = m_decoder.materialize(decoded.Get());
-            if (!materialized) return 0;
-            if (!m_renderer.upload_image(materialized.Get())) return 0;
-            m_current_wic = materialized;
+            if (!m_renderer.upload_image(decoded.Get())) return 0;
+            m_current_wic = decoded;
             m_has_image = true;
             update_content_viewport(false);
             fit_to_window();
@@ -2043,12 +2042,20 @@ bool App::open_image(const std::wstring& path) {
         ComPtr<IWICBitmapSource> bitmap;
         const auto resolved_route = resolve_open_input_route(route, [&]() {
             return run_image_load_stages(
-                [this, &path]() {
-                    auto decoded = get_preloaded(path);
+                [this, &path, &cached_preload]() {
+                    // Reuse the cache entry consumed above instead of
+                    // re-decoding: it is already fully materialized by a
+                    // worker, so a warm flip costs one GPU upload.
+                    auto decoded = std::move(cached_preload);
                     if (!decoded) decoded = m_decoder.decode(path);
                     return decoded;
                 },
                 [this](const ComPtr<IWICBitmapSource>& decoded) {
+                    // Cache hits arrive already materialized (workers did the
+                    // full decode); only freshly-decoded sources need it.
+                    ComPtr<IWICBitmap> check;
+                    if (SUCCEEDED(decoded.As(&check)) && check)
+                        return decoded;
                     return m_decoder.materialize(decoded.Get());
                 },
                 [this, &bitmap](const ComPtr<IWICBitmapSource>& materialized) {
@@ -2347,6 +2354,21 @@ void App::start_async_worker(int slot_index) {
                     } catch (...) {
                         decoded.Reset();
                     }
+                    // Full decode (materialize) happens here on the worker:
+                    // the UI thread then only uploads the finished bitmap,
+                    // keeping flips ~10-50ms instead of 300-500ms.
+                    ComPtr<IWICBitmapSource> mat;
+                    if (decoded) {
+                        if (job.current) {
+                            std::lock_guard quick(pool->mutex);
+                            if (job.gen != pool->gen) continue;  // superseded
+                        }
+                        try {
+                            mat = decoder.materialize(decoded.Get());
+                        } catch (...) {
+                            mat.Reset();
+                        }
+                    }
                     {
                         std::lock_guard lock(pool->mutex);
                         AsyncSlot& s = pool->slots[slot_index];
@@ -2356,13 +2378,28 @@ void App::start_async_worker(int slot_index) {
                         s.current = false;
                         if (job.current) {
                             if (!pool->stop && job.gen == pool->gen) {
-                                pool->wic = decoded;
+                                pool->wic = mat;
                             }
-                        } else if (decoded) {
+                        } else if (mat) {
                             std::lock_guard plock(pool->preload_mutex);
-                            if (pool->preload_cache.size() >= 3)
-                                pool->preload_cache.erase(pool->preload_cache.begin());
-                            pool->preload_cache[job.path] = decoded;
+                            const std::uint64_t item_bytes =
+                                wic_source_bytes(mat.Get());
+                            while (!pool->preload_order.empty()
+                                && (pool->preload_cache.size()
+                                        >= AsyncPoolState::kPreloadCacheMaxItems
+                                    || pool->preload_bytes + item_bytes
+                                        > AsyncPoolState::kPreloadCacheBytes)) {
+                                std::wstring old = pool->preload_order.front();
+                                pool->preload_order.pop_front();
+                                auto it = pool->preload_cache.find(old);
+                                if (it == pool->preload_cache.end()) continue;
+                                pool->preload_bytes -=
+                                    wic_source_bytes(it->second.Get());
+                                pool->preload_cache.erase(it);
+                            }
+                            pool->preload_cache[job.path] = mat;
+                            pool->preload_order.push_back(job.path);
+                            pool->preload_bytes += item_bytes;
                         }
                     }
                     if (job.current)
@@ -2410,12 +2447,20 @@ void App::request_preload(const std::wstring& path) {
     SetTimer(m_window.handle(), kAsyncWatchdogTimerId, 1000, nullptr);
 }
 
+static std::uint64_t wic_source_bytes(IWICBitmapSource* src) {
+    if (!src) return 0;
+    UINT w = 0, h = 0;
+    if (FAILED(src->GetSize(&w, &h))) return 0;
+    return static_cast<std::uint64_t>(w) * h * 4;  // 32bpp PBGRA
+}
+
 Microsoft::WRL::ComPtr<IWICBitmapSource> App::get_preloaded(const std::wstring& path) {
     if (!m_async) return nullptr;
     std::lock_guard lock(m_async->preload_mutex);
     auto it = m_async->preload_cache.find(path);
     if (it != m_async->preload_cache.end()) {
         auto result = it->second;
+        m_async->preload_bytes -= wic_source_bytes(it->second.Get());
         m_async->preload_cache.erase(it);  // consumed
         return result;
     }
@@ -2423,13 +2468,33 @@ Microsoft::WRL::ComPtr<IWICBitmapSource> App::get_preloaded(const std::wstring& 
 }
 
 void App::preload_neighbors() {
-    // Preload 3 ahead, 3 behind (Issue #5-P1 B): with the decode pool the
-    // wider window fills fast and rapid paging hits the cache far more often.
+    // Preload 3 ahead, 3 behind (Issue #5-P1 B). Request order matters for
+    // the LRU: negatives first, positives far-to-near — the +1/+2/+3 page-
+    // forward targets materialize last, so they are the last to be evicted.
     int total = static_cast<int>(m_index.size());
-    for (int offset : {1, -1, 2, -2, 3, -3}) {
+    for (int offset : {-3, -2, -1, 3, 2, 1}) {
         int idx = m_current_idx + offset;
         if (idx >= 0 && idx < total)
             request_preload(m_index.path_at(idx));
+    }
+    // Refresh LRU priority every flip: entries that survived from earlier
+    // positions would otherwise look "old" and get evicted right before
+    // they become the next flip target. Reordering by distance keeps the
+    // forward neighbors (+1/+2/+3) protected until the very end.
+    if (!m_async) return;
+    std::lock_guard plock(m_async->preload_mutex);
+    for (int offset : {-3, -2, -1, 3, 2, 1}) {
+        int idx = m_current_idx + offset;
+        if (idx < 0 || idx >= total) continue;
+        const std::wstring& p = m_index.path_at(idx);
+        for (auto it = m_async->preload_order.begin();
+             it != m_async->preload_order.end(); ++it) {
+            if (*it == p) {
+                m_async->preload_order.erase(it);
+                m_async->preload_order.push_back(p);
+                break;
+            }
+        }
     }
 }
 
@@ -5063,16 +5128,15 @@ void App::render_frame() {
     if (m_filmstrip.advance_animation(anim_dt)) {
         m_window.invalidate();
     }
-    // A decoded image that arrived DURING the transition is materialized
-    // now that the animation is over — never between animation frames
-    // (the 4K FormatConverter + GPU upload would stall the transition).
+    // An image that arrived DURING the transition is uploaded now that the
+    // animation is over — never between animation frames (the GPU upload
+    // would stall the transition).
     if (!m_filmstrip.animating() && m_pending_image) {
         ComPtr<IWICBitmapSource> decoded = m_pending_image;
         m_pending_image.Reset();
         try {
-            auto materialized = m_decoder.materialize(decoded.Get());
-            if (materialized && m_renderer.upload_image(materialized.Get())) {
-                m_current_wic = materialized;
+            if (m_renderer.upload_image(decoded.Get())) {
+                m_current_wic = decoded;
                 m_has_image = true;
                 update_content_viewport(false);
                 fit_to_window();

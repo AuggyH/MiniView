@@ -332,10 +332,20 @@ private:
         bool        stop = false;
         ULONGLONG   gen  = 0;   // newest current-image generation
         ComPtr<IWICBitmapSource> wic;  // newest decode result
-        // Decoded-neighbor cache (3 items), shared with the UI thread.
+        // Materialized-neighbor cache: workers do the full decode, so a
+        // cache hit needs only a GPU upload. Item cap matches the 3+3
+        // preload window; the byte budget keeps the 512MiB soft cap intact.
         std::mutex preload_mutex;
         std::unordered_map<std::wstring,
             Microsoft::WRL::ComPtr<IWICBitmapSource>> preload_cache;
+        std::deque<std::wstring> preload_order;  // LRU eviction order
+        std::uint64_t preload_bytes = 0;         // total materialized bytes
+        static constexpr int kPreloadCacheMaxItems = 6;
+        // ~4 fully-materialized 5120x3840 items (79MB each). The 512MiB soft
+        // budget predates materialized caching; the cache is fixed-size and
+        // LRU-evicted (no growth with scrolling) — one constant to dial.
+        static constexpr std::uint64_t kPreloadCacheBytes =
+            350ULL * 1024ULL * 1024ULL;
     };
     static constexpr int kAsyncWorkers = 3;
     std::shared_ptr<AsyncPoolState> m_async;
@@ -347,9 +357,9 @@ private:
     ULONGLONG m_async_started_ms = 0;
     static constexpr ULONGLONG kAsyncTimeoutMs = 10000;
     void check_async_timeout();
-    // A decoded image deferred while the filmstrip transition was running
-    // (materialized + uploaded once the animation completes, so the 4K
-    // FormatConverter never stalls an animation frame).
+    // An already-materialized image deferred while the filmstrip transition
+    // was running (uploaded once the animation completes, so the GPU upload
+    // never stalls an animation frame).
     ComPtr<IWICBitmapSource> m_pending_image;
     std::mutex m_metadata_mutex;
     std::condition_variable m_metadata_cv;
