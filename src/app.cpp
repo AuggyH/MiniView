@@ -945,6 +945,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_animating = false;
                 m_anim_thumb.Reset();
                 m_anim_reversed = false;
+                m_anim_grid_snapshot.Reset();
                 KillTimer(hwnd, 4);
                 m_anim_timer = 0;
             }
@@ -3976,6 +3977,7 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
     m_anim_forward = forward;
     m_anim_thumb.Reset();
     m_anim_reversed = false;
+    m_anim_grid_snapshot.Reset();
     m_anim_iw = 0.0f;
     m_anim_ih = 0.0f;
     m_last_cached_sel = -1;  // force m_anim_src recalculation on next grid_render
@@ -3986,6 +3988,13 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
             [this, request_index, &source_captured]() {
                 source_captured = capture_grid_transition_source(request_index);
             });
+        // Entry: snapshot the grid frame so the big-image background can
+        // cover it progressively (0 -> 100% opacity) instead of the grid
+        // vanishing at t=0.
+        m_anim_grid_snapshot = capture_window_frame();
+        if (!m_anim_grid_snapshot) source_captured = false;
+    } else {
+        m_anim_grid_snapshot.Reset();
     }
 
     int thumb_idx = forward
@@ -4012,6 +4021,13 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
         });
     }
     if (!source_captured) m_anim_thumb.Reset();
+    if (forward && m_anim_thumb) {
+        // Bridge the decode gap: the zooming thumbnail doubles as the
+        // placeholder, so the transition never ends on an empty frame —
+        // the real upload replaces it seamlessly later.
+        m_renderer.set_placeholder(m_anim_thumb.Get());
+        m_placeholder_idx = -1;
+    }
 
     // Pre-store target image size from thumbnail metadata (avoids stale image_size())
     if (forward && thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
@@ -4504,6 +4520,7 @@ void App::advance_transition_animation() {
         m_animating = false;
         m_anim_thumb.Reset();
         m_anim_reversed = false;
+        m_anim_grid_snapshot.Reset();
         if (m_anim_timer) {
             KillTimer(m_window.handle(), 4);
             m_anim_timer = 0;
@@ -5579,8 +5596,21 @@ void App::grid_render() {
                 }
             }
         }
-        if (!m_anim_reversed)
+        if (!m_anim_reversed) {
+            if (m_anim_forward && m_anim_grid_snapshot)
+                m_renderer.draw_fullscreen_bitmap(
+                    m_anim_grid_snapshot.Get());
             m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
+            // The full image grows inside the thumbnail\'s interpolated
+            // rect: the zoom layer hands off to it with no end pop.
+            if (m_anim_forward) {
+                ID2D1Bitmap1* reveal = m_renderer.image_bitmap();
+                if (!reveal) reveal = m_renderer.placeholder_bitmap();
+                if (reveal)
+                    m_renderer.draw_anim_image(
+                        reveal, m_anim_src, m_anim_dst, m_anim_t);
+            }
+        }
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }

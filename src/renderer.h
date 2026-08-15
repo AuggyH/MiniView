@@ -83,6 +83,11 @@ public:
     void draw_breadcrumb(const NavBreadcrumbRenderInput& input);
     void draw_nav_panel(const NavPanelRenderInput& input);
     void draw_fade_overlay(float t, bool forward);
+    // Full-window opaque bitmap (the grid snapshot under the entry veil).
+    void draw_fullscreen_bitmap(ID2D1Bitmap1* bmp);
+    // The full image revealed inside the thumbnail\'s interpolated rect —
+    // it grows with the thumbnail so the final state needs no pop.
+    void draw_anim_image(ID2D1Bitmap1* image, D2D1_RECT_F src, D2D1_RECT_F dst, float t);
     void draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t);
     void push_clip_below(float y);
     void push_clip_rect(const D2D1_RECT_F& rc);
@@ -129,6 +134,7 @@ public:
     float content_left() const { return m_content_left; }
     float content_width() const;
     ID2D1Bitmap1* image_bitmap() const { return m_image_bitmap.Get(); }
+    ID2D1Bitmap1* placeholder_bitmap() const { return m_placeholder_bitmap.Get(); }
 
     bool is_valid() const { return m_d2d_context != nullptr; }
     uint64_t device_generation() const { return m_device_generation; }

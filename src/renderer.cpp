@@ -1833,15 +1833,15 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     draw_btn(w - btn_w * 3, 0, L"\u2014");            // minimize
 }
 
-void Renderer::draw_fade_overlay(float t, bool /*forward*/) {
+void Renderer::draw_fade_overlay(float t, bool forward) {
     if (!m_d2d_context) return;
-    // The veil REVEALS the committed target: dark at the start (the
-    // surroundings settle to the viewer background) and lifts as the
-    // content zooms into place — Apple-style. The old entry direction
-    // faded to black at the END and popped to the image.
+    // The big-image background (a solid color) fades over the grid:
+    // entry 0 -> 100% covers the grid snapshot, exit 100 -> 0% reveals
+    // the grid underneath. Three transforms total — translation, scale,
+    // background opacity — nothing else.
     const float s = std::clamp(t, 0.0f, 1.0f);
     const float et = s * s * (3.0f - 2.0f * s);
-    const float alpha = 1.0f - et;
+    const float alpha = forward ? et : (1.0f - et);
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(
@@ -1851,38 +1851,74 @@ void Renderer::draw_fade_overlay(float t, bool /*forward*/) {
     m_d2d_context->FillRectangle(&rc, br.Get());
 }
 
-void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
+void Renderer::draw_fullscreen_bitmap(ID2D1Bitmap1* bmp) {
     if (!m_d2d_context || !bmp) return;
-    if (src.right <= src.left || src.bottom <= src.top) return;
-    if (dst.right <= dst.left || dst.bottom <= dst.top) return;
-    // Apple-style motion: smoothstep with a subtle settle overshoot.
+    const D2D1_RECT_F rc = {0.0f, 0.0f,
+        static_cast<float>(m_target_size.width),
+        static_cast<float>(m_target_size.height)};
+    m_d2d_context->DrawBitmap(bmp, &rc, 1.0f,
+        D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, nullptr);
+}
+
+// Shared transition geometry: smoothstep + subtle settle overshoot.
+static D2D1_RECT_F transition_interpolated_rect(
+    D2D1_RECT_F src, D2D1_RECT_F dst, float t, float& out_et) {
     const float s = std::clamp(t, 0.0f, 1.0f);
     const float smooth = s * s * (3.0f - 2.0f * s);
     const float overshoot =
         0.035f * std::sin(smooth * 3.14159265f) * (1.0f - smooth);
     const float et = std::clamp(smooth + overshoot, 0.0f, 1.12f);
+    out_et = et;
+    const float dst_w = dst.right - dst.left, dst_h = dst.bottom - dst.top;
+    const float aspect = dst_w / dst_h;
+    const float src_cx = (src.left + src.right) * 0.5f;
+    const float src_cy = (src.top + src.bottom) * 0.5f;
+    const float dst_cx = (dst.left + dst.right) * 0.5f;
+    const float dst_cy = (dst.top + dst.bottom) * 0.5f;
+    const float src_area = (src.right - src.left) * (src.bottom - src.top);
+    const float src_h = std::sqrt(src_area / aspect);
+    const float src_w = src_h * aspect;
+    const float cur_w = src_w + (dst_w - src_w) * et;
+    const float cur_h = src_h + (dst_h - src_h) * et;
+    const float cx = src_cx + (dst_cx - src_cx) * et;
+    const float cy = src_cy + (dst_cy - src_cy) * et;
+    return D2D1_RECT_F{cx - cur_w * 0.5f, cy - cur_h * 0.5f,
+                       cx + cur_w * 0.5f, cy + cur_h * 0.5f};
+}
+
+void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
+    if (!m_d2d_context || !bmp) return;
+    if (src.right <= src.left || src.bottom <= src.top) return;
+    if (dst.right <= dst.left || dst.bottom <= dst.top) return;
+    float et = 0.0f;
+    const D2D1_RECT_F rc = transition_interpolated_rect(src, dst, t, et);
     // Content handoff: fade the zooming layer out over the final third so
-    // the committed target state takes over without a pop.
+    // the full image underneath takes over without a pop.
+    const float s = std::clamp(t, 0.0f, 1.0f);
     const float fade = s < 0.68f
         ? 1.0f : std::max(0.0f, 1.0f - (s - 0.68f) / 0.32f);
-    // Lock to dest aspect; correct source to match
-    float dst_w = dst.right - dst.left, dst_h = dst.bottom - dst.top;
-    float aspect = dst_w / dst_h;
-    float src_cx = (src.left + src.right) * 0.5f;
-    float src_cy = (src.top + src.bottom) * 0.5f;
-    float dst_cx = (dst.left + dst.right) * 0.5f;
-    float dst_cy = (dst.top + dst.bottom) * 0.5f;
-    // Source size corrected to dest aspect
-    float src_area = (src.right - src.left) * (src.bottom - src.top);
-    float src_h = std::sqrt(src_area / aspect);
-    float src_w = src_h * aspect;
-    float cur_w = src_w + (dst_w - src_w) * et;
-    float cur_h = src_h + (dst_h - src_h) * et;
-    float cx = src_cx + (dst_cx - src_cx) * et;
-    float cy = src_cy + (dst_cy - src_cy) * et;
-    D2D1_RECT_F rc = {cx - cur_w * 0.5f, cy - cur_h * 0.5f,
-                      cx + cur_w * 0.5f, cy + cur_h * 0.5f};
     m_d2d_context->DrawBitmap(bmp, &rc, fade,
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+}
+
+void Renderer::draw_anim_image(ID2D1Bitmap1* image, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
+    if (!m_d2d_context || !image) return;
+    if (src.right <= src.left || src.bottom <= src.top) return;
+    if (dst.right <= dst.left || dst.bottom <= dst.top) return;
+    float et = 0.0f;
+    const D2D1_RECT_F rc = transition_interpolated_rect(src, dst, t, et);
+    // Aspect-fit the full image inside the interpolated rect (it matches
+    // the destination aspect at t=1, so the fit converges to the final
+    // layout exactly).
+    const D2D1_SIZE_F size = image->GetSize();
+    if (size.width <= 0.0f || size.height <= 0.0f) return;
+    const float rw = rc.right - rc.left, rh = rc.bottom - rc.top;
+    const float scale = std::min(rw / size.width, rh / size.height);
+    const float dw = size.width * scale, dh = size.height * scale;
+    const D2D1_RECT_F dest = D2D1::RectF(
+        (rc.left + rc.right - dw) * 0.5f, (rc.top + rc.bottom - dh) * 0.5f,
+        (rc.left + rc.right + dw) * 0.5f, (rc.top + rc.bottom + dh) * 0.5f);
+    m_d2d_context->DrawBitmap(image, &dest, 1.0f,
         D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
 }
 

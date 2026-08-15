@@ -477,7 +477,7 @@ private:
     std::vector<int> m_row_heights;
     bool  m_thumb_square = false;
     bool  m_show_labels = true;
-    bool  m_panel_expanded = true;
+    bool  m_panel_expanded = false;  // big-image mode: image + filmstrip only
     bool  m_from_grid = false;  // current image has a grid context → Space/Esc returns
     bool  m_toolbar_revealed = false;
     bool  m_ime_composing = false;
@@ -496,6 +496,9 @@ private:
     // Transition interrupt (Issue #7): a reversed animation draws a
     // snapshot of the interrupted composite frame zooming to the target.
     bool m_anim_reversed = false;
+    // Entry transition: the grid frame snapshot that the big-image
+    // background covers as its opacity goes 0 -> 100%.
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_anim_grid_snapshot;
     void interrupt_transition(mv::TransitionTrigger trigger, int nav_dir);
     void reverse_transition();
     void finish_transition_now();
