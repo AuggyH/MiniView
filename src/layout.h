@@ -44,6 +44,7 @@ inline constexpr float kNavIndentDip              = 16.0f; // tree depth indent 
 inline constexpr float kNavArrowWidthDip          = 20.0f; // expand/collapse arrow hit zone
 inline constexpr float kNavStatsHeightDip         = 24.0f; // bottom collection stats row height
 inline constexpr float kNavScrollbarWidthDip      = 6.0f;  // tree scrollbar thumb width
+inline constexpr float kNavToggleButtonWidthDip   = 44.0f; // album view-mode toggle
 inline constexpr float kNavFontSizeDip            = 12.0f; // tree/tab/breadcrumb font size
 inline constexpr float kNavSmallFontSizeDip       = 10.0f; // counts/stats font size
 inline constexpr float kNavPadDip                 = 8.0f;  // panel inner padding

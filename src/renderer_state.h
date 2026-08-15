@@ -655,6 +655,10 @@ struct NavPanelGeometry {
     float scrollbar_w = 0.0f;
     float stats_y = 0.0f;
     float stats_h = 0.0f;
+    float toggle_x = 0.0f;   // album view-mode toggle button (tree/icons)
+    float toggle_y = 0.0f;
+    float toggle_w = 0.0f;
+    float toggle_h = 0.0f;
 };
 
 inline NavPanelGeometry build_nav_panel_geometry(
@@ -676,6 +680,10 @@ inline NavPanelGeometry build_nav_panel_geometry(
     g.tree_w = w;
     g.scrollbar_w = std::max(4.0f, layout::kNavScrollbarWidthDip * dpi_scale);
     g.scrollbar_x = x + w - g.scrollbar_w;
+    g.toggle_w = layout::kNavToggleButtonWidthDip * dpi_scale;
+    g.toggle_h = layout::kNavTabHeightDip * dpi_scale * 0.72f;
+    g.toggle_x = x + w - g.scrollbar_w - 4.0f * dpi_scale - g.toggle_w;
+    g.toggle_y = g.tabs_y + (g.tabs_h - g.toggle_h) * 0.5f;
     return g;
 }
 
@@ -688,6 +696,21 @@ struct NavBreadcrumbRenderInput {
     const std::vector<std::wstring>* segments = nullptr;
     int hover_item = -1;       // breadcrumb item index under cursor
     float dpi_scale = 1.0f;
+};
+
+// Album/favourite panel row (Issue #5 P3). One flat list: the fixed
+// favourite row, user albums, and the selected album's folders.
+struct AlbumPanelRow {
+    enum class Kind { Favourites, Album, Folder };
+    Kind kind = Kind::Album;
+    std::wstring name;
+    int depth = 0;           // folder indent level
+    bool recursive = false;  // folder recursive badge
+    bool error = false;      // stale path (missing directory)
+    int image_count = -1;    // -1 = hidden
+    bool selected = false;   // active collection row
+    int album_index = -1;    // owning album (Album/Folder rows)
+    int folder_index = -1;   // folder position (Folder rows)
 };
 
 struct NavPanelRenderInput {
@@ -705,6 +728,10 @@ struct NavPanelRenderInput {
     bool tree_scroll_active = false;
     const std::wstring* stats_text = nullptr;  // bottom stats line
     float dpi_scale = 1.0f;
+    // Album/favourite tab (Issue #5 P3)
+    const std::vector<AlbumPanelRow>* album_rows = nullptr;
+    int album_row_hover = -1;
+    bool icons_view = false;   // folder icons toggle state
 };
 
 } // namespace mv

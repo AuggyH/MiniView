@@ -5,6 +5,7 @@
 #include "decoder.h"
 #include "indexer.h"
 #include "dirwatch.h"
+#include "albumstate.h"
 #include "metadata.h"
 #include "app_state.h"
 #include "file_operation.h"
@@ -39,6 +40,12 @@ struct NavScanJob {
     // non-empty for multi-root albums; otherwise the single path is used.
     bool refresh = false;
     std::vector<ScanRoot> roots;
+    // Album/favourite collections (Issue #5 P3): paths = explicit image
+    // list (fixed favourite album); watch_roots = directories to watch;
+    // album_name = breadcrumb label (empty = directory collection).
+    std::vector<std::wstring> paths;
+    std::vector<ScanRoot> watch_roots;
+    std::wstring album_name;
 };
 
 struct NavScanResult {
@@ -48,6 +55,8 @@ struct NavScanResult {
     std::uint64_t generation = 0;
     int scan_result = -1;
     bool refresh = false;
+    std::vector<ScanRoot> watch_roots;   // rebind the dir watcher
+    std::wstring album_name;             // empty = directory collection
 };
 
 struct NavTreeJob {
@@ -281,6 +290,36 @@ private:
     void    stop_dir_watch();
     void    request_collection_refresh();
     void    apply_collection_refresh(NavScanResult&& result);
+
+    // Album & favourite collections (Issue #5 P3)
+    AlbumStore m_album_store;
+    bool       m_album_loaded = false;
+    int        m_album_sel = -1;      // selected album index (-1 = none)
+    bool       m_fav_selected = false; // fixed favourite album active
+    int        m_album_row_hover = -1;
+    std::vector<AlbumPanelRow> m_album_rows;
+    struct AlbumMenuTarget {
+        int album = -1;
+        int folder = -1;
+        bool folder_row = false;
+    } m_album_menu_target;
+    void    build_album_rows(std::vector<AlbumPanelRow>& rows);
+    std::wstring m_active_album_name;  // breadcrumb label (empty = dir)
+    void    load_album_store();
+    void    save_album_store();
+    void    open_favourites_collection();
+    void    open_album_collection(int index);
+    void    toggle_album_folder_view();
+    int     album_row_hit(int x, int y);
+    void    show_album_row_menu(HWND hwnd, int x, int y);
+    void    create_album();
+    void    delete_album(int index);
+    void    add_folder_to_album(int index);
+    void    remove_album_folder(int album, int folder);
+    void    move_album_folder(int album, int from, int to);
+    void    toggle_album_folder_recursive(int album, int folder);
+    std::vector<ScanRoot> album_scan_roots() const;
+    std::vector<ScanRoot> album_watch_roots() const;
 
     struct ComicPageEntry {
         Microsoft::WRL::ComPtr<IWICBitmapSource> wic;

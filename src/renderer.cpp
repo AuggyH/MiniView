@@ -1933,12 +1933,94 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
         D2D1::Point2F(g.x + g.w, g.tabs_y + g.tabs_h), line_br.Get(), 1.0f);
 
     if (input.tab == NavPanelTab::Favorites) {
-        // P3 placeholder: favorites persistence is out of scope this phase.
-        const std::wstring msg =
-            L"\u6536\u85CF\u529F\u80FD\u5C06\u5728\u540E\u7EED\u7248\u672C\u63D0\u4F9B";
-        const float mw = measure_text(msg, fs * dpi_s);
-        draw_text_line(g.x + (g.w - mw) * 0.5f, g.tree_y + 24.0f * dpi_s,
-            mw + 4.0f, msg, dim_br.Get(), fs, nullptr, 1);
+        // Album view-mode toggle button (tree ⇄ folder icons), P3.
+        const D2D1_RECT_F tgl = D2D1::RectF(
+            g.toggle_x, g.toggle_y, g.toggle_x + g.toggle_w,
+            g.toggle_y + g.toggle_h);
+        m_d2d_context->FillRoundedRectangle(
+            D2D1::RoundedRect(tgl, 4.0f * dpi_s, 4.0f * dpi_s),
+            hover_bg.Get());
+        m_d2d_context->DrawRoundedRectangle(
+            D2D1::RoundedRect(tgl, 4.0f * dpi_s, 4.0f * dpi_s),
+            line_br.Get(), 1.0f);
+        const std::wstring view_label =
+            input.icons_view ? L"图标" : L"树形";
+        const float vw = measure_text(view_label, fs * dpi_s);
+        const float vh = label_height(view_label, vw + 4.0f, fs, 1);
+        draw_text_line(g.toggle_x + (g.toggle_w - vw) * 0.5f,
+            g.toggle_y + (g.toggle_h - vh) * 0.5f, vw + 4.0f,
+            view_label, text_br.Get(), fs, nullptr, 1);
+
+        if (input.album_rows) {
+            const float row_h = layout::kNavRowHeightDip * dpi_s;
+            const float indent = layout::kNavIndentDip * dpi_s;
+            const float row_left = g.tree_x + pad;
+            const float row_right = g.tree_x + g.tree_w - pad
+                - g.scrollbar_w - 4.0f * dpi_s;
+            const D2D1_RECT_F clip = D2D1::RectF(
+                g.tree_x, g.tree_y, g.tree_x + g.tree_w,
+                g.tree_y + g.tree_h);
+            m_d2d_context->PushAxisAlignedClip(&clip,
+                D2D1_ANTIALIAS_MODE_ALIASED);
+            for (int i = 0;
+                 i < static_cast<int>(input.album_rows->size()); ++i) {
+                const auto& row =
+                    (*input.album_rows)[static_cast<size_t>(i)];
+                const float y = g.tree_y + pad
+                    + static_cast<float>(i) * row_h;
+                if (y >= g.tree_y + g.tree_h) break;
+                if (row.selected) {
+                    m_d2d_context->FillRectangle(
+                        D2D1::RectF(g.tree_x, y, g.tree_x + g.tree_w,
+                            y + row_h),
+                        sel_bg.Get());
+                } else if (i == input.album_row_hover) {
+                    m_d2d_context->FillRectangle(
+                        D2D1::RectF(g.tree_x, y, g.tree_x + g.tree_w,
+                            y + row_h),
+                        hover_bg.Get());
+                }
+                const float name_x = row_left
+                    + indent * static_cast<float>(row.depth);
+                const float avail = std::max(0.0f, row_right - name_x);
+                ID2D1SolidColorBrush* name_br = row.error
+                    ? error_br.Get()
+                    : (row.kind == AlbumPanelRow::Kind::Favourites
+                        ? accent_br.Get() : text_br.Get());
+                float badge_w = 0.0f;
+                float count_w = 0.0f;
+                std::wstring count_text;
+                if (row.recursive) {
+                    badge_w = measure_text(
+                        L"[递归]", small_fs * dpi_s);
+                }
+                if (!row.error && row.image_count >= 0) {
+                    count_text =
+                        L"(" + std::to_wstring(row.image_count) + L")";
+                    count_w =
+                        measure_text(count_text, small_fs * dpi_s);
+                }
+                const float reserved = badge_w + count_w
+                    + ((badge_w > 0.0f || count_w > 0.0f)
+                        ? 6.0f * dpi_s : 0.0f);
+                const float name_w = std::max(8.0f, avail - reserved);
+                const float th = label_height(row.name, name_w, fs, 1);
+                const float ty = y + (row_h - th) * 0.5f;
+                draw_text_line(name_x, ty, name_w, row.name, name_br,
+                    fs, nullptr, 1);
+                if (badge_w > 0.0f) {
+                    draw_text_line(name_x + name_w + 6.0f * dpi_s, ty,
+                        badge_w + 4.0f, L"[递归]",
+                        badge_br.Get(), small_fs, nullptr, 1);
+                }
+                if (count_w > 0.0f) {
+                    draw_text_line(row_right - count_w, ty,
+                        count_w + 4.0f, count_text, dim_br.Get(),
+                        small_fs, nullptr, 1);
+                }
+            }
+            m_d2d_context->PopAxisAlignedClip();
+        }
     } else if (input.rows) {
         const float indent = layout::kNavIndentDip * dpi_s;
         const float arrow_w = layout::kNavArrowWidthDip * dpi_s;

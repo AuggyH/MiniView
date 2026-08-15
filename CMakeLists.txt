@@ -25,6 +25,7 @@ set(SOURCES
     src/file_operation_windows.cpp
     src/indexer.cpp
     src/dirwatch.cpp
+    src/albumstate.cpp
     src/metadata.cpp
     src/MinView.rc
 )

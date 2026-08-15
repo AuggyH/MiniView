@@ -18,6 +18,8 @@
 #include <ocidl.h>
 #include <Psapi.h>
 #include <limits>
+#include <fstream>
+#include <iterator>
 
 extern void save_last_dir(const std::wstring& dir);
 extern void save_sort_mode(int mode);
@@ -374,7 +376,11 @@ static void nav_scan_worker(
         scanned.recursive = current.recursive;
         scanned.generation = current.generation;
         scanned.refresh = current.refresh;
-        if (!current.roots.empty()) {
+        scanned.watch_roots = current.watch_roots;
+        scanned.album_name = current.album_name;
+        if (!current.paths.empty()) {
+            scanned.scan_result = scanned.index.load_paths(current.paths);
+        } else if (!current.roots.empty()) {
             scanned.scan_result = scanned.index.scan_many(current.roots);
         } else {
             scanned.scan_result =
@@ -576,6 +582,7 @@ int App::run(const std::wstring& initial_path) {
     m_comic_loader.start(m_window.handle(), WM_COMIC_READY);
     start_metadata_loader();
     start_nav_workers();
+    load_album_store();
 
     if (!initial_path.empty()) {
         DWORD attr = GetFileAttributesW(initial_path.c_str());
@@ -1034,6 +1041,33 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);  // screen coords
         POINT pt = {cx, cy};
         ScreenToClient(hwnd, &pt);  // convert to client coords for hit-test
+        // Album panel (收藏 tab): row or empty-space menu
+        if (nav_panel_visible() && pt.x < nav_panel_width()
+            && pt.y >= m_toolbar_h
+            && m_nav_panel_state.tab() == NavPanelTab::Favorites) {
+            const auto& g = m_nav_panel_geometry;
+            if (g.w > 0.0f && pt.y >= g.tree_y
+                && pt.y < g.tree_y + g.tree_h) {
+                const int idx = album_row_hit(pt.x, pt.y);
+                if (idx >= 0) {
+                    const auto& row =
+                        m_album_rows[static_cast<size_t>(idx)];
+                    if (row.kind == AlbumPanelRow::Kind::Album) {
+                        m_album_menu_target =
+                            {row.album_index, -1, false};
+                        show_album_row_menu(hwnd, cx, cy);
+                    } else if (row.kind == AlbumPanelRow::Kind::Folder) {
+                        m_album_menu_target =
+                            {row.album_index, row.folder_index, true};
+                        show_album_row_menu(hwnd, cx, cy);
+                    }
+                } else {
+                    m_album_menu_target = {-1, -1, false};
+                    show_album_row_menu(hwnd, cx, cy);
+                }
+                return 0;
+            }
+        }
         if (m_grid_mode) {
             // Right-click: select item under cursor and show menu
             if (!grid_click(pt.x, pt.y, false, false))
@@ -5452,18 +5486,268 @@ void App::stop_dir_watch() {
     m_dir_watcher.stop();
 }
 
+void App::load_album_store() {
+    if (m_album_loaded) return;
+    m_album_loaded = true;
+    std::ifstream file(get_config_dir() + L"\\albums.json", std::ios::binary);
+    if (!file) return;  // 首次运行:空集合
+    const std::string text((std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>());
+    const auto parsed = mv::parse_album_store(text);
+    if (parsed) {
+        m_album_store = *parsed;
+    } else {
+        m_album_store = AlbumStore{};
+        m_open_error = L"\u6536\u85CF\u6570\u636E\u5DF2\u91CD\u7F6E(\u6587\u4EF6\u635F\u574F)\u3002";
+        m_window.invalidate();
+    }
+}
+
+void App::save_album_store() {
+    const std::string json = mv::serialize_album_store(m_album_store);
+    std::ofstream file(get_config_dir() + L"\\albums.json",
+        std::ios::binary | std::ios::trunc);
+    if (file)
+        file.write(json.data(), static_cast<std::streamsize>(json.size()));
+}
+
+std::vector<ScanRoot> App::album_scan_roots() const {
+    std::vector<ScanRoot> roots;
+    if (m_album_sel < 0
+        || m_album_sel >= static_cast<int>(m_album_store.albums.size()))
+        return roots;
+    const auto& album = m_album_store.albums[static_cast<size_t>(m_album_sel)];
+    for (const auto& folder : album.folders)
+        roots.push_back(ScanRoot{folder.path, folder.recursive});
+    return roots;
+}
+
+std::vector<ScanRoot> App::album_watch_roots() const {
+    return album_scan_roots();
+}
+
+void App::open_favourites_collection() {
+    const std::uint64_t generation = m_nav_switch.request();
+    NavScanJob job;
+    job.generation = generation;
+    job.sort = m_collection_memory.memory_for(L"favourites").sort;
+    job.paths = m_album_store.favourites;
+    job.album_name = L"\u6536\u85CF";
+    // Watch the unique parent directories of the favourite images.
+    for (const auto& path : m_album_store.favourites) {
+        const std::wstring parent =
+            std::filesystem::path(path).parent_path().wstring();
+        bool found = false;
+        for (const auto& root : job.watch_roots)
+            if (_wcsicmp(root.path.c_str(), parent.c_str()) == 0) found = true;
+        if (!found) job.watch_roots.push_back(ScanRoot{parent, false});
+    }
+    m_fav_selected = true;
+    m_album_sel = -1;
+    {
+        std::lock_guard lock(m_nav_scan_mutex);
+        m_nav_scan_job = std::move(job);
+        m_nav_scan_queued = true;
+    }
+    m_nav_scan_cv.notify_one();
+    m_window.invalidate();
+}
+
+void App::open_album_collection(int index) {
+    if (index < 0
+        || index >= static_cast<int>(m_album_store.albums.size())) return;
+    const auto& album = m_album_store.albums[static_cast<size_t>(index)];
+    const std::uint64_t generation = m_nav_switch.request();
+    NavScanJob job;
+    job.generation = generation;
+    job.sort = m_collection_memory.memory_for(L"album:" + album.name).sort;
+    job.album_name = album.name;
+    for (const auto& folder : album.folders)
+        job.roots.push_back(ScanRoot{folder.path, folder.recursive});
+    job.watch_roots = job.roots;
+    m_fav_selected = false;
+    m_album_sel = index;
+    {
+        std::lock_guard lock(m_nav_scan_mutex);
+        m_nav_scan_job = std::move(job);
+        m_nav_scan_queued = true;
+    }
+    m_nav_scan_cv.notify_one();
+    m_window.invalidate();
+}
+
+void App::toggle_album_folder_view() {
+    m_album_store.folder_view =
+        m_album_store.folder_view == AlbumFolderView::Tree
+            ? AlbumFolderView::Icons : AlbumFolderView::Tree;
+    save_album_store();
+    m_window.invalidate();
+}
+
+void App::create_album() {
+    int n = 1;
+    std::wstring name;
+    do {
+        name = L"\u76F8\u518C " + std::to_wstring(n++);
+    } while (!mv::add_album(m_album_store, name));
+    save_album_store();
+    m_window.invalidate();
+}
+
+void App::delete_album(int index) {
+    if (index < 0
+        || index >= static_cast<int>(m_album_store.albums.size())) return;
+    const std::wstring name = m_album_store.albums[static_cast<size_t>(index)].name;
+    const std::wstring prompt =
+        L"\u5220\u9664\u76F8\u518C\u300C" + name
+        + L"\u300D\uFF1F\u4E0D\u4F1A\u5220\u9664\u4EFB\u4F55\u672C\u5730\u6587\u4EF6\u3002";
+    const int answer = MessageBoxW(m_window.handle(), prompt.c_str(),
+        L"MinView", MB_YESNO | MB_ICONQUESTION);
+    if (answer != IDYES) return;
+    const bool was_active = (m_album_sel == index && !m_fav_selected);
+    mv::remove_album(m_album_store, static_cast<size_t>(index));
+    save_album_store();
+    if (was_active) {
+        m_album_sel = -1;
+        m_active_album_name.clear();
+        m_nav_display_segments.clear();
+    }
+    m_window.invalidate();
+}
+
+void App::add_folder_to_album(int index) {
+    if (index < 0
+        || index >= static_cast<int>(m_album_store.albums.size())) return;
+    BROWSEINFOW bi = {};
+    bi.hwndOwner = m_window.handle();
+    bi.lpszTitle = L"\u9009\u62E9\u8981\u6DFB\u52A0\u7684\u6587\u4EF6\u5939";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+    if (!pidl) return;
+    wchar_t dir[MAX_PATH] = {};
+    if (SHGetPathFromIDListW(pidl, dir)) {
+        CoTaskMemFree(pidl);
+        const int answer = MessageBoxW(m_window.handle(),
+            L"\u9012\u5F52\u52A0\u8F7D\u5B50\u6587\u4EF6\u5939\uFF1F",
+            L"MinView", MB_YESNO | MB_ICONQUESTION);
+        const bool recursive = (answer == IDYES);
+        if (mv::add_folder(m_album_store, static_cast<size_t>(index),
+                dir, recursive)) {
+            save_album_store();
+            if (m_album_sel == index && !m_fav_selected)
+                open_album_collection(index);
+            else
+                m_window.invalidate();
+        }
+    } else {
+        CoTaskMemFree(pidl);
+    }
+}
+
+void App::remove_album_folder(int album, int folder) {
+    if (mv::remove_folder(m_album_store, static_cast<size_t>(album),
+            static_cast<size_t>(folder))) {
+        save_album_store();
+        if (m_album_sel == album && !m_fav_selected)
+            open_album_collection(album);
+        else
+            m_window.invalidate();
+    }
+}
+
+void App::move_album_folder(int album, int from, int to) {
+    if (mv::move_folder(m_album_store, static_cast<size_t>(album),
+            static_cast<size_t>(from), static_cast<size_t>(to))) {
+        save_album_store();
+        if (m_album_sel == album && !m_fav_selected)
+            open_album_collection(album);
+        else
+            m_window.invalidate();
+    }
+}
+
+void App::toggle_album_folder_recursive(int album, int folder) {
+    if (album < 0
+        || album >= static_cast<int>(m_album_store.albums.size())) return;
+    const bool next =
+        !m_album_store.albums[static_cast<size_t>(album)]
+            .folders[static_cast<size_t>(folder)].recursive;
+    if (mv::set_folder_recursive(m_album_store, static_cast<size_t>(album),
+            static_cast<size_t>(folder), next)) {
+        save_album_store();
+        if (m_album_sel == album && !m_fav_selected)
+            open_album_collection(album);
+        else
+            m_window.invalidate();
+    }
+}
+
+void App::show_album_row_menu(HWND hwnd, int x, int y) {
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+    const auto& t = m_album_menu_target;
+    if (t.folder_row) {
+        bool recursive = false;
+        if (t.album >= 0 && t.folder >= 0
+            && t.album < static_cast<int>(m_album_store.albums.size())) {
+            const auto& folders =
+                m_album_store.albums[static_cast<size_t>(t.album)].folders;
+            if (t.folder < static_cast<int>(folders.size()))
+                recursive =
+                    folders[static_cast<size_t>(t.folder)].recursive;
+        }
+        AppendMenuW(menu, MF_STRING | (recursive ? MF_CHECKED : 0), 26,
+            L"递归加载子文件夹");
+        AppendMenuW(menu, MF_STRING, 24, L"上移");
+        AppendMenuW(menu, MF_STRING, 25, L"下移");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, 23,
+            L"从相册移除文件夹");
+    } else if (t.album >= 0) {
+        AppendMenuW(menu, MF_STRING, 22,
+            L"添加文件夹...");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, 21, L"删除相册");
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING, 20, L"新建相册");
+    } else {
+        AppendMenuW(menu, MF_STRING, 20, L"新建相册");
+    }
+    const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+        x, y, 0, hwnd, nullptr);
+    switch (cmd) {
+    case 20: create_album(); break;
+    case 21: delete_album(t.album); break;
+    case 22: add_folder_to_album(t.album); break;
+    case 23: remove_album_folder(t.album, t.folder); break;
+    case 24: move_album_folder(t.album, t.folder, t.folder - 1); break;
+    case 25: move_album_folder(t.album, t.folder, t.folder + 1); break;
+    case 26: toggle_album_folder_recursive(t.album, t.folder); break;
+    default: break;
+    }
+    DestroyMenu(menu);
+}
+
 void App::request_collection_refresh() {
-    if (m_watch_roots.empty() && m_index.directory().empty()) return;
+    if (m_watch_roots.empty() && m_index.directory().empty()
+        && !m_fav_selected && !(!m_active_album_name.empty())) return;
     const std::uint64_t generation = m_nav_switch.request();
     {
         std::lock_guard lock(m_nav_scan_mutex);
         NavScanJob job;
-        job.path = m_index.directory();
-        job.recursive = m_recursive;
         job.generation = generation;
         job.sort = m_index.sort_mode();
         job.refresh = true;
-        job.roots = m_watch_roots;
+        job.album_name = m_active_album_name;
+        if (m_fav_selected) {
+            job.paths = m_album_store.favourites;
+        } else if (!m_active_album_name.empty()) {
+            job.roots = album_scan_roots();
+        } else {
+            job.path = m_index.directory();
+            job.recursive = m_recursive;
+        }
+        job.watch_roots = m_watch_roots;
         m_nav_scan_job = std::move(job);
         m_nav_scan_queued = true;
     }
@@ -5591,7 +5875,7 @@ void App::apply_nav_scan_result() {
     m_panel_path.clear();
     m_panel_scroll_y = 0.0f;
     m_open_error.clear();
-    save_last_dir(result.path);
+    if (result.album_name.empty()) save_last_dir(result.path);
     m_thumbs.clear();
     m_thumbs.resize(m_index.size());
     m_thumb_d2d.clear();
@@ -5606,7 +5890,16 @@ void App::apply_nav_scan_result() {
     }
     sync_nav_collection();
     update_content_viewport(!m_grid_mode);
-    m_watch_roots = {{result.path, result.recursive}};
+    m_active_album_name = result.album_name;
+    if (!result.album_name.empty()) {
+        // Album/favourite collection: keep the grid state, skip lastdir.
+    } else {
+        m_album_sel = -1;
+        m_fav_selected = false;
+    }
+    m_watch_roots = result.watch_roots.empty()
+        ? std::vector<ScanRoot>{{result.path, result.recursive}}
+        : result.watch_roots;
     start_dir_watch();
     update_title();
     m_window.invalidate();
@@ -5701,11 +5994,55 @@ void App::reveal_active_collection() {
 }
 
 void App::rebuild_nav_breadcrumbs() {
+    if (!m_active_album_name.empty()) {
+        m_nav_display_segments = {m_active_album_name};
+        return;
+    }
     const std::wstring dir = m_index.directory();
     m_nav_segments = split_path_segments(dir);
     m_nav_display_segments = m_nav_segments;
     if (m_recursive && !m_nav_display_segments.empty())
         m_nav_display_segments.back() += L" [\u9012\u5F52]";
+}
+
+void App::build_album_rows(std::vector<AlbumPanelRow>& rows) {
+    rows.clear();
+    {
+        AlbumPanelRow fav;
+        fav.kind = AlbumPanelRow::Kind::Favourites;
+        fav.name = L"\u6536\u85CF";
+        fav.selected = m_fav_selected;
+        fav.image_count = static_cast<int>(m_album_store.favourites.size());
+        rows.push_back(std::move(fav));
+    }
+    for (int i = 0; i < static_cast<int>(m_album_store.albums.size()); ++i) {
+        const auto& album = m_album_store.albums[static_cast<size_t>(i)];
+        AlbumPanelRow arow;
+        arow.kind = AlbumPanelRow::Kind::Album;
+        arow.name = album.name;
+        arow.album_index = i;
+        const bool is_sel = (!m_fav_selected && m_album_sel == i);
+        arow.selected = is_sel;
+        rows.push_back(std::move(arow));
+        if (is_sel) {
+            for (int f = 0;
+                 f < static_cast<int>(album.folders.size()); ++f) {
+                const auto& folder =
+                    album.folders[static_cast<size_t>(f)];
+                AlbumPanelRow frow;
+                frow.kind = AlbumPanelRow::Kind::Folder;
+                frow.depth = 1;
+                frow.name = folder.path;
+                frow.recursive = folder.recursive;
+                frow.album_index = i;
+                frow.folder_index = f;
+                std::error_code ec;
+                frow.error =
+                    !std::filesystem::is_directory(folder.path, ec) || ec;
+                rows.push_back(std::move(frow));
+            }
+        }
+    }
 }
 
 void App::render_nav_panel(float x, float y, float w, float h) {
@@ -5741,10 +6078,13 @@ void App::render_nav_panel(float x, float y, float w, float h) {
         m_nav_row_hover = -1;
 
     std::wstring stats;
-    if (!m_index.directory().empty()) {
+    if (!m_index.directory().empty() || !m_active_album_name.empty()) {
         stats = std::to_wstring(m_index.size()) + L" \u5F20";
-        if (m_recursive) stats += L" [\u9012\u5F52]";
+        if (m_recursive && m_active_album_name.empty())
+            stats += L" [\u9012\u5F52]";
     }
+    if (m_nav_panel_state.tab() == NavPanelTab::Favorites)
+        build_album_rows(m_album_rows);
 
     NavPanelRenderInput input;
     input.geometry = g;
@@ -5760,6 +6100,10 @@ void App::render_nav_panel(float x, float y, float w, float h) {
     input.tree_total = m_nav_tree_total;
     input.stats_text = stats.empty() ? nullptr : &stats;
     input.dpi_scale = dpi_s;
+    input.album_rows = &m_album_rows;
+    input.album_row_hover = m_album_row_hover;
+    input.icons_view =
+        m_album_store.folder_view == AlbumFolderView::Icons;
     m_renderer.draw_nav_panel(input);
 }
 
@@ -5825,6 +6169,13 @@ bool App::nav_panel_hit_test(int x, int y) {
     }
     // Tab row: 目录 | 收藏
     if (y < g.tabs_y + g.tabs_h) {
+        // Album view-mode toggle button (收藏 tab, right edge)
+        if (m_nav_panel_state.tab() == NavPanelTab::Favorites
+            && x >= g.toggle_x && x < g.toggle_x + g.toggle_w
+            && y >= g.toggle_y && y < g.toggle_y + g.toggle_h) {
+            toggle_album_folder_view();
+            return true;
+        }
         const float pad = layout::kNavPadDip * dpi_s;
         const float fs = layout::kNavFontSizeDip * dpi_s;
         float tx = g.x + pad;
@@ -5842,6 +6193,17 @@ bool App::nav_panel_hit_test(int x, int y) {
     if (y >= g.stats_y) return true;
     // Tree viewport
     if (y >= g.tree_y && y < g.tree_y + g.tree_h) {
+        if (m_nav_panel_state.tab() == NavPanelTab::Favorites) {
+            const int idx = album_row_hit(x, y);
+            if (idx >= 0) {
+                const auto& row = m_album_rows[static_cast<size_t>(idx)];
+                if (row.kind == AlbumPanelRow::Kind::Favourites)
+                    open_favourites_collection();
+                else if (row.kind == AlbumPanelRow::Kind::Album)
+                    open_album_collection(row.album_index);
+            }
+            return true;
+        }
         const float indent = layout::kNavIndentDip * dpi_s;
         const float arrow_w = layout::kNavArrowWidthDip * dpi_s;
         const float row_left = g.tree_x + layout::kNavPadDip * dpi_s;
@@ -5879,6 +6241,22 @@ bool App::nav_panel_hit_test(int x, int y) {
     return true;
 }
 
+int App::album_row_hit(int x, int y) {
+    const auto& g = m_nav_panel_geometry;
+    if (g.w <= 0.0f) return -1;
+    if (x < g.tree_x || x >= g.tree_x + g.tree_w
+        || y < g.tree_y || y >= g.tree_y + g.tree_h) return -1;
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const float row_h = layout::kNavRowHeightDip * dpi_s;
+    const float pad = layout::kNavPadDip * dpi_s;
+    const int idx = static_cast<int>(
+        (static_cast<float>(y) - g.tree_y - pad) / row_h);
+    if (idx < 0 || idx >= static_cast<int>(m_album_rows.size()))
+        return -1;
+    return idx;
+}
+
 bool App::grid_breadcrumb_hit_test(int x, int y) {
     if (!m_grid_mode || m_nav_display_segments.empty()) return false;
     if (y < m_toolbar_h || y >= m_grid_top) return false;
@@ -5908,9 +6286,11 @@ void App::nav_panel_mouse_move(int x, int y) {
     const int prev_row = m_nav_row_hover;
     const int prev_panel = m_nav_breadcrumb_hover_panel;
     const int prev_grid = m_nav_breadcrumb_hover_grid;
+    const int prev_album = m_album_row_hover;
     m_nav_row_hover = -1;
     m_nav_breadcrumb_hover_panel = -1;
     m_nav_breadcrumb_hover_grid = -1;
+    m_album_row_hover = -1;
 
     if (nav_panel_visible() && x < nav_panel_width() && y >= m_toolbar_h) {
         const auto& g = m_nav_panel_geometry;
@@ -5919,12 +6299,28 @@ void App::nav_panel_mouse_move(int x, int y) {
                 m_nav_breadcrumb_hover_panel = breadcrumb_hit_item(
                     m_nav_panel_breadcrumb, static_cast<float>(x));
             } else if (y >= g.tree_y && y < g.tree_y + g.tree_h) {
-                for (int i = 0; i < static_cast<int>(m_nav_rows.size()); ++i) {
-                    const auto& row = m_nav_rows[static_cast<size_t>(i)];
-                    const float row_y = row.y + g.tree_y - m_nav_tree_scroll;
-                    if (y >= row_y && y < row_y + row.height) {
-                        m_nav_row_hover = i;
-                        break;
+                if (m_nav_panel_state.tab() == NavPanelTab::Favorites) {
+                    const float dpi_s = static_cast<float>(
+                        GetDpiForWindow(m_window.handle())) / 96.0f;
+                    const float row_h = layout::kNavRowHeightDip * dpi_s;
+                    const float pad = layout::kNavPadDip * dpi_s;
+                    const int idx = static_cast<int>(
+                        (static_cast<float>(y) - g.tree_y - pad) / row_h);
+                    m_album_row_hover =
+                        (idx >= 0
+                            && idx < static_cast<int>(m_album_rows.size()))
+                            ? idx : -1;
+                } else {
+                    for (int i = 0;
+                         i < static_cast<int>(m_nav_rows.size()); ++i) {
+                        const auto& row =
+                            m_nav_rows[static_cast<size_t>(i)];
+                        const float row_y =
+                            row.y + g.tree_y - m_nav_tree_scroll;
+                        if (y >= row_y && y < row_y + row.height) {
+                            m_nav_row_hover = i;
+                            break;
+                        }
                     }
                 }
             }
@@ -5946,7 +6342,8 @@ void App::nav_panel_mouse_move(int x, int y) {
     }
     if (m_nav_row_hover != prev_row
         || m_nav_breadcrumb_hover_panel != prev_panel
-        || m_nav_breadcrumb_hover_grid != prev_grid) {
+        || m_nav_breadcrumb_hover_grid != prev_grid
+        || m_album_row_hover != prev_album) {
         m_window.invalidate();
     }
 }
