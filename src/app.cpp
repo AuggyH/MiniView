@@ -1260,6 +1260,20 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (m_comic_reader.cruise_active()) {
             cancel_comic_auto_scroll(ComicAppCancelTrigger::ManualInput);
         }
+        // Page-width slider: drag adjusts the page width directly.
+        if (m_comic_reader.enabled()) {
+            const ComicControlsLayout controls =
+                build_comic_controls_layout(comic_controls_snapshot());
+            if (hit_test_comic_width_slider(controls.width_slider,
+                    static_cast<float>(GET_X_LPARAM(lp)),
+                    static_cast<float>(GET_Y_LPARAM(lp)))) {
+                m_comic_width_dragging = true;
+                apply_comic_width_slider_x(controls,
+                    static_cast<float>(GET_X_LPARAM(lp)));
+                SetCapture(hwnd);
+                return 0;
+            }
+        }
         // Title bar: buttons → menu items → drag
         {
             int ty2 = GET_Y_LPARAM(lp);
@@ -1493,6 +1507,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_window.invalidate();
             return 0;
         }
+        if (m_comic_width_dragging) {
+            const ComicControlsLayout controls =
+                build_comic_controls_layout(comic_controls_snapshot());
+            apply_comic_width_slider_x(controls,
+                static_cast<float>(GET_X_LPARAM(lp)));
+            return 0;
+        }
         if (m_comic_scrollbar_dragging) {
             const ComicControlsLayout controls =
                 build_comic_controls_layout(comic_controls_snapshot());
@@ -1625,6 +1646,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ShowWindow(hwnd, wp2.showCmd == SW_MAXIMIZE ? SW_RESTORE : SW_MAXIMIZE);
             }
             else if (id == 0) ShowWindow(hwnd, SW_MINIMIZE);
+            return 0;
+        }
+        if (m_comic_width_dragging) {
+            m_comic_width_dragging = false;
+            if (GetCapture() == hwnd) ReleaseCapture();
+            m_window.invalidate();
             return 0;
         }
         if (m_comic_scrollbar_dragging) {
@@ -2778,11 +2805,15 @@ public:
         m_app.m_comic_reader.set_cruise_speed_index(index);
     }
 
+    bool cruise_paused() const {
+        return m_app.m_comic_reader.cruise_paused();
+    }
+
     void show_cruise_status(ComicAppCruiseStatus status) {
         m_app.m_comic_transient_kind = ComicTransientOverlayKind::Status;
         if (status == ComicAppCruiseStatus::Paused) {
             m_app.m_comic_transient_text =
-                L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 \u5DF2\u6682\u505C";
+                L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 \u5DF2\u6682\u505C (P \u7EE7\u7EED)";
         } else if (status == ComicAppCruiseStatus::Boundary) {
             m_app.m_comic_transient_text =
                 L"\u81EA\u52A8\u6EDA\u52A8 \u00B7 \u5DF2\u5230\u8FB9\u754C";
@@ -2799,6 +2830,7 @@ public:
 
     void begin_tick_clock() {
         m_app.m_comic_last_tick_ms = GetTickCount64();
+        m_app.m_comic_advance_last.QuadPart = 0;  // fresh QPC window
     }
 
     bool start_middle(
@@ -2915,7 +2947,10 @@ ComicControlsRenderInput App::comic_controls_snapshot() const {
         m_comic_autoscroll_anchor_x,
         m_comic_autoscroll_anchor_y,
         m_comic_autoscroll_pointer_x,
-        m_comic_autoscroll_pointer_y};
+        m_comic_autoscroll_pointer_y,
+        m_comic_reader.width_factor(),
+        m_comic_reader.cruise_active(),
+        m_comic_reader.cruise_paused()};
 }
 
 bool App::dispatch_comic_command(ComicAppCommand command) {
@@ -2939,6 +2974,7 @@ void App::cancel_comic_auto_scroll(ComicAppCancelTrigger trigger) {
 void App::reset_comic_controls(ComicAppCancelTrigger trigger) {
     cancel_comic_auto_scroll(trigger);
     finish_comic_scrollbar_drag();
+    m_comic_width_dragging = false;
     m_comic_scrollbar_hover = false;
     clear_comic_transient();
     m_comic_current_filename.clear();
@@ -2971,17 +3007,20 @@ void App::stop_comic_timer() {
 }
 
 void App::handle_comic_timer(HWND) {
+    // The scroll advance is render-driven (QPC); this timer only expires
+    // transient overlays and wakes the render loop.
     const ULONGLONG now = GetTickCount64();
-    const ULONGLONG previous = m_comic_last_tick_ms;
     m_comic_last_tick_ms = now;
-    const float elapsed = previous > 0 && now >= previous
-        ? static_cast<float>(now - previous) / 1000.0f
-        : 0.0f;
     const bool transient_expired =
         m_comic_transient_kind != ComicTransientOverlayKind::None
         && now >= m_comic_transient_until_ms;
     AppComicPort port(*this);
-    (void)ComicAppController::timer_tick(port, elapsed, transient_expired);
+    if (transient_expired) {
+        port.clear_all_transient();
+        port.invalidate();
+    }
+    ComicAppController::stop_timer_if_idle(port);
+    if (port.owner() != ComicAppAutoOwner::None) port.invalidate();
 }
 
 void App::clear_comic_transient() {
@@ -3004,6 +3043,42 @@ void App::finish_comic_scrollbar_drag() {
     m_comic_scrollbar_grab_offset_y = 0.0f;
     HWND hwnd = m_window.handle();
     if (hwnd && GetCapture() == hwnd) ReleaseCapture();
+}
+
+void App::advance_comic_autoscroll_render() {
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    float dt = 0.0f;
+    if (m_comic_advance_last.QuadPart != 0
+        && now.QuadPart >= m_comic_advance_last.QuadPart) {
+        dt = static_cast<float>(
+            now.QuadPart - m_comic_advance_last.QuadPart)
+            / static_cast<float>(freq.QuadPart);
+    }
+    m_comic_advance_last = now;
+    AppComicPort port(*this);
+    if (ComicAppController::advance(port, dt))
+        m_window.invalidate();
+}
+
+void App::set_comic_width_factor_direct(float factor) {
+    if (!m_comic_reader.enabled()) return;
+    m_comic_reader.set_width_factor(factor);
+    clear_comic_cache();
+    sync_comic_current();
+    request_comic_pages();
+    m_window.invalidate();
+}
+
+void App::apply_comic_width_slider_x(
+    const ComicControlsLayout& controls, float x) {
+    const ComicWidthSliderLayout& slider = controls.width_slider;
+    const float track_w = slider.track.right - slider.track.left;
+    if (!slider.visible || track_w <= 0.0f) return;
+    const float t = std::clamp(
+        (x - slider.track.left) / track_w, 0.0f, 1.0f);
+    set_comic_width_factor_direct(0.5f + 1.5f * t);
 }
 
 void App::sync_comic_current() {
@@ -5441,6 +5516,10 @@ void App::grid_render() {
 void App::render_frame() {
     advance_transition_animation();
     check_async_timeout();
+    if (m_comic_reader.auto_scroll_owner()
+        != mv::ComicAutoScrollOwner::None) {
+        advance_comic_autoscroll_render();
+    }
     if (m_grid_mode) {
         grid_render();
         return;

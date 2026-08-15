@@ -237,6 +237,15 @@ struct ComicTextOverlayLayout {
     std::wstring_view text;
 };
 
+// Explicit page-width drag slider (mouse-direct width control).
+struct ComicWidthSliderLayout {
+    bool visible = false;
+    ComicRenderRect track;
+    float thumb_x = 0.0f;
+    float thumb_y = 0.0f;
+    float thumb_radius = 0.0f;
+};
+
 struct ComicAutoscrollLayout {
     bool visible = false;
     ComicAutoscrollDirection direction = ComicAutoscrollDirection::Stationary;
@@ -275,6 +284,9 @@ struct ComicControlsRenderInput {
     float autoscroll_anchor_y = 0.0f;
     float autoscroll_pointer_x = 0.0f;
     float autoscroll_pointer_y = 0.0f;
+    float width_factor = 1.0f;   // page-width slider position 0.5..2.0
+    bool cruise_active = false;  // persistent cruise indicator
+    bool cruise_paused = false;
 };
 
 struct ComicControlsLayout {
@@ -284,6 +296,7 @@ struct ComicControlsLayout {
     ComicTextOverlayLayout page_badge;
     ComicTextOverlayLayout transient_overlay;
     ComicAutoscrollLayout autoscroll;
+    ComicWidthSliderLayout width_slider;
 };
 
 inline float normalize_render_dpi(float dpi) noexcept {
@@ -587,7 +600,37 @@ inline ComicControlsLayout build_comic_controls_layout(
             }
         }
     }
+
+    // Page-width drag slider, bottom-right of the comic viewport.
+    {
+        const float scale = layout.metrics.dpi_scale;
+        const float track_w = 160.0f * scale;
+        const float track_h = 4.0f * scale;
+        const float margin = 26.0f * scale;
+        const float track_y = layout.viewport.bottom - margin;
+        const float track_right = layout.viewport.right - margin;
+        const float track_left = track_right - track_w;
+        if (track_left > layout.viewport.left + margin) {
+            layout.width_slider.visible = true;
+            layout.width_slider.track = {
+                track_left, track_y - track_h * 0.5f,
+                track_right, track_y + track_h * 0.5f};
+            const float t = (input.width_factor - 0.5f) / 1.5f;
+            layout.width_slider.thumb_x = track_left
+                + std::clamp(t, 0.0f, 1.0f) * track_w;
+            layout.width_slider.thumb_y = track_y;
+            layout.width_slider.thumb_radius = 7.0f * scale;
+        }
+    }
     return layout;
+}
+
+inline bool hit_test_comic_width_slider(
+    const ComicWidthSliderLayout& slider, float x, float y) {
+    if (!slider.visible) return false;
+    const float pad = 12.0f;
+    return x >= slider.track.left - pad && x <= slider.track.right + pad
+        && y >= slider.track.top - pad && y <= slider.track.bottom + pad;
 }
 
 inline ComicRenderPlan build_comic_render_plan(

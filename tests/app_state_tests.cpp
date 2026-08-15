@@ -35,6 +35,7 @@ struct FakeComicAppPort {
     bool timer_value = false;
     bool timer_start_result = true;
     bool transient_value = false;
+    bool cruise_paused_value = false;
     float advance_result = 0.0f;
     bool stop_owner_on_advance = false;
     std::vector<std::string> calls;
@@ -47,15 +48,26 @@ struct FakeComicAppPort {
 
     bool toggle_cruise() {
         calls.push_back("toggle_cruise");
+        if (cruise_paused_value) {
+            cruise_paused_value = false;
+            owner_value = toggle_result
+                ? mv::ComicAppAutoOwner::Cruise
+                : mv::ComicAppAutoOwner::None;
+            return toggle_result;
+        }
         if (owner_value == mv::ComicAppAutoOwner::Cruise) {
             owner_value = mv::ComicAppAutoOwner::None;
+            cruise_paused_value = true;
             return false;
         }
+        cruise_paused_value = false;
         owner_value = toggle_result
             ? mv::ComicAppAutoOwner::Cruise
             : mv::ComicAppAutoOwner::None;
         return toggle_result;
     }
+
+    bool cruise_paused() const { return cruise_paused_value; }
 
     void set_speed(int speed) {
         speed_value = std::clamp(speed, 0, 3);

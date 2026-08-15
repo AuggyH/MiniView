@@ -494,6 +494,7 @@ void test_autoscroll_cancel_reason_matrix() {
         case CancelAction::ToggleOff:
             expect(model.start_cruise(), "toggle cancellation requires active cruise");
             model.toggle_cruise();
+            expect(model.cruise_paused(), "P while cruising must pause, not just stop");
             break;
         case CancelAction::Scrollbar:
             expect(model.start_cruise(), "scrollbar cancellation requires active cruise");
@@ -534,6 +535,33 @@ void test_autoscroll_cancel_reason_matrix() {
         model.page_down();
         expect(model.last_auto_scroll_cancel_reason() == cancel_case.expected,
             "generic operations with no owner must not overwrite a precise reason");
+    }
+
+    // ── Cruise pause/resume (P toggles pause, not just stop) ──
+    {
+        mv::ComicReaderModel model = make_reader();
+        const float before = model.scroll_metrics().scroll;
+        expect(model.start_cruise(), "pause test needs an active cruise");
+        expect(!model.toggle_cruise() && model.cruise_paused(),
+            "P while cruising pauses");
+        model.advance_cruise(0.5f);
+        expect(model.scroll_metrics().scroll == before,
+            "paused cruise must not advance");
+        expect(model.toggle_cruise() && !model.cruise_paused(),
+            "P while paused resumes");
+        model.advance_cruise(0.5f);
+        expect(model.scroll_metrics().scroll > before,
+            "resumed cruise advances");
+        expect(!model.toggle_cruise() && model.cruise_paused(),
+            "pause again");
+        model.cancel_auto_scroll(
+            mv::ComicAutoScrollCancelReason::LeftButton);
+        expect(!model.cruise_paused(),
+            "manual input disarms the pause");
+        expect(model.start_middle_autoscroll(100.0f),
+            "middle replaces a paused cruise");
+        expect(!model.cruise_paused(),
+            "middle start clears the pause");
     }
 
     constexpr mv::ComicAutoScrollCancelReason precise_reasons[] = {

@@ -1010,6 +1010,57 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         }
     }
 
+    // Page-width drag slider (explicit mouse-direct width control).
+    if (layout.width_slider.visible) {
+        const ComicWidthSliderLayout& slider = layout.width_slider;
+        ComPtr<ID2D1SolidColorBrush> track;
+        ComPtr<ID2D1SolidColorBrush> thumb;
+        ComPtr<ID2D1SolidColorBrush> label;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.30f, 0.30f, 0.36f, 0.9f), &track);
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.62f, 0.62f, 0.70f, 1.0f), &thumb);
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.55f, 0.55f, 0.60f, 1.0f), &label);
+        m_d2d_context->FillRoundedRectangle(
+            D2D1::RoundedRect(
+                D2D1::RectF(slider.track.left, slider.track.top,
+                    slider.track.right, slider.track.bottom),
+                2.0f, 2.0f),
+            track.Get());
+        const D2D1_ELLIPSE knob = {
+            {slider.thumb_x, slider.thumb_y},
+            slider.thumb_radius, slider.thumb_radius};
+        m_d2d_context->FillEllipse(&knob, thumb.Get());
+        const std::wstring label_text = L"页宽";
+        const float dpi_s = m_dpi_y / 96.0f;
+        const float lw = measure_text(label_text, 11.0f * dpi_s);
+        const float lh = label_height(label_text, lw + 4.0f, 11.0f, 1);
+        draw_text_line(slider.track.left - lw - 8.0f * dpi_s,
+            slider.thumb_y - lh * 0.5f, lw + 4.0f, label_text,
+            label.Get(), 11.0f, nullptr, 1);
+    }
+
+    // Persistent cruise indicator (visible while cruising or paused).
+    if (input.cruise_active || input.cruise_paused) {
+        const std::wstring text = input.cruise_paused
+            ? L"⏸ 已暂停 (P 继续)"
+            : L"▶ 巡航中";
+        const float dpi_s = m_dpi_y / 96.0f;
+        const float fs = 11.0f;
+        const float tw2 = measure_text(text, fs * dpi_s);
+        ComPtr<ID2D1SolidColorBrush> cruise_br;
+        m_d2d_context->CreateSolidColorBrush(
+            D2D1::ColorF(0.55f, 0.62f, 0.72f, 1.0f), &cruise_br);
+        const float th2 = label_height(text, tw2 + 4.0f, fs, 1);
+        draw_text_line(
+            layout.viewport.right - layout.metrics.edge_margin
+                - tw2 - 8.0f * dpi_s,
+            layout.viewport.top + layout.metrics.edge_margin,
+            tw2 + 4.0f, text, cruise_br.Get(), fs, nullptr, 1);
+        (void)th2;
+    }
+
     m_d2d_context->PopAxisAlignedClip();
 }
 

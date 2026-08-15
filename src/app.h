@@ -380,6 +380,15 @@ private:
     float m_comic_autoscroll_anchor_y = 0.0f;
     float m_comic_autoscroll_pointer_x = 0.0f;
     float m_comic_autoscroll_pointer_y = 0.0f;
+    // Render-driven autoscroll advance (QPC): WM_TIMER pacing caused
+    // visible judder on cruise and middle-button scrolling.
+    LARGE_INTEGER m_comic_advance_last = {};
+    // Explicit page-width drag slider (mouse-direct, no modifier keys).
+    bool m_comic_width_dragging = false;
+    void advance_comic_autoscroll_render();
+    void set_comic_width_factor_direct(float factor);
+    void apply_comic_width_slider_x(
+        const ComicControlsLayout& controls, float x);
 
     // Metadata extraction runs off the UI/render thread.
     std::thread m_metadata_thread;

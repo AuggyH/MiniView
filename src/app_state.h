@@ -76,7 +76,7 @@ public:
                 port.begin_tick_clock();
                 port.show_cruise_status(ComicAppCruiseStatus::Speed);
             } else {
-                port.show_cruise_status(previous == ComicAppAutoOwner::Cruise
+                port.show_cruise_status(port.cruise_paused()
                     ? ComicAppCruiseStatus::Paused
                     : ComicAppCruiseStatus::Boundary);
             }
@@ -140,6 +140,26 @@ public:
             port.set_middle_cursor(false);
         }
         port.invalidate();
+        return true;
+    }
+
+    // Render-driven scroll advance: the autoscroll paces itself by real
+    // elapsed time at the frame rate (WM_TIMER jitter caused visible
+    // judder). Returns true when a redraw is required.
+    template <typename Port>
+    static bool advance(Port& port, float elapsed_seconds) {
+        const ComicAppAutoOwner owner = port.owner();
+        float applied = 0.0f;
+        if (owner == ComicAppAutoOwner::Cruise) {
+            applied = port.advance_cruise(elapsed_seconds);
+        } else if (owner == ComicAppAutoOwner::Middle) {
+            applied = port.advance_middle(elapsed_seconds);
+        } else {
+            return false;
+        }
+        if (applied == 0.0f) return false;
+        port.sync_page();
+        port.request_pages();
         return true;
     }
 

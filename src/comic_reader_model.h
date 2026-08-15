@@ -305,6 +305,7 @@ public:
     bool cruise_active() const noexcept {
         return m_auto_scroll_owner == ComicAutoScrollOwner::Cruise;
     }
+    bool cruise_paused() const noexcept { return m_cruise_paused; }
     bool middle_autoscroll_active() const noexcept {
         return m_auto_scroll_owner == ComicAutoScrollOwner::Middle;
     }
@@ -325,10 +326,17 @@ public:
     }
 
     bool toggle_cruise() noexcept {
+        if (m_cruise_paused) {
+            // P again resumes from where the pause left off.
+            m_cruise_paused = false;
+            return start_cruise();
+        }
         if (cruise_active()) {
             cancel_auto_scroll(ComicAutoScrollCancelReason::ToggleOff);
+            m_cruise_paused = true;  // explicit pause (cancel cleared it)
             return false;
         }
+        m_cruise_paused = false;
         return start_cruise();
     }
 
@@ -346,14 +354,20 @@ public:
             m_last_auto_scroll_cancel_reason = ComicAutoScrollCancelReason::None;
         }
         m_middle_anchor_y = anchor_y;
+        m_cruise_paused = false;  // middle scroll replaces a paused cruise
         m_auto_scroll_owner = ComicAutoScrollOwner::Middle;
         return true;
     }
 
     void cancel_auto_scroll(ComicAutoScrollCancelReason reason) noexcept {
-        if (m_auto_scroll_owner == ComicAutoScrollOwner::None) return;
+        if (m_auto_scroll_owner == ComicAutoScrollOwner::None) {
+            // Manual input while paused disarms the pause too.
+            m_cruise_paused = false;
+            return;
+        }
         m_auto_scroll_owner = ComicAutoScrollOwner::None;
         m_middle_anchor_y = 0.0f;
+        m_cruise_paused = false;  // any real stop disarms the pause
         m_last_auto_scroll_cancel_reason = reason;
     }
 
@@ -746,6 +760,7 @@ private:
     std::optional<ComicPageChangeEvent> m_page_change_event;
     int m_cruise_speed_index = 1;
     float m_middle_anchor_y = 0.0f;
+    bool m_cruise_paused = false;  // P toggles pause/resume, not just stop
 };
 
 class ComicLruBudget {
