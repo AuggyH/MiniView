@@ -643,6 +643,28 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     }
 }
 
+void Renderer::draw_favourite_badge(float x, float y, float size) {
+    if (!m_d2d_context || !m_dwrite_factory || size <= 0.0f) return;
+    ComPtr<ID2D1SolidColorBrush> chip, heart;
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.10f, 0.10f, 0.11f, 0.92f), &chip);
+    m_d2d_context->CreateSolidColorBrush(
+        D2D1::ColorF(0.92f, 0.32f, 0.42f, 1.0f), &heart);
+    const D2D1_RECT_F rect = D2D1::RectF(x, y, x + size, y + size);
+    const float radius = size * 0.3f;
+    m_d2d_context->FillRoundedRectangle(
+        D2D1::RoundedRect(rect, radius, radius), chip.Get());
+    m_d2d_context->DrawRoundedRectangle(
+        D2D1::RoundedRect(rect, radius, radius), heart.Get(), 1.0f);
+    const std::wstring glyph = L"\u2665";
+    const float dpi_s = m_dpi_y > 0.0f ? m_dpi_y / 96.0f : 1.0f;
+    const float fs = size * 0.55f / dpi_s;
+    const float gw = measure_text(glyph, fs * dpi_s);
+    const float gh = label_height(glyph, gw + 4.0f, fs, 1);
+    draw_text_line(x + (size - gw) * 0.5f, y + (size - gh) * 0.5f,
+        gw + 4.0f, glyph, heart.Get(), fs, nullptr, 1);
+}
+
 void Renderer::draw_comic_page(
     ID2D1Bitmap1* bitmap, D2D1_RECT_F destination) {
     draw_comic_bitmap(
@@ -1943,8 +1965,9 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
         m_d2d_context->DrawRoundedRectangle(
             D2D1::RoundedRect(tgl, 4.0f * dpi_s, 4.0f * dpi_s),
             line_br.Get(), 1.0f);
-        const std::wstring view_label =
-            input.icons_view ? L"图标" : L"树形";
+        const std::wstring view_label = input.icons_mode == 3
+            ? L"3×3"
+            : input.icons_mode == 2 ? L"2×2" : L"树形";
         const float vw = measure_text(view_label, fs * dpi_s);
         const float vh = label_height(view_label, vw + 4.0f, fs, 1);
         draw_text_line(g.toggle_x + (g.toggle_w - vw) * 0.5f,
@@ -1962,8 +1985,16 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
                 g.tree_y + g.tree_h);
             m_d2d_context->PushAxisAlignedClip(&clip,
                 D2D1_ANTIALIAS_MODE_ALIASED);
-            for (int i = 0;
-                 i < static_cast<int>(input.album_rows->size()); ++i) {
+            int list_count = static_cast<int>(input.album_rows->size());
+            if (input.icons_mode > 0) {
+                list_count = 0;
+                while (list_count
+                        < static_cast<int>(input.album_rows->size())
+                    && (*input.album_rows)[static_cast<size_t>(list_count)].kind
+                        != AlbumPanelRow::Kind::Folder)
+                    ++list_count;
+            }
+            for (int i = 0; i < list_count; ++i) {
                 const auto& row =
                     (*input.album_rows)[static_cast<size_t>(i)];
                 const float y = g.tree_y + pad
@@ -2016,6 +2047,89 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
                 if (count_w > 0.0f) {
                     draw_text_line(row_right - count_w, ty,
                         count_w + 4.0f, count_text, dim_br.Get(),
+                        small_fs, nullptr, 1);
+                }
+            }
+            if (input.icons_mode > 0) {
+                const auto cells = build_folder_icon_layout(
+                    *input.album_rows, g, input.icons_mode, dpi_s);
+                for (const auto& cell : cells) {
+                    if (cell.y >= g.tree_y + g.tree_h) break;
+                    const auto& row = (*input.album_rows)
+                        [static_cast<size_t>(cell.row_index)];
+                    const D2D1_RECT_F rect = D2D1::RectF(
+                        cell.x, cell.y, cell.x + cell.w, cell.y + cell.h);
+                    m_d2d_context->FillRoundedRectangle(
+                        D2D1::RoundedRect(rect, 4.0f * dpi_s,
+                            4.0f * dpi_s),
+                        hover_bg.Get());
+                    ID2D1SolidColorBrush* border = line_br.Get();
+                    if (row.error) border = error_br.Get();
+                    else if (cell.row_index == input.album_row_hover)
+                        border = accent_br.Get();
+                    m_d2d_context->DrawRoundedRectangle(
+                        D2D1::RoundedRect(rect, 4.0f * dpi_s,
+                            4.0f * dpi_s),
+                        border, row.error ? 2.0f : 1.0f);
+                    if (row.error) {
+                        const std::wstring tag = L"路径无效";
+                        const float tw =
+                            measure_text(tag, small_fs * dpi_s);
+                        const float th2 =
+                            label_height(tag, tw + 4.0f, small_fs, 1);
+                        draw_text_line(cell.x + (cell.w - tw) * 0.5f,
+                            cell.y + (cell.h - th2) * 0.5f, tw + 4.0f,
+                            tag, error_br.Get(), small_fs, nullptr, 1);
+                    } else if (input.folder_tiles
+                        && cell.row_index
+                            < static_cast<int>(input.folder_tiles->size())) {
+                        const auto& tiles = (*input.folder_tiles)
+                            [static_cast<size_t>(cell.row_index)].tiles;
+                        if (!tiles.empty()) {
+                            const float half_w = cell.w * 0.5f;
+                            const float half_h = cell.h * 0.5f;
+                            for (size_t t = 0;
+                                 t < tiles.size() && t < 4; ++t) {
+                                if (!tiles[t]) continue;
+                                const D2D1_SIZE_F src = tiles[t]->GetSize();
+                                if (src.width <= 0.0f || src.height <= 0.0f)
+                                    continue;
+                                const float sx = static_cast<float>(t % 2)
+                                    * half_w;
+                                const float sy = static_cast<float>(t / 2)
+                                    * half_h;
+                                const D2D1_RECT_F dest = D2D1::RectF(
+                                    cell.x + sx, cell.y + sy,
+                                    cell.x + sx + half_w,
+                                    cell.y + sy + half_h);
+                                // center-crop into the quadrant
+                                const float scale = std::max(
+                                    half_w / src.width,
+                                    half_h / src.height);
+                                const float cw = half_w / scale;
+                                const float ch = half_h / scale;
+                                const D2D1_RECT_F src_rect = D2D1::RectF(
+                                    (src.width - cw) * 0.5f,
+                                    (src.height - ch) * 0.5f,
+                                    (src.width + cw) * 0.5f,
+                                    (src.height + ch) * 0.5f);
+                                m_d2d_context->DrawBitmap(tiles[t].Get(),
+                                    dest, 1.0f,
+                                    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                                    src_rect);
+                            }
+                        }
+                    }
+                    std::wstring name = row.name;
+                    const size_t sep = name.find_last_of(L"\\/");
+                    if (sep != std::wstring::npos)
+                        name = name.substr(sep + 1);
+                    if (row.recursive) name += L" *";
+                    const float nw = std::min(cell.w + 8.0f * dpi_s,
+                        measure_text(name, small_fs * dpi_s) + 4.0f);
+                    draw_text_line(cell.x + (cell.w - nw) * 0.5f,
+                        cell.label_y, nw, name,
+                        row.error ? error_br.Get() : dim_br.Get(),
                         small_fs, nullptr, 1);
                 }
             }

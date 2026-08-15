@@ -91,7 +91,7 @@ int main() {
     // ── 序列化 → 解析 往返 ──
     {
         AlbumStore store;
-        store.folder_view = AlbumFolderView::Icons;
+        store.folder_view = AlbumFolderView::Icons2;
         mv::add_album(store, L"发布素材");
         mv::add_album(store, L"4K 图库");
         mv::add_folder(store, 0, L"D:\\AIGC\\Assets", false);
@@ -103,7 +103,7 @@ int main() {
         const auto parsed = mv::parse_album_store(json);
         expect(parsed.has_value(), "round-trip parses");
         if (parsed) {
-            expect(parsed->folder_view == AlbumFolderView::Icons,
+            expect(parsed->folder_view == AlbumFolderView::Icons2,
                 "view mode preserved");
             expect(parsed->albums.size() == 2, "albums preserved");
             expect(parsed->albums[0].name == L"发布素材", "album name utf8");
@@ -122,6 +122,23 @@ int main() {
         if (parsed) {
             const std::string json2 = mv::serialize_album_store(*parsed);
             expect(json2 == json, "serialize idempotent");
+        }
+
+        // 三态视图模式 + 旧版 "icons" 兼容
+        {
+            AlbumStore s2;
+            s2.folder_view = AlbumFolderView::Icons3;
+            const auto p3 = mv::parse_album_store(mv::serialize_album_store(s2));
+            expect(p3.has_value(), "icons3 round-trip parses");
+            if (p3)
+                expect(p3->folder_view == AlbumFolderView::Icons3,
+                    "icons3 preserved");
+            const auto legacy = mv::parse_album_store(
+                "{\"folder_view\": \"icons\"}");
+            expect(legacy.has_value(), "legacy icons parses");
+            if (legacy)
+                expect(legacy->folder_view == AlbumFolderView::Icons2,
+                    "legacy icons = 2x2");
         }
     }
 

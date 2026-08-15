@@ -36,6 +36,16 @@ constexpr UINT WM_NAV_SCAN_READY = WM_APP + 5;
 constexpr UINT WM_NAV_TREE_READY = WM_APP + 6;
 constexpr UINT WM_IMAGE_READY = WM_APP + 7;  // async big-image decode done
 constexpr UINT WM_DIR_CHANGED = WM_APP + 8;    // watched directory changed
+constexpr UINT WM_FOLDER_ICON_READY = WM_APP + 9; // folder-icon tile decoded
+
+// Heap result from the folder-icon worker; the UI thread converts the WIC
+// source into a D2D bitmap and deletes this struct.
+struct FolderIconResult {
+    std::wstring folder;
+    int tile = 0;
+    Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
+    bool failed = false;
+};
 
 static std::uint64_t wic_source_bytes(IWICBitmapSource* src);
 constexpr UINT_PTR kComicTimerId = 5;
@@ -599,6 +609,7 @@ int App::run(const std::wstring& initial_path) {
     stop_metadata_loader();
     stop_nav_workers();
     stop_async_pool();
+    stop_folder_icon_worker();
     return ret;
 }
 
@@ -976,6 +987,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         request_collection_refresh();
         return 0;
 
+    case WM_FOLDER_ICON_READY:
+        handle_folder_icon_ready(lp);
+        return 0;
+
     case WM_IMAGE_READY: {
         // Async big-image decode finished on a worker. Finish on the UI
         // thread: materialize + upload + commit. Stale generations (user
@@ -1048,6 +1063,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const auto& g = m_nav_panel_geometry;
             if (g.w > 0.0f && pt.y >= g.tree_y
                 && pt.y < g.tree_y + g.tree_h) {
+                if (m_album_store.folder_view != AlbumFolderView::Tree) {
+                    const int cell_row = album_icon_hit(pt.x, pt.y);
+                    if (cell_row >= 0) {
+                        const auto& row = m_album_rows
+                            [static_cast<size_t>(cell_row)];
+                        m_album_menu_target =
+                            {row.album_index, row.folder_index, true};
+                        show_album_row_menu(hwnd, cx, cy);
+                        return 0;
+                    }
+                }
                 const int idx = album_row_hit(pt.x, pt.y);
                 if (idx >= 0) {
                     const auto& row =
@@ -1710,7 +1736,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             cycle_nav_focus();
             return 0;
         }
+        // The directory tree owns arrow/return navigation; the album tab
+        // has none, so its clicks release the panel focus and main-area
+        // shortcuts (F/N/D/S/R/A/L/Space) keep working there.
         if (m_nav_panel_state.focused()
+            && m_nav_panel_state.tab() == NavPanelTab::Directories
             && handle_nav_panel_key(hwnd, wp, ctrl, shift)) {
             return 0;
         }
@@ -1830,6 +1860,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return -1;
         case 'L':
             return toggle_grid_labels() ? 0 : -1;
+        case 'F':
+            if (!m_ime_composing) { toggle_favourite_current(); return 0; }
+            return -1;
         case 'I':
             toggle_info(); return 0;
         case 'M':
@@ -3170,12 +3203,52 @@ DeleteCompositionState App::capture_delete_state() const {
 }
 
 void App::remove_delete_indices(const std::vector<int>& indices) {
+    // Deleted files leave the fixed favourite album too (Issue #5 P3c).
+    bool fav_changed = false;
+    for (const int idx : indices) {
+        if (idx >= 0 && idx < static_cast<int>(m_index.size())
+            && mv::remove_favourite(m_album_store,
+                m_index.path_at(static_cast<size_t>(idx))))
+            fav_changed = true;
+    }
+    if (fav_changed) save_album_store();
     m_index.remove_many(indices);
     if (m_comic_reader.enabled()) {
         rebuild_comic_pages();
         sync_comic_current();
         request_comic_pages();
     }
+}
+
+bool App::primary_is_favourite() const {
+    std::wstring path;
+    if (m_grid_mode) {
+        if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
+            path = m_index.path_at(static_cast<size_t>(m_grid_sel));
+    } else if (m_has_image) {
+        path = m_current_path;
+    }
+    return !path.empty() && mv::is_favourite(m_album_store, path);
+}
+
+void App::toggle_favourite_current() {
+    std::wstring path;
+    if (m_grid_mode) {
+        if (m_grid_sel >= 0 && m_grid_sel < static_cast<int>(m_index.size()))
+            path = m_index.path_at(static_cast<size_t>(m_grid_sel));
+    } else if (m_has_image) {
+        path = m_current_path;
+    }
+    if (path.empty()) return;
+    if (mv::is_favourite(m_album_store, path))
+        mv::remove_favourite(m_album_store, path);
+    else
+        mv::add_favourite(m_album_store, path);
+    save_album_store();
+    // The favourite album itself must reflect the toggle immediately: the
+    // dir watcher only fires on file-system changes, not list edits.
+    if (m_fav_selected) request_collection_refresh();
+    m_window.invalidate();
 }
 
 bool App::open_delete_successor(const std::wstring& path, int index) {
@@ -3266,6 +3339,9 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         AppendMenuW(menu, copy_flags, 2, L"\u590D\u5236	Ctrl+C");
         AppendMenuW(menu, MF_STRING, 8, L"\u590D\u5236\u6587\u4EF6\u8DEF\u5F84");
         AppendMenuW(menu, MF_STRING, 9, L"\u521B\u5EFA\u526F\u672C");
+        AppendMenuW(menu,
+            MF_STRING | (primary_is_favourite() ? MF_CHECKED : 0), 14,
+            L"\u6536\u85CF\tF");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
         if (m_grid_mode) {
@@ -3291,6 +3367,9 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
         }
     } else {
         AppendMenuW(menu, MF_STRING, 5, L"\u6253\u5F00\u6587\u4EF6...");
+        AppendMenuW(menu,
+            MF_STRING | (primary_is_favourite() ? MF_CHECKED : 0), 14,
+            L"\u6536\u85CF\tF");
     }
 
     if (x == -1 && y == -1) {
@@ -3334,6 +3413,7 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
     case 11: if (m_grid_mode) set_sort_mode(SortMode::Date);   break;
     case 12: if (m_grid_mode) set_sort_mode(SortMode::Size);   break;
     case 13: if (m_grid_mode) set_sort_mode(SortMode::Random); break;
+    case 14: toggle_favourite_current(); break;
     }
 
     DestroyMenu(menu);
@@ -5130,6 +5210,13 @@ void App::grid_render() {
                     row_y + row.row_h + 2};
                 m_renderer.draw_selection_border(rect);
             }
+            if (mv::is_favourite(
+                    m_album_store, m_index.path_at(index))) {
+                const float badge = 20.0f * dpi_scale;
+                m_renderer.draw_favourite_badge(
+                    x + width - badge - 3.0f * dpi_scale,
+                    row_y + 3.0f * dpi_scale, badge);
+            }
             if (m_show_labels) {
                 const auto& path = m_index.path_at(index);
                 size_t separator = path.find_last_of(L"\\/");
@@ -5577,9 +5664,17 @@ void App::open_album_collection(int index) {
 }
 
 void App::toggle_album_folder_view() {
-    m_album_store.folder_view =
-        m_album_store.folder_view == AlbumFolderView::Tree
-            ? AlbumFolderView::Icons : AlbumFolderView::Tree;
+    switch (m_album_store.folder_view) {
+    case AlbumFolderView::Tree:
+        m_album_store.folder_view = AlbumFolderView::Icons2;
+        break;
+    case AlbumFolderView::Icons2:
+        m_album_store.folder_view = AlbumFolderView::Icons3;
+        break;
+    case AlbumFolderView::Icons3:
+        m_album_store.folder_view = AlbumFolderView::Tree;
+        break;
+    }
     save_album_store();
     m_window.invalidate();
 }
@@ -5728,6 +5823,192 @@ void App::show_album_row_menu(HWND hwnd, int x, int y) {
     DestroyMenu(menu);
 }
 
+// ── Folder-icon grid (Issue #5 P3c) ─────────────────────────────
+
+static bool path_under_folder(const std::wstring& path,
+    const std::wstring& folder) {
+    size_t len = folder.size();
+    while (len > 0
+        && (folder[len - 1] == L'\\' || folder[len - 1] == L'/'))
+        --len;
+    if (len == 0 || path.size() < len) return false;
+    if (_wcsnicmp(path.c_str(), folder.c_str(), len) != 0) return false;
+    if (path.size() == len) return true;
+    const wchar_t c = path[len];
+    return c == L'\\' || c == L'/';
+}
+
+void App::rebuild_folder_samples() {
+    if (m_fav_selected || m_album_sel < 0
+        || m_album_sel >= static_cast<int>(m_album_store.albums.size()))
+        return;
+    const auto& album =
+        m_album_store.albums[static_cast<size_t>(m_album_sel)];
+    std::vector<std::vector<std::wstring>> per_folder(album.folders.size());
+    const size_t n = m_index.size();
+    for (size_t i = 0; i < n; ++i) {
+        const std::wstring& path = m_index.path_at(i);
+        for (size_t f = 0; f < album.folders.size(); ++f) {
+            if (path_under_folder(path, album.folders[f].path)) {
+                per_folder[f].push_back(path);
+                break;  // first matching folder wins
+            }
+        }
+    }
+    m_folder_samples.clear();
+    for (size_t f = 0; f < album.folders.size(); ++f) {
+        const auto& list = per_folder[f];
+        std::vector<std::wstring> samples;
+        const size_t k = list.size();
+        if (k == 1) {
+            samples.push_back(list[0]);
+        } else if (k == 2) {
+            samples.push_back(list[0]);
+            samples.push_back(list[1]);
+        } else if (k == 3) {
+            samples.push_back(list[0]);
+            samples.push_back(list[1]);
+            samples.push_back(list[2]);
+        } else if (k >= 4) {
+            samples.push_back(list[0]);
+            samples.push_back(list[k / 4]);
+            samples.push_back(list[k / 2]);
+            samples.push_back(list[3 * k / 4]);
+        }
+        m_folder_samples[album.folders[f].path] = std::move(samples);
+    }
+    m_folder_icon_cache.clear();
+}
+
+void App::start_folder_icon_worker() {
+    if (m_folder_icon_thread.joinable()) return;
+    m_folder_icon_stop = false;
+    m_folder_icon_thread = std::thread([this]() {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        try {
+            Decoder decoder;
+            for (;;) {
+                FolderIconJob job;
+                {
+                    std::unique_lock lock(m_folder_icon_mutex);
+                    m_folder_icon_cv.wait(lock, [this] {
+                        return m_folder_icon_stop
+                            || !m_folder_icon_queue.empty();
+                    });
+                    if (m_folder_icon_stop) break;
+                    job = std::move(m_folder_icon_queue.front());
+                    m_folder_icon_queue.pop_front();
+                }
+                auto result = std::make_unique<FolderIconResult>();
+                result->folder = job.folder;
+                result->tile = job.tile;
+                try {
+                    result->wic = decoder.decode_scaled(job.path, 160);
+                    if (!result->wic) result->failed = true;
+                } catch (...) {
+                    result->failed = true;
+                }
+                {
+                    std::lock_guard lock(m_folder_icon_mutex);
+                    m_folder_icon_inflight.erase(
+                        job.folder + L"#" + std::to_wstring(job.tile));
+                }
+                if (m_window.handle())
+                    PostMessageW(m_window.handle(), WM_FOLDER_ICON_READY,
+                        0, reinterpret_cast<LPARAM>(result.release()));
+            }
+        } catch (...) {
+        }
+        CoUninitialize();
+    });
+}
+
+void App::stop_folder_icon_worker() {
+    {
+        std::lock_guard lock(m_folder_icon_mutex);
+        m_folder_icon_stop = true;
+    }
+    m_folder_icon_cv.notify_all();
+    if (m_folder_icon_thread.joinable()) m_folder_icon_thread.join();
+}
+
+void App::enqueue_folder_icons() {
+    if (m_album_rows.size() != m_folder_icon_tiles.size()) return;
+    bool queued = false;
+    {
+        std::lock_guard lock(m_folder_icon_mutex);
+        for (size_t i = 0; i < m_album_rows.size(); ++i) {
+            if (m_folder_icon_queue.size() >= 64) break;
+            const auto& row = m_album_rows[i];
+            if (row.kind != AlbumPanelRow::Kind::Folder || row.error)
+                continue;
+            const auto& tiles = m_folder_icon_tiles[i].tiles;
+            const auto samples = m_folder_samples.find(row.name);
+            if (samples == m_folder_samples.end()) continue;
+            const size_t want =
+                std::min<size_t>(4, samples->second.size());
+            if (want == 0) continue;
+            for (size_t t = 0; t < want; ++t) {
+                if (t < tiles.size()) continue;
+                const std::wstring key =
+                    row.name + L"#" + std::to_wstring(t);
+                if (m_folder_icon_inflight.count(key)) continue;
+                m_folder_icon_inflight.insert(key);
+                m_folder_icon_queue.push_back(FolderIconJob{
+                    row.name, samples->second[t], static_cast<int>(t)});
+                queued = true;
+            }
+        }
+    }
+    if (queued) {
+        m_folder_icon_cv.notify_all();
+        start_folder_icon_worker();
+    }
+}
+
+void App::handle_folder_icon_ready(LPARAM payload) {
+    std::unique_ptr<FolderIconResult> result(
+        reinterpret_cast<FolderIconResult*>(payload));
+    if (!result) return;
+    auto& tiles = m_folder_icon_cache[result->folder];
+    const int t = result->tile;
+    if (t >= 0 && !result->failed && result->wic) {
+        ComPtr<ID2D1Bitmap1> bitmap;
+        if (SUCCEEDED(m_renderer.create_bitmap_from_wic(
+                result->wic.Get(), &bitmap)) && bitmap) {
+            if (static_cast<int>(tiles.size()) <= t)
+                tiles.resize(static_cast<size_t>(t) + 1);
+            tiles[static_cast<size_t>(t)] = bitmap;
+        }
+    } else if (t >= 0) {
+        // Failed decode: the null slot marks the tile complete so the
+        // worker does not retry the same broken file every frame.
+        if (static_cast<int>(tiles.size()) <= t)
+            tiles.resize(static_cast<size_t>(t) + 1);
+    }
+    m_window.invalidate();
+}
+
+int App::album_icon_hit(int x, int y) {
+    const auto& g = m_nav_panel_geometry;
+    if (g.w <= 0.0f) return -1;
+    const int cols =
+        m_album_store.folder_view == AlbumFolderView::Icons3 ? 3 : 2;
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const auto cells =
+        build_folder_icon_layout(m_album_rows, g, cols, dpi_s);
+    for (const auto& cell : cells) {
+        if (static_cast<float>(x) >= cell.x
+            && static_cast<float>(x) < cell.x + cell.w
+            && static_cast<float>(y) >= cell.y
+            && static_cast<float>(y)
+                < cell.y + cell.h + 18.0f * dpi_s)
+            return cell.row_index;
+    }
+    return -1;
+}
+
 void App::request_collection_refresh() {
     if (m_watch_roots.empty() && m_index.directory().empty()
         && !m_fav_selected && !(!m_active_album_name.empty())) return;
@@ -5769,6 +6050,7 @@ void App::apply_collection_refresh(NavScanResult&& result) {
     }
 
     m_index = std::move(result.index);
+    if (!result.album_name.empty()) rebuild_folder_samples();
 
     // Re-locate the current image in the refreshed index.
     if (!m_current_path.empty()) {
@@ -5885,6 +6167,11 @@ void App::apply_nav_scan_result() {
     if (action == CollectionApplyAction::EnterGrid) {
         toggle_grid();  // enters grid with no default selection
     } else {
+        // Selection vector must match the fresh index even when the switch
+        // lands while already in grid mode: otherwise clicks update only
+        // m_grid_sel (not m_selected) and grid delete / the selection
+        // context menu stay disabled.
+        m_selected.assign(m_index.size(), false);
         start_thumb_loader();
         clamp_grid_scroll();
     }
@@ -5892,6 +6179,7 @@ void App::apply_nav_scan_result() {
     update_content_viewport(!m_grid_mode);
     m_active_album_name = result.album_name;
     if (!result.album_name.empty()) {
+        rebuild_folder_samples();
         // Album/favourite collection: keep the grid state, skip lastdir.
     } else {
         m_album_sel = -1;
@@ -6102,8 +6390,19 @@ void App::render_nav_panel(float x, float y, float w, float h) {
     input.dpi_scale = dpi_s;
     input.album_rows = &m_album_rows;
     input.album_row_hover = m_album_row_hover;
-    input.icons_view =
-        m_album_store.folder_view == AlbumFolderView::Icons;
+    input.icons_mode = m_album_store.folder_view == AlbumFolderView::Icons3
+        ? 3
+        : m_album_store.folder_view == AlbumFolderView::Icons2 ? 2 : 0;
+    m_folder_icon_tiles.clear();
+    m_folder_icon_tiles.resize(m_album_rows.size());
+    for (size_t i = 0; i < m_album_rows.size(); ++i) {
+        if (m_album_rows[i].kind != AlbumPanelRow::Kind::Folder) continue;
+        const auto it = m_folder_icon_cache.find(m_album_rows[i].name);
+        if (it != m_folder_icon_cache.end())
+            m_folder_icon_tiles[i].tiles = it->second;
+    }
+    input.folder_tiles = &m_folder_icon_tiles;
+    if (input.icons_mode > 0) enqueue_folder_icons();
     m_renderer.draw_nav_panel(input);
 }
 
@@ -6174,6 +6473,7 @@ bool App::nav_panel_hit_test(int x, int y) {
             && x >= g.toggle_x && x < g.toggle_x + g.toggle_w
             && y >= g.toggle_y && y < g.toggle_y + g.toggle_h) {
             toggle_album_folder_view();
+            m_nav_panel_state.release_focus();
             return true;
         }
         const float pad = layout::kNavPadDip * dpi_s;
@@ -6186,6 +6486,8 @@ bool App::nav_panel_hit_test(int x, int y) {
         const float w_fav = m_renderer.measure_text(L"\u6536\u85CF", fs);
         if (x >= tx && x < tx + w_fav)
             m_nav_panel_state.set_tab(NavPanelTab::Favorites);
+        if (m_nav_panel_state.tab() == NavPanelTab::Favorites)
+            m_nav_panel_state.release_focus();
         m_window.invalidate();
         return true;
     }
@@ -6194,6 +6496,16 @@ bool App::nav_panel_hit_test(int x, int y) {
     // Tree viewport
     if (y >= g.tree_y && y < g.tree_y + g.tree_h) {
         if (m_nav_panel_state.tab() == NavPanelTab::Favorites) {
+            if (m_album_store.folder_view != AlbumFolderView::Tree) {
+                const int cell_row = album_icon_hit(x, y);
+                if (cell_row >= 0) {
+                    const auto& row =
+                        m_album_rows[static_cast<size_t>(cell_row)];
+                    switch_collection(row.name, row.recursive);
+                    m_nav_panel_state.release_focus();
+                    return true;
+                }
+            }
             const int idx = album_row_hit(x, y);
             if (idx >= 0) {
                 const auto& row = m_album_rows[static_cast<size_t>(idx)];
@@ -6201,7 +6513,10 @@ bool App::nav_panel_hit_test(int x, int y) {
                     open_favourites_collection();
                 else if (row.kind == AlbumPanelRow::Kind::Album)
                     open_album_collection(row.album_index);
+                else if (row.kind == AlbumPanelRow::Kind::Folder)
+                    switch_collection(row.name, row.recursive);
             }
+            m_nav_panel_state.release_focus();
             return true;
         }
         const float indent = layout::kNavIndentDip * dpi_s;
@@ -6300,16 +6615,23 @@ void App::nav_panel_mouse_move(int x, int y) {
                     m_nav_panel_breadcrumb, static_cast<float>(x));
             } else if (y >= g.tree_y && y < g.tree_y + g.tree_h) {
                 if (m_nav_panel_state.tab() == NavPanelTab::Favorites) {
-                    const float dpi_s = static_cast<float>(
-                        GetDpiForWindow(m_window.handle())) / 96.0f;
-                    const float row_h = layout::kNavRowHeightDip * dpi_s;
-                    const float pad = layout::kNavPadDip * dpi_s;
-                    const int idx = static_cast<int>(
-                        (static_cast<float>(y) - g.tree_y - pad) / row_h);
-                    m_album_row_hover =
-                        (idx >= 0
+                    int hover = -1;
+                    if (m_album_store.folder_view != AlbumFolderView::Tree)
+                        hover = album_icon_hit(x, y);
+                    if (hover < 0) {
+                        const float dpi_s = static_cast<float>(
+                            GetDpiForWindow(m_window.handle())) / 96.0f;
+                        const float row_h =
+                            layout::kNavRowHeightDip * dpi_s;
+                        const float pad = layout::kNavPadDip * dpi_s;
+                        const int idx = static_cast<int>(
+                            (static_cast<float>(y) - g.tree_y - pad)
+                                / row_h);
+                        hover = (idx >= 0
                             && idx < static_cast<int>(m_album_rows.size()))
                             ? idx : -1;
+                    }
+                    m_album_row_hover = hover;
                 } else {
                     for (int i = 0;
                          i < static_cast<int>(m_nav_rows.size()); ++i) {

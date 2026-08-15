@@ -15,7 +15,7 @@
 
 namespace mv {
 
-enum class AlbumFolderView { Tree, Icons };
+enum class AlbumFolderView { Tree, Icons2, Icons3 };
 
 struct AlbumFolder {
     std::wstring path;

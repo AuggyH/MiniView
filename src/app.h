@@ -304,6 +304,32 @@ private:
         bool folder_row = false;
     } m_album_menu_target;
     void    build_album_rows(std::vector<AlbumPanelRow>& rows);
+    // Folder-icon grid (Issue #5 P3c): per-folder sample paths + async
+    // tile decode into a small D2D cache.
+    std::unordered_map<std::wstring, std::vector<std::wstring>>
+        m_folder_samples;
+    std::unordered_map<std::wstring,
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap>>> m_folder_icon_cache;
+    std::vector<FolderIconTiles> m_folder_icon_tiles;  // parallel to rows
+    struct FolderIconJob {
+        std::wstring folder;
+        std::wstring path;
+        int tile = 0;
+    };
+    std::mutex m_folder_icon_mutex;
+    std::condition_variable m_folder_icon_cv;
+    std::deque<FolderIconJob> m_folder_icon_queue;
+    std::unordered_set<std::wstring> m_folder_icon_inflight;
+    bool m_folder_icon_stop = false;
+    std::thread m_folder_icon_thread;
+    void    start_folder_icon_worker();
+    void    stop_folder_icon_worker();
+    void    rebuild_folder_samples();
+    void    enqueue_folder_icons();
+    void    handle_folder_icon_ready(LPARAM payload);
+    int     album_icon_hit(int x, int y);
+    void    toggle_favourite_current();
+    bool    primary_is_favourite() const;
     std::wstring m_active_album_name;  // breadcrumb label (empty = dir)
     void    load_album_store();
     void    save_album_store();

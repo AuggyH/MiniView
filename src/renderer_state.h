@@ -4,6 +4,9 @@
 #include "layout.h"
 #include "navstate.h"
 
+#include <d2d1.h>
+#include <wrl/client.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -713,6 +716,62 @@ struct AlbumPanelRow {
     int folder_index = -1;   // folder position (Folder rows)
 };
 
+// Folder-icon collage tiles (Issue #5 P3c): up to 4 sampled thumbs per
+// folder, uploaded as D2D bitmaps by the folder-icon worker.
+struct FolderIconTiles {
+    std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap>> tiles;
+};
+
+struct FolderIconCell {
+    int row_index = -1;   // AlbumPanelRow index (Folder kind)
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+    float label_y = 0.0f;
+};
+
+// Icon-grid layout for the selected album\'s folder rows: list rows
+// (favourites + albums) keep the tree layout; folder rows become square
+// cells with 2 or 3 per row. Returns cells in row order.
+inline std::vector<FolderIconCell> build_folder_icon_layout(
+    const std::vector<AlbumPanelRow>& rows, const NavPanelGeometry& g,
+    int cols, float dpi_scale) {
+    std::vector<FolderIconCell> cells;
+    int list_count = 0;
+    while (list_count < static_cast<int>(rows.size())
+        && rows[static_cast<size_t>(list_count)].kind
+            != AlbumPanelRow::Kind::Folder)
+        ++list_count;
+    const float row_h = layout::kNavRowHeightDip * dpi_scale;
+    const float pad = layout::kNavPadDip * dpi_scale;
+    const float grid_y = g.tree_y + pad
+        + static_cast<float>(list_count) * row_h
+        + layout::kNavPadDip * dpi_scale;
+    const float gap = layout::kNavPadDip * dpi_scale;
+    const float avail = g.tree_w - g.scrollbar_w
+        - pad * 2.0f - 4.0f * dpi_scale;
+    const float cell_w = std::max(24.0f,
+        (avail - gap * static_cast<float>(cols - 1))
+            / static_cast<float>(cols));
+    const float label_h = 18.0f * dpi_scale;
+    int index = 0;
+    for (int i = list_count; i < static_cast<int>(rows.size()); ++i) {
+        FolderIconCell cell;
+        cell.row_index = i;
+        cell.w = cell_w;
+        cell.h = cell_w;
+        cell.x = g.tree_x + pad
+            + static_cast<float>(index % cols) * (cell_w + gap);
+        cell.y = grid_y
+            + static_cast<float>(index / cols) * (cell_w + label_h + gap);
+        cell.label_y = cell.y + cell.h + 2.0f * dpi_scale;
+        cells.push_back(cell);
+        ++index;
+    }
+    return cells;
+}
+
 struct NavPanelRenderInput {
     NavPanelGeometry geometry;
     const NavBreadcrumbLayout* breadcrumb = nullptr;
@@ -731,7 +790,8 @@ struct NavPanelRenderInput {
     // Album/favourite tab (Issue #5 P3)
     const std::vector<AlbumPanelRow>* album_rows = nullptr;
     int album_row_hover = -1;
-    bool icons_view = false;   // folder icons toggle state
+    int icons_mode = 0;        // 0 = tree, 2 = icon grid 2 cols, 3 = 3 cols
+    const std::vector<FolderIconTiles>* folder_tiles = nullptr;  // parallel to album_rows
 };
 
 } // namespace mv

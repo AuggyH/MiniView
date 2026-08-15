@@ -156,9 +156,12 @@ std::string serialize_album_store(const AlbumStore& store) {
     std::string out;
     out += "{\n";
     out += "  \"version\": 1,\n";
-    out += "  \"folder_view\": \""
-        + std::string(store.folder_view == AlbumFolderView::Tree
-            ? "tree" : "icons") + "\",\n";
+    const char* view_name = "tree";
+    if (store.folder_view == AlbumFolderView::Icons2) view_name = "icons2";
+    else if (store.folder_view == AlbumFolderView::Icons3) view_name = "icons3";
+    out += "  \"folder_view\": \"";
+    out += view_name;
+    out += "\",\n";
     out += "  \"favourites\": [";
     for (std::size_t i = 0; i < store.favourites.size(); ++i) {
         if (i) out.push_back(',');
@@ -343,7 +346,10 @@ std::optional<AlbumStore> parse_album_store(const std::string& json) {
         } else if (*key == "folder_view") {
             const auto value = cursor.parse_string();
             if (!value) return std::nullopt;
-            if (*value == "icons") store.folder_view = AlbumFolderView::Icons;
+            if (*value == "icons3")
+                store.folder_view = AlbumFolderView::Icons3;
+            else if (*value == "icons" || *value == "icons2")
+                store.folder_view = AlbumFolderView::Icons2;
             else store.folder_view = AlbumFolderView::Tree;
         } else if (*key == "favourites") {
             if (!cursor.expect('[')) return std::nullopt;
