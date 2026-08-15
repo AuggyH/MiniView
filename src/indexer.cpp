@@ -171,10 +171,27 @@ int ImageIndex::scan(const std::wstring& directory, bool recursive) {
     m_path_to_idx.clear();
     m_root_dir = directory;
 
+    std::unordered_set<std::wstring> seen;
+    const int added = scan_directory(directory, recursive, seen);
+    if (added < 0) return -1;
+
+    // Apply current sort mode (Name by default, or by-path for recursive)
+    if (m_sort_mode == SortMode::Name && recursive)
+        sort_by_path();
+    else
+        sort_by(m_sort_mode);
+
+    return static_cast<int>(m_files.size());
+}
+
+int ImageIndex::scan_directory(const std::wstring& directory, bool recursive,
+        std::unordered_set<std::wstring>& seen) {
     std::error_code error;
     if (!fs::is_directory(directory, error) || error) {
         return -1;
     }
+
+    const std::size_t before = m_files.size();
 
     auto add_entry = [&](const fs::directory_entry& entry) {
         std::error_code entry_error;
@@ -184,8 +201,12 @@ int ImageIndex::scan(const std::wstring& directory, bool recursive) {
         for (auto& c : ext) c = static_cast<wchar_t>(towlower(c));
         if (!is_image_ext(ext)) return;
 
+        const std::wstring full = entry.path().wstring();
+        const std::wstring key = normalize_path_key(full);
+        if (!seen.insert(key).second) return;  // cross-root dedupe
+
         ImageEntry image;
-        image.path = entry.path().wstring();
+        image.path = full;
         image.name = entry.path().filename().wstring();
         image.size = entry.file_size(entry_error);
         if (entry_error) {
@@ -217,13 +238,50 @@ int ImageIndex::scan(const std::wstring& directory, bool recursive) {
             if (error) error.clear();
         }
     }
+    return static_cast<int>(m_files.size() - before);
+}
 
-    // Apply current sort mode (Name by default, or by-path for recursive)
-    if (m_sort_mode == SortMode::Name && recursive)
-        sort_by_path();
-    else
-        sort_by(m_sort_mode);
+int ImageIndex::scan_many(const std::vector<ScanRoot>& roots) {
+    m_files.clear();
+    m_path_to_idx.clear();
+    m_root_dir.clear();
 
+    std::unordered_set<std::wstring> seen;
+    for (const auto& root : roots) {
+        (void)scan_directory(root.path, root.recursive, seen);
+    }
+    sort_by(m_sort_mode);
+    return static_cast<int>(m_files.size());
+}
+
+int ImageIndex::load_paths(const std::vector<std::wstring>& paths) {
+    m_files.clear();
+    m_path_to_idx.clear();
+    m_root_dir.clear();
+
+    std::unordered_set<std::wstring> seen;
+    for (const auto& path : paths) {
+        std::error_code error;
+        const fs::path fs_path(path);
+        if (!fs::is_regular_file(fs_path, error) || error) continue;  // moved/deleted
+
+        auto ext = fs_path.extension().wstring();
+        for (auto& c : ext) c = static_cast<wchar_t>(towlower(c));
+        if (!is_image_ext(ext)) continue;
+
+        const std::wstring key = normalize_path_key(path);
+        if (!seen.insert(key).second) continue;  // duplicate favourite
+
+        ImageEntry image;
+        image.path = path;
+        image.name = fs_path.filename().wstring();
+        image.size = fs::file_size(fs_path, error);
+        if (error) { error.clear(); image.size = 0; }
+        image.mtime = fs::last_write_time(fs_path, error).time_since_epoch().count();
+        if (error) image.mtime = 0;
+        m_files.push_back(std::move(image));
+    }
+    sort_by(m_sort_mode);
     return static_cast<int>(m_files.size());
 }
 

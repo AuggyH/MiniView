@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 #include <cwctype>
 
 namespace fs = std::filesystem;
@@ -176,6 +177,72 @@ int main() {
     }
     expect(!fs::exists(unicode_fixture_path),
         "the isolated Unicode path fixture should be removed after the test");
+
+    // ── 多根合并扫描(相册) ──
+    {
+        TempDirectory multi;
+        const fs::path mroot = multi.path();
+        const fs::path root_a = mroot / L"album-a";
+        const fs::path root_b = mroot / L"album-b";
+        fs::create_directories(root_a / L"sub");
+        fs::create_directories(root_b);
+        write_file(root_a / L"a1.png", 1);
+        write_file(root_a / L"sub" / L"a2.png", 2);
+        write_file(root_a / L"a3.png", 1);
+        write_file(root_b / L"b1.jpg", 3);
+
+        mv::ImageIndex multi_index;
+        const std::vector<mv::ScanRoot> roots{
+            {root_a.wstring(), true},
+            {root_b.wstring(), false},
+            {root_a.wstring(), false},   // 重复根 → 不重复计数
+        };
+        const int count = multi_index.scan_many(roots);
+        expect(count == 4,
+            "scan_many should merge roots and dedupe overlapping paths");
+        expect(multi_index.directory().empty(),
+            "multi-root index has no single root directory");
+        expect(multi_index.index_of((root_a / L"sub" / L"a2.png").wstring()) >= 0,
+            "recursive root content indexed");
+        expect(multi_index.index_of((root_b / L"b1.jpg").wstring()) >= 0,
+            "flat root content indexed");
+        expect(multi_index.size() == 4, "no duplicates across roots");
+
+        // 不可读根被跳过,不失败
+        const std::vector<mv::ScanRoot> bad_roots{
+            {(mroot / L"missing").wstring(), true},
+            {root_b.wstring(), false},
+        };
+        mv::ImageIndex tolerant_index;
+        expect(tolerant_index.scan_many(bad_roots) == 1,
+            "unreadable roots are skipped in scan_many");
+    }
+
+    // ── 显式路径列表(固定收藏相册) ──
+    {
+        TempDirectory fav;
+        const fs::path froot = fav.path();
+        write_file(froot / L"f1.png", 1);
+        write_file(froot / L"f2.jpg", 2);
+        write_file(froot / L"gone.png", 1);
+        const fs::path gone = froot / L"gone.png";
+        fs::remove(gone);
+
+        mv::ImageIndex fav_index;
+        const std::vector<std::wstring> paths{
+            (froot / L"f1.png").wstring(),
+            (froot / L"f2.jpg").wstring(),
+            gone.wstring(),                    // 已删除 → 跳过
+            (froot / L"f1.png").wstring(),     // 重复 → 去重
+        };
+        const int count = fav_index.load_paths(paths);
+        expect(count == 2,
+            "load_paths should skip missing paths and dedupe");
+        expect(fav_index.index_of((froot / L"f2.jpg").wstring()) >= 0,
+            "explicit path indexed");
+        expect(fav_index.directory().empty(),
+            "path-list index has no root directory");
+    }
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";
