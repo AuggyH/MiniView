@@ -399,9 +399,39 @@ void test_native_owner_menu_state() {
     DestroyMenu(menu);
 }
 
+void test_transition_interrupt_planning() {
+    using D = mv::TransitionDirection;
+    using T = mv::TransitionTrigger;
+    using A = mv::TransitionInterruptAction;
+    expect(mv::plan_transition_interrupt({D::None, T::Space}) == A::None,
+        "no animation -> no action");
+    expect(mv::plan_transition_interrupt({D::ToImage, T::Space}) == A::Reverse,
+        "space during entry reverses");
+    expect(mv::plan_transition_interrupt({D::ToGrid, T::Space}) == A::Reverse,
+        "space during exit reverses");
+    expect(mv::plan_transition_interrupt({D::ToImage, T::DoubleClick})
+            == A::Reverse,
+        "double-click during entry reverses");
+    expect(mv::plan_transition_interrupt({D::ToGrid, T::DoubleClick})
+            == A::Reverse,
+        "double-click during exit reverses");
+    expect(mv::plan_transition_interrupt({D::ToImage, T::Escape}) == A::Reverse,
+        "escape during entry reverses toward grid");
+    expect(mv::plan_transition_interrupt({D::ToGrid, T::Escape})
+            == A::FastForward,
+        "escape during exit fast-forwards");
+    expect(mv::plan_transition_interrupt({D::ToImage, T::ArrowLeft})
+            == A::FastForwardAndNavigate,
+        "arrow during entry completes then navigates");
+    expect(mv::plan_transition_interrupt({D::ToGrid, T::ArrowRight})
+            == A::FastForwardAndNavigate,
+        "arrow during exit completes then navigates");
+}
+
 } // namespace
 
 int main() {
+    test_transition_interrupt_planning();
     using mv::OpenInputRoute;
     const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     expect(SUCCEEDED(com_result), "COM must initialize for the corrupt PNG decoder fixture");

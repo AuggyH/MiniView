@@ -611,4 +611,44 @@ inline PostDeleteTransitionResult run_post_delete_transition(
     return result;
 }
 
+// ── Transition interrupt planning (Issue #7) ──────────────────────
+// The grid↔image transition commits its mode at animation start and plays
+// a 300ms cosmetic animation. Inputs arriving mid-flight are classified:
+// Space/double-click reverse (snapshot the current frame, flip the mode
+// back, continue from 1-t); Escape always heads to the grid (reverse an
+// entry, fast-forward an exit); arrows fast-forward the current transition
+// and then navigate.
+enum class TransitionDirection { None, ToImage, ToGrid };
+enum class TransitionTrigger { Space, Escape, DoubleClick, ArrowLeft, ArrowRight };
+enum class TransitionInterruptAction {
+    None,
+    Reverse,
+    FastForward,
+    FastForwardAndNavigate,
+};
+
+struct TransitionInterruptInput {
+    TransitionDirection direction = TransitionDirection::None;
+    TransitionTrigger trigger = TransitionTrigger::Space;
+};
+
+inline TransitionInterruptAction plan_transition_interrupt(
+    const TransitionInterruptInput& input) {
+    if (input.direction == TransitionDirection::None)
+        return TransitionInterruptAction::None;
+    switch (input.trigger) {
+    case TransitionTrigger::Space:
+    case TransitionTrigger::DoubleClick:
+        return TransitionInterruptAction::Reverse;
+    case TransitionTrigger::Escape:
+        return input.direction == TransitionDirection::ToImage
+            ? TransitionInterruptAction::Reverse
+            : TransitionInterruptAction::FastForward;
+    case TransitionTrigger::ArrowLeft:
+    case TransitionTrigger::ArrowRight:
+        return TransitionInterruptAction::FastForwardAndNavigate;
+    }
+    return TransitionInterruptAction::None;
+}
+
 } // namespace mv

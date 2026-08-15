@@ -481,6 +481,13 @@ private:
     D2D1_RECT_F m_anim_dst = {};
     bool  m_anim_forward = true;
     float m_anim_iw = 1, m_anim_ih = 1;  // target image size for animation
+    // Transition interrupt (Issue #7): a reversed animation draws a
+    // snapshot of the interrupted composite frame zooming to the target.
+    bool m_anim_reversed = false;
+    void interrupt_transition(mv::TransitionTrigger trigger, int nav_dir);
+    void reverse_transition();
+    void finish_transition_now();
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> capture_window_frame();
 
     // Filmstrip state (Issue #5 P1)
     FilmstripModel m_filmstrip;

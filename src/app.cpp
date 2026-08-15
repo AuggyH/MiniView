@@ -930,6 +930,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_anim_t = 1.0f;
                 m_animating = false;
                 m_anim_thumb.Reset();
+                m_anim_reversed = false;
                 KillTimer(hwnd, 4);
                 m_anim_timer = 0;
             }
@@ -1647,7 +1648,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
 
     case WM_LBUTTONDBLCLK:
-        if (m_animating) return 0;  // TODO: re-enable interrupt
+        if (m_animating) {
+            interrupt_transition(mv::TransitionTrigger::DoubleClick, 0);
+            return 0;
+        }
         // Double-click on the filmstrip: no-op (single click already jumps).
         if (filmstrip_visible()
             && filmstrip_hit_test(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)) >= -1) {
@@ -1808,7 +1812,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (m_comic_reader.enabled()) { adjust_comic_width(-0.10f); return 0; }
             return -1;
         case VK_ESCAPE:
-            if (m_animating) return 0;  // TODO: re-enable interrupt
+            if (m_animating) {
+                interrupt_transition(mv::TransitionTrigger::Escape, 0);
+                return 0;
+            }
             if (m_comic_reader.enabled() && !leave_comic_reader(true)) return 0;
             if (route_grid_exit(GridExitTrigger::Escape,
                     GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
@@ -1822,7 +1829,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case VK_F11:   toggle_fullscreen(hwnd); return 0;
         case VK_SPACE: {
-            if (m_animating) return 0;  // TODO: re-enable interrupt
+            if (m_animating) {
+                interrupt_transition(mv::TransitionTrigger::Space, 0);
+                return 0;
+            }
             if (m_comic_reader.enabled() && !leave_comic_reader(true)) return 0;
             if (route_grid_exit(GridExitTrigger::Space,
                     GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
@@ -1886,6 +1896,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Random); return 0; }
             return -1;
         case VK_LEFT:
+            if (m_animating) {
+                interrupt_transition(mv::TransitionTrigger::ArrowLeft, -1);
+                return 0;
+            }
             if (m_grid_mode) { grid_navigate(-1, shift); return 0; }
             if (m_comic_reader.enabled()) {
                 cancel_comic_auto_scroll(
@@ -1893,6 +1907,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             navigate_to(m_current_idx - 1); return 0;
         case VK_RIGHT:
+            if (m_animating) {
+                interrupt_transition(mv::TransitionTrigger::ArrowRight, 1);
+                return 0;
+            }
             if (m_grid_mode) { grid_navigate(1, shift); return 0; }
             if (m_comic_reader.enabled()) {
                 cancel_comic_auto_scroll(
@@ -3861,6 +3879,7 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
     if (m_animating) return;
     m_anim_forward = forward;
     m_anim_thumb.Reset();
+    m_anim_reversed = false;
     m_anim_iw = 0.0f;
     m_anim_ih = 0.0f;
     m_last_cached_sel = -1;  // force m_anim_src recalculation on next grid_render
@@ -4331,6 +4350,7 @@ void App::advance_transition_animation() {
         m_anim_t = 1.0f;
         m_animating = false;
         m_anim_thumb.Reset();
+        m_anim_reversed = false;
         if (m_anim_timer) {
             KillTimer(m_window.handle(), 4);
             m_anim_timer = 0;
@@ -4338,6 +4358,126 @@ void App::advance_transition_animation() {
     } else {
         // Keep frames flowing until the transition finishes.
         m_window.invalidate();
+    }
+}
+
+void App::finish_transition_now() {
+    if (!m_animating) return;
+    m_anim_t = 1.0f;
+    advance_transition_animation();
+}
+
+ComPtr<ID2D1Bitmap1> App::capture_window_frame() {
+    const uint32_t w = m_renderer.target_size().width;
+    const uint32_t h = m_renderer.target_size().height;
+    if (w == 0 || h == 0) return nullptr;
+    HDC win_dc = GetDC(m_window.handle());
+    HDC mem_dc = CreateCompatibleDC(win_dc);
+    HBITMAP hbmp = CreateCompatibleBitmap(
+        win_dc, static_cast<int>(w), static_cast<int>(h));
+    HGDIOBJ old = SelectObject(mem_dc, hbmp);
+    const BOOL ok = PrintWindow(m_window.handle(), mem_dc, 2);
+    SelectObject(mem_dc, old);
+    DeleteDC(mem_dc);
+    ReleaseDC(m_window.handle(), win_dc);
+    if (!ok) {
+        DeleteObject(hbmp);
+        return nullptr;
+    }
+    ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+            CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory))) || !factory) {
+        DeleteObject(hbmp);
+        return nullptr;
+    }
+    ComPtr<IWICBitmap> wic;
+    const HRESULT hr = factory->CreateBitmapFromHBITMAP(
+        hbmp, nullptr, WICBitmapIgnoreAlpha, &wic);
+    DeleteObject(hbmp);
+    if (FAILED(hr) || !wic) return nullptr;
+    ComPtr<ID2D1Bitmap1> d2d;
+    if (FAILED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d)))
+        return nullptr;
+    return d2d;
+}
+
+void App::reverse_transition() {
+    // Snapshot first: the capture renders one frame (WM_PRINT → WM_PAINT),
+    // which may advance the animation slightly — reading m_anim_t after it
+    // keeps the continuation exact.
+    ComPtr<ID2D1Bitmap1> snap = capture_window_frame();
+    if (!m_animating) return;  // completed inside the capture
+    const float t = m_anim_t;
+    const bool to_image = !m_anim_forward;
+
+    // Commit the opposite mode. The grid context survives an entry (the
+    // selection and layout are untouched) and the image context survives
+    // an exit (current path/bitmap stay loaded). Keep the mode invariant:
+    // grid mode must never retain m_from_grid (Space in grid reads it via
+    // route_grid_exit BEFORE route_grid_entry).
+    toggle_grid();
+    m_from_grid = to_image;
+
+    const uint32_t tw = m_renderer.target_size().width;
+    const uint32_t th = m_renderer.target_size().height;
+    const D2D1_RECT_F full = D2D1::RectF(0.0f, 0.0f,
+        static_cast<float>(tw), static_cast<float>(th));
+    D2D1_RECT_F dst = full;
+    if (to_image) {
+        float iw = m_anim_iw, ih = m_anim_ih;
+        if (iw < 1.0f) iw = 1.0f;
+        if (ih < 1.0f) ih = 1.0f;
+        const float view_w = static_cast<float>(tw) - nav_panel_width()
+            - visible_panel_width();
+        const float view_h = static_cast<float>(th) - m_toolbar_h;
+        const float scale = std::min(view_w / iw, view_h / ih);
+        const float w2 = iw * scale;
+        const float h2 = ih * scale;
+        const float x = nav_panel_width() + (view_w - w2) * 0.5f;
+        const float y = m_toolbar_h + (view_h - h2) * 0.5f;
+        dst = {x, y, x + w2, y + h2};
+    } else if (m_anim_src.right > m_anim_src.left
+        && m_anim_src.bottom > m_anim_src.top) {
+        // Back to the grid: land in the thumb cell the entry came from.
+        dst = m_anim_src;
+    }
+
+    m_anim_forward = to_image;
+    m_anim_src = full;
+    m_anim_dst = dst;
+    m_anim_thumb = snap;
+    m_anim_reversed = true;
+    m_anim_t = 1.0f - t;
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    m_anim_start = now.QuadPart - static_cast<LONGLONG>(
+        m_anim_t * 0.30f * static_cast<double>(freq.QuadPart));
+    m_window.invalidate();
+}
+
+void App::interrupt_transition(mv::TransitionTrigger trigger, int nav_dir) {
+    if (!m_animating) return;
+    const mv::TransitionDirection dir = m_anim_forward
+        ? mv::TransitionDirection::ToImage
+        : mv::TransitionDirection::ToGrid;
+    switch (mv::plan_transition_interrupt({dir, trigger})) {
+    case mv::TransitionInterruptAction::None:
+        return;
+    case mv::TransitionInterruptAction::Reverse:
+        reverse_transition();
+        return;
+    case mv::TransitionInterruptAction::FastForward:
+        finish_transition_now();
+        return;
+    case mv::TransitionInterruptAction::FastForwardAndNavigate:
+        finish_transition_now();
+        if (m_grid_mode) {
+            grid_navigate(nav_dir, false);
+        } else if (m_has_image) {
+            navigate_to(m_current_idx + nav_dir);
+        }
+        return;
     }
 }
 
@@ -5277,10 +5417,17 @@ void App::grid_render() {
             float height = image_h * scale;
             float x = nav_panel_width() + (view_width - width) * 0.5f;
             float y = m_toolbar_h + (view_height - height) * 0.5f;
-            if (m_anim_forward) m_anim_dst = {x, y, x + width, y + height};
-            else { m_anim_dst = m_anim_src; m_anim_src = {x, y, x + width, y + height}; }
+            if (!m_anim_reversed) {
+                if (m_anim_forward)
+                    m_anim_dst = {x, y, x + width, y + height};
+                else {
+                    m_anim_dst = m_anim_src;
+                    m_anim_src = {x, y, x + width, y + height};
+                }
+            }
         }
-        m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
+        if (!m_anim_reversed)
+            m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
@@ -5411,14 +5558,17 @@ void App::render_frame() {
             float dw = iw * s, dh = ih * s;
             float dx = m_renderer.content_left() + (view_w - dw) * 0.5f;
             float dy = content_top + (view_h - dh) * 0.5f;
-            if (m_anim_forward)
-                m_anim_dst = {dx, dy, dx + dw, dy + dh};
-            else {
-                m_anim_dst = m_anim_src;
-                m_anim_src = {dx, dy, dx + dw, dy + dh};
+            if (!m_anim_reversed) {
+                if (m_anim_forward)
+                    m_anim_dst = {dx, dy, dx + dw, dy + dh};
+                else {
+                    m_anim_dst = m_anim_src;
+                    m_anim_src = {dx, dy, dx + dw, dy + dh};
+                }
             }
         }
-        m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
+        if (!m_anim_reversed)
+            m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
         if (m_anim_thumb)
             m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
     }
