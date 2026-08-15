@@ -500,6 +500,10 @@ private:
     // background covers as its opacity goes 0 -> 100%.
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_anim_grid_snapshot;
     void interrupt_transition(mv::TransitionTrigger trigger, int nav_dir);
+    // Draws the transition overlay (background veil + zoom layer) for the
+    // current composition; shared by the image and grid render paths so
+    // the reversed runs draw identically.
+    void draw_transition_overlay();
     void reverse_transition();
     void finish_transition_now();
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> capture_window_frame();

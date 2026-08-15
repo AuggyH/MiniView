@@ -4572,51 +4572,14 @@ ComPtr<ID2D1Bitmap1> App::capture_window_frame() {
 }
 
 void App::reverse_transition() {
-    // Snapshot first: the capture renders one frame (WM_PRINT → WM_PAINT),
-    // which may advance the animation slightly — reading m_anim_t after it
-    // keeps the continuation exact.
-    ComPtr<ID2D1Bitmap1> snap = capture_window_frame();
-    if (!m_animating) return;  // completed inside the capture
+    if (!m_animating) return;
     const float t = m_anim_t;
-    const bool to_image = !m_anim_forward;
-
-    // Commit the opposite mode. The grid context survives an entry (the
-    // selection and layout are untouched) and the image context survives
-    // an exit (current path/bitmap stay loaded). Keep the mode invariant:
-    // grid mode must never retain m_from_grid (Space in grid reads it via
-    // route_grid_exit BEFORE route_grid_entry).
-    toggle_grid();
-    m_from_grid = to_image;
-
-    const uint32_t tw = m_renderer.target_size().width;
-    const uint32_t th = m_renderer.target_size().height;
-    const D2D1_RECT_F full = D2D1::RectF(0.0f, 0.0f,
-        static_cast<float>(tw), static_cast<float>(th));
-    D2D1_RECT_F dst = full;
-    if (to_image) {
-        float iw = m_anim_iw, ih = m_anim_ih;
-        if (iw < 1.0f) iw = 1.0f;
-        if (ih < 1.0f) ih = 1.0f;
-        const float view_w = static_cast<float>(tw) - nav_panel_width()
-            - visible_panel_width();
-        const float view_h = static_cast<float>(th) - m_toolbar_h;
-        const float scale = std::min(view_w / iw, view_h / ih);
-        const float w2 = iw * scale;
-        const float h2 = ih * scale;
-        const float x = nav_panel_width() + (view_w - w2) * 0.5f;
-        const float y = m_toolbar_h + (view_h - h2) * 0.5f;
-        dst = {x, y, x + w2, y + h2};
-    } else if (m_anim_src.right > m_anim_src.left
-        && m_anim_src.bottom > m_anim_src.top) {
-        // Back to the grid: land in the thumb cell the entry came from.
-        dst = m_anim_src;
-    }
-
-    m_anim_forward = to_image;
-    m_anim_src = full;
-    m_anim_dst = dst;
-    m_anim_thumb = snap;
-    m_anim_reversed = true;
+    // The reversal re-runs the CURRENT composition backward: the same
+    // three transforms (background opacity, translation, scale) rewind in
+    // place — a whole-window snapshot must never enter the animation.
+    m_anim_reversed = !m_anim_reversed;
+    toggle_grid();  // commit the run's new target mode
+    m_from_grid = (m_anim_forward != m_anim_reversed);
     m_anim_t = 1.0f - t;
     LARGE_INTEGER now, freq;
     QueryPerformanceCounter(&now);
@@ -4626,11 +4589,70 @@ void App::reverse_transition() {
     m_window.invalidate();
 }
 
+// Draws the transition overlay for the current composition. The entry
+// (forward) layers a grid snapshot, the solid background veil fading in,
+// the full image growing inside the interpolated rect, and the zooming
+// thumbnail; the exit is its mirror (veil fading out, image shrinking to
+// the cell). A reversed run rewinds the same composition via p, so both
+// render paths (image and grid) must share this exact geometry.
+void App::draw_transition_overlay() {
+    if (!m_animating) return;
+    const float p = m_anim_reversed ? (1.0f - m_anim_t) : m_anim_t;
+    const uint32_t target_width = m_renderer.target_size().width;
+    const uint32_t target_height = m_renderer.target_size().height;
+    uint32_t image_w = static_cast<uint32_t>(m_anim_iw);
+    uint32_t image_h = static_cast<uint32_t>(m_anim_ih);
+    if (image_w == 0 || image_h == 0)
+        m_renderer.image_size(image_w, image_h);
+    if (image_w > 0 && image_h > 0) {
+        // The fitted rect the image view settles on, expressed with the
+        // image-mode viewport semantics (update_content_viewport with
+        // m_grid_mode == false): the nav panel follows its image-mode
+        // visibility and the toolbar its image-mode presence. This makes
+        // the geometry identical in both render paths, so a reversal or
+        // the entry/exit boundary never shifts the rect.
+        const float top = (!m_fullscreen || m_toolbar_revealed)
+            ? static_cast<float>(m_toolbar_h) : 0.0f;
+        const float left = m_nav_panel_state.visible(false)
+            ? static_cast<float>(m_nav_visible_width) : 0.0f;
+        const float right = static_cast<float>(visible_panel_width());
+        const float view_width = static_cast<float>(target_width)
+            - left - right;
+        const float view_height = static_cast<float>(target_height) - top;
+        const float scale = std::min(view_width / image_w, view_height / image_h);
+        const float width = image_w * scale;
+        const float height = image_h * scale;
+        const float x = left + (view_width - width) * 0.5f;
+        const float y = top + (view_height - height) * 0.5f;
+        if (m_anim_forward) {
+            // Entry: the thumb flies from its cell to the fitted image rect.
+            m_anim_dst = {x, y, x + width, y + height};
+        } else {
+            // Exit: the image flies from the fitted rect back to the cell
+            // captured when the entry started (m_anim_src of start_transition).
+            m_anim_src = {x, y, x + width, y + height};
+        }
+    }
+    if (m_anim_forward && m_anim_grid_snapshot)
+        m_renderer.draw_fullscreen_bitmap(m_anim_grid_snapshot.Get());
+    m_renderer.draw_fade_overlay(p, m_anim_forward);
+    if (m_anim_forward) {
+        ID2D1Bitmap1* reveal = m_renderer.image_bitmap();
+        if (!reveal) reveal = m_renderer.placeholder_bitmap();
+        if (reveal)
+            m_renderer.draw_anim_image(reveal, m_anim_src, m_anim_dst, p);
+    }
+    if (m_anim_thumb)
+        m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, p);
+}
+
 void App::interrupt_transition(mv::TransitionTrigger trigger, int nav_dir) {
     if (!m_animating) return;
-    const mv::TransitionDirection dir = m_anim_forward
-        ? mv::TransitionDirection::ToImage
-        : mv::TransitionDirection::ToGrid;
+    // The effective target: a reversed run heads back to its source.
+    const mv::TransitionDirection dir =
+        (m_anim_forward != m_anim_reversed)
+            ? mv::TransitionDirection::ToImage
+            : mv::TransitionDirection::ToGrid;
     switch (mv::plan_transition_interrupt({dir, trigger})) {
     case mv::TransitionInterruptAction::None:
         return;
@@ -5574,46 +5596,8 @@ void App::grid_render() {
             target_height - m_toolbar_h);
     }
 
-    if (m_animating) {
-        uint32_t image_w = static_cast<uint32_t>(m_anim_iw);
-        uint32_t image_h = static_cast<uint32_t>(m_anim_ih);
-        if (image_w == 0 || image_h == 0) m_renderer.image_size(image_w, image_h);
-        if (image_w > 0 && image_h > 0) {
-            float view_width = target_width - nav_panel_width()
-                - visible_panel_width();
-            float view_height = target_height - m_toolbar_h;
-            float scale = std::min(view_width / image_w, view_height / image_h);
-            float width = image_w * scale;
-            float height = image_h * scale;
-            float x = nav_panel_width() + (view_width - width) * 0.5f;
-            float y = m_toolbar_h + (view_height - height) * 0.5f;
-            if (!m_anim_reversed) {
-                if (m_anim_forward)
-                    m_anim_dst = {x, y, x + width, y + height};
-                else {
-                    m_anim_dst = m_anim_src;
-                    m_anim_src = {x, y, x + width, y + height};
-                }
-            }
-        }
-        if (!m_anim_reversed) {
-            if (m_anim_forward && m_anim_grid_snapshot)
-                m_renderer.draw_fullscreen_bitmap(
-                    m_anim_grid_snapshot.Get());
-            m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
-            // The full image grows inside the thumbnail\'s interpolated
-            // rect: the zoom layer hands off to it with no end pop.
-            if (m_anim_forward) {
-                ID2D1Bitmap1* reveal = m_renderer.image_bitmap();
-                if (!reveal) reveal = m_renderer.placeholder_bitmap();
-                if (reveal)
-                    m_renderer.draw_anim_image(
-                        reveal, m_anim_src, m_anim_dst, m_anim_t);
-            }
-        }
-        if (m_anim_thumb)
-            m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
-    }
+    if (m_animating)
+        draw_transition_overlay();
     m_renderer.draw_status_message(m_open_error);
     m_renderer.draw_title_bar(target_width, m_title_btn_hover, m_title_btn_press,
         m_toolbar_items, m_toolbar_active);
@@ -5734,31 +5718,8 @@ void App::render_frame() {
             static_cast<float>(m_nav_visible_width),
             static_cast<float>(m_renderer.target_size().height) - content_top);
     }
-    if (m_animating) {
-        uint32_t iw = static_cast<uint32_t>(m_anim_iw);
-        uint32_t ih = static_cast<uint32_t>(m_anim_ih);
-        if (iw == 0 || ih == 0) m_renderer.image_size(iw, ih);
-        if (iw > 0 && ih > 0) {
-            float view_w = m_renderer.content_width();
-            float view_h = static_cast<float>(m_renderer.target_size().height) - content_top;
-            float s = std::min(view_w / iw, view_h / ih);
-            float dw = iw * s, dh = ih * s;
-            float dx = m_renderer.content_left() + (view_w - dw) * 0.5f;
-            float dy = content_top + (view_h - dh) * 0.5f;
-            if (!m_anim_reversed) {
-                if (m_anim_forward)
-                    m_anim_dst = {dx, dy, dx + dw, dy + dh};
-                else {
-                    m_anim_dst = m_anim_src;
-                    m_anim_src = {dx, dy, dx + dw, dy + dh};
-                }
-            }
-        }
-        if (!m_anim_reversed)
-            m_renderer.draw_fade_overlay(m_anim_t, m_anim_forward);
-        if (m_anim_thumb)
-            m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, m_anim_t);
-    }
+    if (m_animating)
+        draw_transition_overlay();
     if (filmstrip_visible()) render_filmstrip();
     m_renderer.draw_status_message(m_open_error);
     if (toolbar_visible()) {
