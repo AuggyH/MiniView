@@ -49,6 +49,7 @@ struct FolderIconResult {
 
 static std::uint64_t wic_source_bytes(IWICBitmapSource* src);
 constexpr UINT_PTR kComicTimerId = 5;
+constexpr UINT_PTR kRenderRetryTimerId = 9;  // device-loss recreate throttle
 constexpr UINT_PTR kImageDebounceTimerId = 6;
 constexpr UINT_PTR kAsyncWatchdogTimerId = 7;  // async decode watchdog (1s tick)
 constexpr UINT_PTR kFilmstripHideTimerId = 8;  // filmstrip auto-hide (avoids id-5 collision with kComicTimerId)
@@ -778,7 +779,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_PAINT: {
+        // A nested paint (PrintWindow capture, DWM re-composition) can be
+        // dispatched while the outer render is mid-frame. Rendering twice
+        // corrupts the D2D clip stack and kills the device; ignore nested
+        // paints — the outer frame completes and presents normally.
+        if (m_render_busy) return 0;
+        m_render_busy = true;
         render_frame();
+        m_render_busy = false;
         ValidateRect(hwnd, nullptr);
         // Re-arm the transition: while the filmstrip animation runs, keep
         // invalidating so the next animation frame is painted. FULL-window
@@ -893,6 +901,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_TIMER:
+        if (wp == kRenderRetryTimerId) {
+            KillTimer(hwnd, kRenderRetryTimerId);
+            m_render_retry_timer = 0;
+            m_window.invalidate();
+            return 0;
+        }
         if (wp == kComicTimerId && m_comic_timer) {
             handle_comic_timer(hwnd);
         }
@@ -1033,7 +1047,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_RENDER_RETRY:
-        m_window.invalidate();
+        // Device loss recovery: recreate only after a short delay so the
+        // old flip-model swapchain fully detaches from the DWM (an
+        // immediate CreateSwapChainForHwnd fails with E_ACCESSDENIED
+        // forever and the window stays black).
+        if (!m_render_retry_timer) {
+            m_render_retry_timer =
+                SetTimer(hwnd, kRenderRetryTimerId, 120, nullptr);
+        }
         return 0;
 
     case WM_DPICHANGED: {
@@ -4120,6 +4141,31 @@ void App::zoom_at_center(float factor) {
 
 // ── Grid mode ────────────────────────────────────────────────
 
+// A thumbnail cache entry is only usable when the JPEG is complete: the
+// encoder finalizes the file with the FF D9 end marker. Entries truncated
+// by an interrupted write decode to broken sources that poison the render
+// pipeline, so they must be rejected and rewritten.
+static bool thumbnail_cache_file_complete(const std::wstring& path) {
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size = {};
+    const bool has_size =
+        GetFileSizeEx(file, &size) && size.QuadPart >= 4;
+    bool complete = false;
+    if (has_size) {
+        LARGE_INTEGER off;
+        off.QuadPart = size.QuadPart - 2;
+        SetFilePointerEx(file, off, nullptr, FILE_BEGIN);
+        unsigned char tail[2] = {};
+        DWORD read = 0;
+        if (ReadFile(file, tail, 2, &read, nullptr) && read == 2)
+            complete = tail[0] == 0xFF && tail[1] == 0xD9;
+    }
+    CloseHandle(file);
+    return complete;
+}
+
 // Save a WIC bitmap as JPEG to disk (for thumbnail cache)
 static void save_wic_as_jpeg(IWICBitmapSource* src, const std::wstring& path) {
     ComPtr<IWICImagingFactory> factory;
@@ -4127,10 +4173,14 @@ static void save_wic_as_jpeg(IWICBitmapSource* src, const std::wstring& path) {
         CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory));
     if (FAILED(hr)) return;
 
+    // Write to a temp file then rename: an interrupted save must never
+    // leave a truncated entry behind (see thumbnail_cache_file_complete).
+    const std::wstring temp_path = path + L".tmp";
+    DeleteFileW(temp_path.c_str());
     ComPtr<IWICStream> stream;
     hr = factory->CreateStream(&stream);
     if (FAILED(hr)) return;
-    hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+    hr = stream->InitializeFromFilename(temp_path.c_str(), GENERIC_WRITE);
     if (FAILED(hr)) return;
 
     ComPtr<IWICBitmapEncoder> encoder;
@@ -4158,6 +4208,11 @@ static void save_wic_as_jpeg(IWICBitmapSource* src, const std::wstring& path) {
     frame->WriteSource(src, nullptr);
     frame->Commit();
     encoder->Commit();
+    // Commit the temp file atomically into the cache slot.
+    if (!MoveFileExW(temp_path.c_str(), path.c_str(),
+            MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileW(temp_path.c_str());
+    }
 }
 
 // Get a WIC bitmap from the Windows shell thumbnail cache (fast path)
@@ -4240,9 +4295,25 @@ static void thumb_loader_worker(
                         | src_attr.ftLastWriteTime.dwLowDateTime;
                     ULONGLONG cache_time = (static_cast<ULONGLONG>(cache_attr.ftLastWriteTime.dwHighDateTime) << 32)
                         | cache_attr.ftLastWriteTime.dwLowDateTime;
-                    if (cache_time >= src_time) {
-                        try { wic = decoder.decode_scaled(cache_file, thumb_size); cache_hit = true; }
-                        catch (...) {}
+                    if (cache_time >= src_time
+                        && thumbnail_cache_file_complete(cache_file)) {
+                        try {
+                            wic = decoder.decode_scaled(cache_file, thumb_size);
+                            uint32_t cw = 0, ch = 0;
+                            if (wic) wic->GetSize(&cw, &ch);
+                            // A corrupt cache entry can decode to a broken
+                            // source that poisons the render pipeline;
+                            // refuse it and fall back to the source file.
+                            cache_hit = wic && cw > 0 && ch > 0
+                                && cw <= static_cast<uint32_t>(thumb_size) + 2
+                                && ch <= static_cast<uint32_t>(thumb_size) + 2;
+                        } catch (...) {
+                            cache_hit = false;
+                        }
+                        if (!cache_hit) {
+                            wic.Reset();
+                            DeleteFileW(cache_file.c_str());
+                        }
                     }
                 }
 

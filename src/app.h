@@ -383,6 +383,9 @@ private:
     // Render-driven autoscroll advance (QPC): WM_TIMER pacing caused
     // visible judder on cruise and middle-button scrolling.
     LARGE_INTEGER m_comic_advance_last = {};
+    // Device-loss recovery: throttled recreate + nested-paint guard.
+    bool m_render_busy = false;
+    UINT_PTR m_render_retry_timer = 0;
     // Explicit page-width drag slider (mouse-direct, no modifier keys).
     bool m_comic_width_dragging = false;
     void advance_comic_autoscroll_render();

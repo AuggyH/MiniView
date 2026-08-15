@@ -253,6 +253,7 @@ bool Renderer::begin_frame() {
     if (!m_d2d_context) {
         if (!create_device_resources()) return false;
     }
+    if (!m_d2d_context) return false;
     m_d2d_context->BeginDraw();
     return true;
 }
