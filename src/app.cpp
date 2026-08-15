@@ -4628,9 +4628,16 @@ void App::draw_transition_overlay() {
             // Entry: the thumb flies from its cell to the fitted image rect.
             m_anim_dst = {x, y, x + width, y + height};
         } else {
-            // Exit: the image flies from the fitted rect back to the cell
-            // captured when the entry started (m_anim_src of start_transition).
+            // Exit: the image flies from the fitted rect back to the
+            // CURRENT image's cell. The grid has already re-centered on
+            // the current image (toggle_grid -> grid_ensure_visible runs
+            // before the first exit frame), so after cross-page filmstrip
+            // navigation this is the re-centered cell — not the stale cell
+            // the entry came from. Read it every frame so the zoom always
+            // lands exactly where the settled grid will show the thumb.
             m_anim_src = {x, y, x + width, y + height};
+            if (const auto cell = grid_transition_source_rect(m_current_idx))
+                m_anim_dst = {cell->left, cell->top, cell->right, cell->bottom};
         }
     }
     if (m_anim_forward && m_anim_grid_snapshot)
