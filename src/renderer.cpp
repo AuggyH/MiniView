@@ -1840,7 +1840,8 @@ void Renderer::draw_fade_overlay(float t, bool forward) {
     // the grid underneath. Three transforms total — translation, scale,
     // background opacity — nothing else.
     const float s = std::clamp(t, 0.0f, 1.0f);
-    const float et = s * s * (3.0f - 2.0f * s);
+    // Ease-out quartic, matching the motion curve.
+    const float et = 1.0f - (1.0f - s) * (1.0f - s) * (1.0f - s) * (1.0f - s);
     const float alpha = forward ? et : (1.0f - et);
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
@@ -1860,14 +1861,12 @@ void Renderer::draw_fullscreen_bitmap(ID2D1Bitmap1* bmp) {
         D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, nullptr);
 }
 
-// Shared transition geometry: smoothstep + subtle settle overshoot.
+// Shared transition geometry: ease-out quartic (fast start, soft
+// landing) — the same interpolator as the filmstrip handoff.
 static D2D1_RECT_F transition_interpolated_rect(
     D2D1_RECT_F src, D2D1_RECT_F dst, float t, float& out_et) {
     const float s = std::clamp(t, 0.0f, 1.0f);
-    const float smooth = s * s * (3.0f - 2.0f * s);
-    const float overshoot =
-        0.035f * std::sin(smooth * 3.14159265f) * (1.0f - smooth);
-    const float et = std::clamp(smooth + overshoot, 0.0f, 1.12f);
+    const float et = 1.0f - (1.0f - s) * (1.0f - s) * (1.0f - s) * (1.0f - s);
     out_et = et;
     const float dst_w = dst.right - dst.left, dst_h = dst.bottom - dst.top;
     const float aspect = dst_w / dst_h;
