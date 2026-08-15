@@ -1835,7 +1835,9 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
 
 void Renderer::draw_fade_overlay(float t, bool forward) {
     if (!m_d2d_context) return;
-    float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t) * (1.0f - t);
+    // Apple-style background veil: smoothstep (accelerate-then-settle).
+    const float s = std::clamp(t, 0.0f, 1.0f);
+    const float et = s * s * (3.0f - 2.0f * s);
     float alpha = forward ? et : (1.0f - et);
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
@@ -1850,8 +1852,16 @@ void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F d
     if (!m_d2d_context || !bmp) return;
     if (src.right <= src.left || src.bottom <= src.top) return;
     if (dst.right <= dst.left || dst.bottom <= dst.top) return;
-    // Ease-out quartic
-    float et = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t) * (1.0f - t);
+    // Apple-style motion: smoothstep with a subtle settle overshoot.
+    const float s = std::clamp(t, 0.0f, 1.0f);
+    const float smooth = s * s * (3.0f - 2.0f * s);
+    const float overshoot =
+        0.035f * std::sin(smooth * 3.14159265f) * (1.0f - smooth);
+    const float et = std::clamp(smooth + overshoot, 0.0f, 1.12f);
+    // Content handoff: fade the zooming layer out over the final third so
+    // the committed target state takes over without a pop.
+    const float fade = s < 0.68f
+        ? 1.0f : std::max(0.0f, 1.0f - (s - 0.68f) / 0.32f);
     // Lock to dest aspect; correct source to match
     float dst_w = dst.right - dst.left, dst_h = dst.bottom - dst.top;
     float aspect = dst_w / dst_h;
@@ -1869,7 +1879,8 @@ void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F d
     float cy = src_cy + (dst_cy - src_cy) * et;
     D2D1_RECT_F rc = {cx - cur_w * 0.5f, cy - cur_h * 0.5f,
                       cx + cur_w * 0.5f, cy + cur_h * 0.5f};
-    m_d2d_context->DrawBitmap(bmp, &rc, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+    m_d2d_context->DrawBitmap(bmp, &rc, fade,
+        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
 }
 
 void Renderer::push_clip_below(float y) {

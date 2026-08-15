@@ -3991,19 +3991,26 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
     int thumb_idx = forward
         ? request_index
         : ((m_current_idx >= 0) ? m_current_idx : m_grid_saved_idx);
-    (void)run_best_effort_transition_capture([this, thumb_idx]() {
-        auto it = m_thumb_d2d.find(thumb_idx);
-        if (it != m_thumb_d2d.end()) {
-            m_anim_thumb = it->second;
-        } else if (thumb_idx >= 0 && thumb_idx < static_cast<int>(m_index.size())) {
-            auto wic = m_decoder.decode_scaled(m_index.path_at(thumb_idx), m_thumb_size);
-            if (wic) {
-                ComPtr<ID2D1Bitmap1> d2d;
-                if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d)) && d2d)
-                    m_anim_thumb = d2d;
+    if (!forward) {
+        // Apple-style exit: the FULL image zooms back into its cell (the
+        // low-res thumbnail previously popped the quality at the start).
+        m_anim_thumb = m_renderer.image_bitmap();
+    }
+    if (!m_anim_thumb) {
+        (void)run_best_effort_transition_capture([this, thumb_idx]() {
+            auto it = m_thumb_d2d.find(thumb_idx);
+            if (it != m_thumb_d2d.end()) {
+                m_anim_thumb = it->second;
+            } else if (thumb_idx >= 0 && thumb_idx < static_cast<int>(m_index.size())) {
+                auto wic = m_decoder.decode_scaled(m_index.path_at(thumb_idx), m_thumb_size);
+                if (wic) {
+                    ComPtr<ID2D1Bitmap1> d2d;
+                    if (SUCCEEDED(m_renderer.create_bitmap_from_wic(wic.Get(), &d2d)) && d2d)
+                        m_anim_thumb = d2d;
+                }
             }
-        }
-    });
+        });
+    }
     if (!source_captured) m_anim_thumb.Reset();
 
     // Pre-store target image size from thumbnail metadata (avoids stale image_size())
