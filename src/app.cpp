@@ -33,6 +33,7 @@ constexpr UINT WM_COMIC_READY = WM_APP + 4;
 constexpr UINT WM_NAV_SCAN_READY = WM_APP + 5;
 constexpr UINT WM_NAV_TREE_READY = WM_APP + 6;
 constexpr UINT WM_IMAGE_READY = WM_APP + 7;  // async big-image decode done
+constexpr UINT WM_DIR_CHANGED = WM_APP + 8;    // watched directory changed
 
 static std::uint64_t wic_source_bytes(IWICBitmapSource* src);
 constexpr UINT_PTR kComicTimerId = 5;
@@ -372,8 +373,13 @@ static void nav_scan_worker(
         scanned.path = current.path;
         scanned.recursive = current.recursive;
         scanned.generation = current.generation;
-        scanned.scan_result =
-            scanned.index.scan(current.path, current.recursive);
+        scanned.refresh = current.refresh;
+        if (!current.roots.empty()) {
+            scanned.scan_result = scanned.index.scan_many(current.roots);
+        } else {
+            scanned.scan_result =
+                scanned.index.scan(current.path, current.recursive);
+        }
         if (scanned.scan_result >= 0)
             scanned.index.sort_by(current.sort);
 
@@ -955,6 +961,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_NAV_TREE_READY:
         apply_nav_tree_result();
+        return 0;
+
+    case WM_DIR_CHANGED:
+        // A watched directory changed: rescan the current collection in
+        // place so new/deleted images appear without manual refresh.
+        request_collection_refresh();
         return 0;
 
     case WM_IMAGE_READY: {
@@ -1983,6 +1995,8 @@ void App::open_directory(const std::wstring& path) {
     }
     static_cast<void>(complete_directory_open(result, m_open_error));
     sync_nav_collection();
+    m_watch_roots = {{path, m_recursive}};
+    start_dir_watch();
 }
 
 bool App::open_image(const std::wstring& path) {
@@ -2226,6 +2240,8 @@ void App::toggle_recursive() {
 
     int scan_result = m_index.scan(dir, m_recursive);
     save_last_dir(dir);
+    m_watch_roots = {{dir, m_recursive}};
+    start_dir_watch();
     const RecursiveScanAction scan_action = classify_recursive_scan_action(
         was_grid, m_has_image, scan_result);
 
@@ -5423,6 +5439,88 @@ void App::stop_nav_workers() {
     if (m_nav_tree_thread.joinable()) m_nav_tree_thread.join();
 }
 
+void App::start_dir_watch() {
+    if (m_watch_roots.empty()) return;
+    std::vector<WatchRoot> roots;
+    roots.reserve(m_watch_roots.size());
+    for (const auto& root : m_watch_roots)
+        roots.push_back(WatchRoot{root.path, root.recursive});
+    m_dir_watcher.watch(m_window.handle(), WM_DIR_CHANGED, std::move(roots));
+}
+
+void App::stop_dir_watch() {
+    m_dir_watcher.stop();
+}
+
+void App::request_collection_refresh() {
+    if (m_watch_roots.empty() && m_index.directory().empty()) return;
+    const std::uint64_t generation = m_nav_switch.request();
+    {
+        std::lock_guard lock(m_nav_scan_mutex);
+        NavScanJob job;
+        job.path = m_index.directory();
+        job.recursive = m_recursive;
+        job.generation = generation;
+        job.sort = m_index.sort_mode();
+        job.refresh = true;
+        job.roots = m_watch_roots;
+        m_nav_scan_job = std::move(job);
+        m_nav_scan_queued = true;
+    }
+    m_nav_scan_cv.notify_one();
+}
+
+void App::apply_collection_refresh(NavScanResult&& result) {
+    const bool was_grid = m_grid_mode;
+    if (m_thumb_running) stop_thumb_loader();
+
+    // Snapshot the selection by path BEFORE swapping the index.
+    std::vector<std::wstring> selected_before;
+    std::wstring sel_path;
+    if (was_grid) {
+        selected_before = selected_paths();
+        if (m_grid_sel >= 0
+            && m_grid_sel < static_cast<int>(m_index.size()))
+            sel_path = m_index.path_at(static_cast<size_t>(m_grid_sel));
+    }
+
+    m_index = std::move(result.index);
+
+    // Re-locate the current image in the refreshed index.
+    if (!m_current_path.empty()) {
+        m_current_idx = m_index.index_of(m_current_path);
+        if (m_current_idx < 0) {
+            m_current_path.clear();
+            m_current_wic.Reset();
+            m_has_image = false;
+        }
+    }
+
+    if (was_grid) {
+        m_thumbs.clear();
+        m_thumbs.resize(m_index.size());
+        m_thumb_d2d.clear();
+        m_thumb_d2d_use.clear();
+        m_grid_layout_dirty = true;
+        m_last_cached_sel = -1;
+        m_grid_sel = sel_path.empty() ? -1 : m_index.index_of(sel_path);
+        m_selected.assign(m_index.size(), false);
+        for (const auto& path : selected_before) {
+            const int idx = m_index.index_of(path);
+            if (idx >= 0) m_selected[static_cast<size_t>(idx)] = true;
+        }
+        m_sel_anchor = m_grid_sel;
+        start_dim_preload();
+        start_thumb_loader();
+        clamp_grid_scroll();
+        if (m_grid_sel >= 0) grid_ensure_visible();
+    } else {
+        preload_neighbors();
+    }
+    sync_nav_collection();
+    m_window.invalidate();
+}
+
 void App::switch_collection(const std::wstring& path, bool recursive) {
     if (path.empty()) return;
     const std::wstring target_id = normalize_collection_key(path);
@@ -5467,6 +5565,11 @@ void App::apply_nav_scan_result() {
     }
     if (!m_nav_switch.finish(result.generation)) return;  // stale
 
+    if (result.refresh) {
+        apply_collection_refresh(std::move(result));
+        return;
+    }
+
     const CollectionApplyAction action =
         plan_collection_apply({result.scan_result, m_grid_mode});
     if (action == CollectionApplyAction::ShowOpenError) {
@@ -5503,6 +5606,8 @@ void App::apply_nav_scan_result() {
     }
     sync_nav_collection();
     update_content_viewport(!m_grid_mode);
+    m_watch_roots = {{result.path, result.recursive}};
+    start_dir_watch();
     update_title();
     m_window.invalidate();
 }

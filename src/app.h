@@ -4,6 +4,7 @@
 #include "open_error.h"
 #include "decoder.h"
 #include "indexer.h"
+#include "dirwatch.h"
 #include "metadata.h"
 #include "app_state.h"
 #include "file_operation.h"
@@ -34,6 +35,10 @@ struct NavScanJob {
     bool recursive = false;
     std::uint64_t generation = 0;
     SortMode sort = SortMode::Name;
+    // Real-time refresh: rescan the current collection in place. roots is
+    // non-empty for multi-root albums; otherwise the single path is used.
+    bool refresh = false;
+    std::vector<ScanRoot> roots;
 };
 
 struct NavScanResult {
@@ -42,6 +47,7 @@ struct NavScanResult {
     bool recursive = false;
     std::uint64_t generation = 0;
     int scan_result = -1;
+    bool refresh = false;
 };
 
 struct NavTreeJob {
@@ -267,6 +273,14 @@ private:
 
     // Background dimension prober (skeleton-size pre-read, Issue #5-P1).
     std::thread m_dim_preload;
+    // Real-time collection refresh (Issue #5 P3): watches the active
+    // collection's roots and rescans in place on changes.
+    DirWatcher m_dir_watcher;
+    std::vector<ScanRoot> m_watch_roots;
+    void    start_dir_watch();
+    void    stop_dir_watch();
+    void    request_collection_refresh();
+    void    apply_collection_refresh(NavScanResult&& result);
 
     struct ComicPageEntry {
         Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
