@@ -1833,12 +1833,15 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     draw_btn(w - btn_w * 3, 0, L"\u2014");            // minimize
 }
 
-void Renderer::draw_fade_overlay(float t, bool forward) {
+void Renderer::draw_fade_overlay(float t, bool /*forward*/) {
     if (!m_d2d_context) return;
-    // Apple-style background veil: smoothstep (accelerate-then-settle).
+    // The veil REVEALS the committed target: dark at the start (the
+    // surroundings settle to the viewer background) and lifts as the
+    // content zooms into place — Apple-style. The old entry direction
+    // faded to black at the END and popped to the image.
     const float s = std::clamp(t, 0.0f, 1.0f);
     const float et = s * s * (3.0f - 2.0f * s);
-    float alpha = forward ? et : (1.0f - et);
+    const float alpha = 1.0f - et;
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(
