@@ -813,20 +813,20 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (mis->CtlType != ODT_MENU) break;
         if (mis->itemData == 0) {  // separator
             mis->itemWidth  = 20;
-            mis->itemHeight = static_cast<UINT>(8.0f * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
+            mis->itemHeight = static_cast<UINT>(dt::kSpaceSmDip * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
             return TRUE;
         }
         auto* d = reinterpret_cast<OwnerItemData*>(mis->itemData);
         if (!d) break;
         float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-        float text_w = m_renderer.measure_text(d->text, 10.0f * dpi);
-        float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, 10.0f * dpi);
-        float icon_w = 16.0f * dpi;
-        float pad_l = 4.0f * dpi;
-        float pad_icon = 8.0f * dpi;
-        float pad_shortcut = 16.0f * dpi;
+        float text_w = m_renderer.measure_text(d->text, dt::kFontSizeXsDip * dpi);
+        float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, dt::kFontSizeXsDip * dpi);
+        float icon_w = dt::kSpaceLgDip * dpi;
+        float pad_l = dt::kSpaceXsDip * dpi;
+        float pad_icon = dt::kSpaceSmDip * dpi;
+        float pad_shortcut = dt::kSpaceLgDip * dpi;
         mis->itemWidth  = static_cast<UINT>(icon_w + pad_icon + text_w + pad_shortcut + shortcut_w + pad_l * 2);
-        mis->itemHeight = static_cast<UINT>(28.0f * dpi);
+        mis->itemHeight = static_cast<UINT>(dt::kSize28Dip * dpi);
         return TRUE;
     }
 
@@ -847,7 +847,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             COLORREF sep_c = dt::kColorMenuSeparatorGdi;
             HPEN pen = CreatePen(PS_SOLID, 1, sep_c);
             HGDIOBJ old_pen = SelectObject(hdc, pen);
-            MoveToEx(hdc, rc.left + static_cast<int>(28 * dpi), mid_y, nullptr);
+            MoveToEx(hdc, rc.left + static_cast<int>(dt::kSize28Dip * dpi), mid_y, nullptr);
             LineTo(hdc, rc.right - 4, mid_y);
             SelectObject(hdc, old_pen);
             DeleteObject(pen);
@@ -867,16 +867,16 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         DeleteObject(br);
 
         // Icon/checkmark area
-        float icon_w = 16.0f * dpi;
-        float pad_l = 4.0f * dpi;
+        float icon_w = dt::kSpaceLgDip * dpi;
+        float pad_l = dt::kSpaceXsDip * dpi;
         RECT icon_rc = { static_cast<int>(rc.left + pad_l), rc.top,
                          static_cast<int>(rc.left + pad_l + icon_w), rc.bottom };
         if (d->checked) {
             SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
                                        : dt::kColorMenuCheckEnabledGdi);
-            HFONT f = CreateFontW(-MulDiv(12, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            HFONT f = CreateFontW(-MulDiv(static_cast<int>(dt::kFontSizeMdDip), GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH, L"Segoe UI");
+                DEFAULT_PITCH, dt::kFontFamilySymbols);
             HGDIOBJ old_font = SelectObject(hdc, f);
             SetBkMode(hdc, TRANSPARENT);
             DrawTextW(hdc, L"\x2713", 1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -885,14 +885,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
 
         // Text
-        float icon_right = pad_l + icon_w + 8.0f * dpi;
+        float icon_right = pad_l + icon_w + dt::kSpaceSmDip * dpi;
         RECT text_rc = { static_cast<int>(rc.left + icon_right), rc.top,
                          rc.right - 4, rc.bottom };
         SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
                                    : dt::kColorMenuTextGdi);
-        HFONT f2 = CreateFontW(-MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        HFONT f2 = CreateFontW(-MulDiv(static_cast<int>(dt::kFontSizeXsDip), GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH, L"Microsoft YaHei");
+            DEFAULT_PITCH, dt::kFontFamilyUi);
         HGDIOBJ old_font = SelectObject(hdc, f2);
         SetBkMode(hdc, TRANSPARENT);
         DrawTextW(hdc, d->text.c_str(), -1, &text_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -5550,24 +5550,24 @@ void App::grid_render() {
             }
             if (mv::is_favourite(
                     m_album_store, m_index.path_at(index))) {
-                const float badge = 20.0f * dpi_scale;
+                const float badge = dt::kSpace20Dip * dpi_scale;
                 m_renderer.draw_favourite_badge(
-                    x + width - badge - 3.0f * dpi_scale,
-                    row_y + 3.0f * dpi_scale, badge);
+                    x + width - badge - dt::kSpace3Dip * dpi_scale,
+                    row_y + dt::kSpace3Dip * dpi_scale, badge);
             }
             if (m_show_labels) {
                 const auto& path = m_index.path_at(index);
                 size_t separator = path.find_last_of(L"\\/");
                 std::wstring name = separator == std::wstring::npos
                     ? path : path.substr(separator + 1);
-                float label_y = row_y + row.row_h + 4.0f * dpi_scale;
-                m_renderer.draw_label(x, label_y, width, name, 14.0f);
-                float name_height = m_renderer.label_height(name, width, 14.0f);
+                float label_y = row_y + row.row_h + dt::kSpaceXsDip * dpi_scale;
+                m_renderer.draw_label(x, label_y, width, name, dt::kFontSizeXlDip);
+                float name_height = m_renderer.label_height(name, width, dt::kFontSizeXlDip);
                 auto [image_w, image_h] = m_grid_dims[static_cast<size_t>(index)];
                 if (image_w > 0 && image_h > 0) {
-                    m_renderer.draw_label(x, label_y + name_height + 3.0f * dpi_scale,
+                    m_renderer.draw_label(x, label_y + name_height + dt::kSpace3Dip * dpi_scale,
                         width, std::to_wstring(image_w) + L" \u00D7 " + std::to_wstring(image_h),
-                        12.0f, 0.5f, 0.5f, 0.55f);
+                        dt::kFontSizeMdDip, 0.5f, 0.5f, 0.55f);
                 }
             }
         }
@@ -6754,7 +6754,7 @@ bool App::nav_panel_hit_test(int x, int y) {
         const float w_dirs = m_renderer.measure_text(L"\u76EE\u5F55", fs);
         if (x >= tx && x < tx + w_dirs)
             m_nav_panel_state.set_tab(NavPanelTab::Directories);
-        tx += w_dirs + 16.0f * dpi_s;
+        tx += w_dirs + dt::kSpaceLgDip * dpi_s;
         const float w_fav = m_renderer.measure_text(L"\u6536\u85CF", fs);
         if (x >= tx && x < tx + w_fav)
             m_nav_panel_state.set_tab(NavPanelTab::Favorites);

@@ -5,6 +5,9 @@
 
 #include <windows.h>
 #include <d2d1.h>
+#include <dwrite.h>
+
+#include <string_view>
 
 namespace mv::dt {
 
@@ -24,6 +27,79 @@ constexpr D2D1_COLOR_F d2d(Color c) noexcept {
 constexpr Color with_alpha(Color c, float alpha) noexcept {
     return Color{c.r, c.g, c.b, alpha};
 }
+
+// ── DPI scaling helpers ──────────────────────────────────────
+// All DIP tokens are nominal values at 96 DPI. Pass a real DPI (e.g.
+// GetDpiForWindow or renderer dpi state) to dip(); invalid dpi (<= 0)
+// falls back to 1.0x so callers never divide by zero.
+inline constexpr float scale(float dpi) noexcept {
+    return dpi > 0.0f ? dpi / 96.0f : 1.0f;
+}
+
+inline constexpr float dip(float valueDip, float dpi) noexcept {
+    return valueDip * scale(dpi);
+}
+
+// ── Spacing / size DIP tokens ────────────────────────────────
+// T-shirt names cover the canonical 4/8/12/16/24/32 spacing scale from
+// the audit. Numeric kSpace… / kSize… names cover the remaining recurring
+// DIP values migrated from panel/card/status/toast/nav/metrics code.
+#define MV_DT_DIP(name, value)                                      \
+    inline constexpr float name = (value);                          \
+    static_assert(name == (value), "design token value changed: " #name)
+
+MV_DT_DIP(kSpace3Dip,   3.0f);
+MV_DT_DIP(kSpaceXsDip,  4.0f);
+MV_DT_DIP(kSpace6Dip,   6.0f);
+MV_DT_DIP(kSpace7Dip,   7.0f);
+MV_DT_DIP(kSpaceSmDip,  8.0f);
+MV_DT_DIP(kSpace10Dip, 10.0f);
+MV_DT_DIP(kSpaceMdDip, 12.0f);
+MV_DT_DIP(kSpace14Dip, 14.0f);
+MV_DT_DIP(kSpaceLgDip, 16.0f);
+MV_DT_DIP(kSpace20Dip, 20.0f);
+MV_DT_DIP(kSpaceXlDip, 24.0f);
+MV_DT_DIP(kSize28Dip,  28.0f);
+MV_DT_DIP(kSpace2xlDip, 32.0f);
+MV_DT_DIP(kSize36Dip,  36.0f);
+MV_DT_DIP(kSpace40Dip, 40.0f);
+MV_DT_DIP(kSize44Dip,  44.0f);
+MV_DT_DIP(kSize64Dip,  64.0f);
+MV_DT_DIP(kSize96Dip,  96.0f);
+MV_DT_DIP(kSize240Dip, 240.0f);
+MV_DT_DIP(kSize480Dip, 480.0f);
+
+#undef MV_DT_DIP
+
+// ── Typography tokens ─────────────────────────────────────────
+// Font sizes are logical pt; DWrite call sites DPI-scale them.
+#define MV_DT_FONT_SIZE(name, value)                                \
+    inline constexpr float name = (value);                          \
+    static_assert(name == (value), "design token value changed: " #name)
+
+MV_DT_FONT_SIZE(kFontSizeXsDip, 10.0f);
+MV_DT_FONT_SIZE(kFontSizeSmDip, 11.0f);
+MV_DT_FONT_SIZE(kFontSizeMdDip, 12.0f);
+MV_DT_FONT_SIZE(kFontSizeLgDip, 13.0f);
+MV_DT_FONT_SIZE(kFontSizeXlDip, 14.0f);
+
+#undef MV_DT_FONT_SIZE
+
+inline constexpr wchar_t kFontFamilyUi[] = L"Microsoft YaHei";
+inline constexpr wchar_t kFontFamilySymbols[] = L"Segoe UI";
+static_assert(std::wstring_view(kFontFamilyUi) == L"Microsoft YaHei",
+    "design token value changed: kFontFamilyUi");
+static_assert(std::wstring_view(kFontFamilySymbols) == L"Segoe UI",
+    "design token value changed: kFontFamilySymbols");
+
+inline constexpr DWRITE_FONT_WEIGHT kFontWeightNormal =
+    DWRITE_FONT_WEIGHT_NORMAL;
+inline constexpr DWRITE_FONT_WEIGHT kFontWeightBold =
+    DWRITE_FONT_WEIGHT_BOLD;
+static_assert(kFontWeightNormal == DWRITE_FONT_WEIGHT_NORMAL,
+    "design token value changed: kFontWeightNormal");
+static_assert(kFontWeightBold == DWRITE_FONT_WEIGHT_BOLD,
+    "design token value changed: kFontWeightBold");
 
 // ── D2D colors ───────────────────────────────────────────────
 #define MV_DT_COLOR(name, red, green, blue, alpha)                 \

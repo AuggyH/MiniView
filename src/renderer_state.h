@@ -1,6 +1,7 @@
 #pragma once
 
 #include "comic_reader_model.h"
+#include "design_tokens.h"
 #include "layout.h"
 #include "navstate.h"
 
@@ -95,20 +96,20 @@ struct PanelToastLayout {
 
 inline PanelToastLayout calculate_panel_toast_layout(
     const PanelToastLayoutInput& input) {
-    const float scale = input.dpi > 0.0f ? input.dpi / 96.0f : 1.0f;
+    const float scale = dt::scale(input.dpi);
     const float panel_width = std::max(0.0f, input.panel_width);
     const float panel_height = std::max(0.0f, input.panel_height);
     const float horizontal_edge_inset = std::min(
-        24.0f * scale, panel_width * 0.5f);
+        dt::kSpaceXlDip * scale, panel_width * 0.5f);
     const float vertical_edge_inset = std::min(
-        24.0f * scale, panel_height * 0.5f);
-    const float horizontal_padding = 10.0f * scale;
-    const float vertical_padding = 7.0f * scale;
+        dt::kSpaceXlDip * scale, panel_height * 0.5f);
+    const float horizontal_padding = dt::kSpace10Dip * scale;
+    const float vertical_padding = dt::kSpace7Dip * scale;
 
     const float available_width = std::max(0.0f,
         panel_width - horizontal_edge_inset * 2.0f);
-    const float maximum_width = std::min(240.0f * scale, available_width);
-    const float desired_width = std::max(96.0f * scale,
+    const float maximum_width = std::min(dt::kSize240Dip * scale, available_width);
+    const float desired_width = std::max(dt::kSize96Dip * scale,
         std::max(0.0f, input.measured_text_width)
             + horizontal_padding * 2.0f + 2.0f * scale);
     const float width = std::min(maximum_width, desired_width);
@@ -155,11 +156,11 @@ struct ComicRenderViewport {
 
 struct ComicRenderMetrics {
     float dpi_scale = 1.0f;
-    float page_gap = 12.0f;
+    float page_gap = dt::kSpaceMdDip;
     float corner_radius = 4.0f;
     float card_border_width = 1.0f;
-    float card_padding = 16.0f;
-    float error_font_size = 14.0f;
+    float card_padding = dt::kSpaceLgDip;
+    float error_font_size = dt::kFontSizeXlDip;
 };
 
 enum class ComicPageVisual {
@@ -208,21 +209,21 @@ enum class ComicTransientOverlayKind {
 
 struct ComicControlMetrics {
     float dpi_scale = 1.0f;
-    float edge_margin = 8.0f;
-    float overlay_gap = 8.0f;
-    float scrollbar_zone_width = 20.0f;
-    float scrollbar_track_width = 6.0f;
-    float scrollbar_min_thumb = 32.0f;
+    float edge_margin = dt::kSpaceSmDip;
+    float overlay_gap = dt::kSpaceSmDip;
+    float scrollbar_zone_width = dt::kSpace20Dip;
+    float scrollbar_track_width = dt::kSpace6Dip;
+    float scrollbar_min_thumb = dt::kSpace2xlDip;
     float scrollbar_radius = 3.0f;
-    float page_badge_height = 28.0f;
-    float page_badge_min_width = 64.0f;
-    float page_badge_padding = 10.0f;
-    float page_badge_font_size = 12.0f;
-    float page_toast_height = 36.0f;
-    float page_toast_max_width = 480.0f;
-    float page_toast_padding = 14.0f;
-    float page_toast_font_size = 13.0f;
-    float autoscroll_anchor_radius = 10.0f;
+    float page_badge_height = dt::kSize28Dip;
+    float page_badge_min_width = dt::kSize64Dip;
+    float page_badge_padding = dt::kSpace10Dip;
+    float page_badge_font_size = dt::kFontSizeMdDip;
+    float page_toast_height = dt::kSize36Dip;
+    float page_toast_max_width = dt::kSize480Dip;
+    float page_toast_padding = dt::kSpace14Dip;
+    float page_toast_font_size = dt::kFontSizeLgDip;
+    float autoscroll_anchor_radius = dt::kSpace10Dip;
     float autoscroll_dead_zone_radius = 16.0f;
     float autoscroll_arrow_min_length = 18.0f;
     float autoscroll_arrow_max_length = 48.0f;
@@ -325,11 +326,11 @@ inline ComicRenderMetrics comic_render_metrics(
     const float scale = normalize_render_dpi(dpi) / 96.0f;
     return ComicRenderMetrics{
         scale,
-        seamless ? 0.0f : 12.0f * scale,
+        seamless ? 0.0f : dt::kSpaceMdDip * scale,
         seamless ? 0.0f : 4.0f * scale,
         1.0f * scale,
-        16.0f * scale,
-        14.0f * scale};
+        dt::kSpaceLgDip * scale,
+        dt::kFontSizeXlDip * scale};
 }
 
 inline ComicRenderRect intersect_render_rects(
@@ -347,21 +348,21 @@ inline ComicControlMetrics comic_control_metrics(float dpi) noexcept {
     const float scale = normalize_render_dpi(dpi) / 96.0f;
     return {
         scale,
-        8.0f * scale,
-        8.0f * scale,
-        20.0f * scale,
-        6.0f * scale,
-        32.0f * scale,
+        dt::kSpaceSmDip * scale,
+        dt::kSpaceSmDip * scale,
+        dt::kSpace20Dip * scale,
+        dt::kSpace6Dip * scale,
+        dt::kSpace2xlDip * scale,
         3.0f * scale,
-        28.0f * scale,
-        64.0f * scale,
-        10.0f * scale,
-        12.0f * scale,
-        36.0f * scale,
-        480.0f * scale,
-        14.0f * scale,
-        13.0f * scale,
-        10.0f * scale,
+        dt::kSize28Dip * scale,
+        dt::kSize64Dip * scale,
+        dt::kSpace10Dip * scale,
+        dt::kFontSizeMdDip * scale,
+        dt::kSize36Dip * scale,
+        dt::kSize480Dip * scale,
+        dt::kSpace14Dip * scale,
+        dt::kFontSizeLgDip * scale,
+        dt::kSpace10Dip * scale,
         16.0f * scale,
         18.0f * scale,
         48.0f * scale,

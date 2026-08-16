@@ -15,8 +15,8 @@
 namespace mv {
 
 namespace {
-    constexpr float OVERLAY_PAD = 12.0f;
-    constexpr float OVERLAY_FONT_SIZE = 14.0f;
+    constexpr float OVERLAY_PAD = dt::kSpaceMdDip;
+    constexpr float OVERLAY_FONT_SIZE = dt::kFontSizeXlDip;
 
     D2D1_RECT_F to_d2d_rect(ComicRenderRect rect) {
         return {rect.left, rect.top, rect.right, rect.bottom};
@@ -138,11 +138,11 @@ bool Renderer::create_text_resources() {
 
     ComPtr<IDWriteTextFormat> text_format;
     hr = dwrite_factory->CreateTextFormat(
-        L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL,
+        dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightNormal,
         DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,
-        OVERLAY_FONT_SIZE * m_dpi_y / 96.0f, L"en-US",
+        dt::dip(OVERLAY_FONT_SIZE, m_dpi_y), L"en-US",
         &text_format);
     if (FAILED(hr)) return false;
 
@@ -400,11 +400,11 @@ void Renderer::draw_status_message(const std::wstring& text) {
     if (!m_d2d_context || !m_text_format || text.empty()) return;
 
     const float dpi_scale = m_dpi_y / 96.0f;
-    const float available_width = std::max(1.0f, content_width() - 32.0f * dpi_scale);
+    const float available_width = std::max(1.0f, content_width() - dt::kSpace2xlDip * dpi_scale);
     const float width = std::min(520.0f * dpi_scale, available_width);
-    const float height = 44.0f * dpi_scale;
+    const float height = dt::kSize44Dip * dpi_scale;
     const float left = (content_width() - width) * 0.5f;
-    const float top = m_content_top + 12.0f * dpi_scale;
+    const float top = m_content_top + dt::kSpaceMdDip * dpi_scale;
     const D2D1_RECT_F bounds = {left, top, left + width, top + height};
     const auto rounded = D2D1::RoundedRect(
         bounds, 6.0f * dpi_scale, 6.0f * dpi_scale);
@@ -435,12 +435,12 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
     if (!m_d2d_context || !m_dwrite_factory || items.empty()) return;
 
     float dpi_s = m_dpi_y / 96.0f;
-    float font_size = 13.0f;           // logical pt, draw_text_line will DPI-scale
-    float pad = 16.0f * dpi_s;
+    float font_size = dt::kFontSizeLgDip;           // logical pt, draw_text_line will DPI-scale
+    float pad = dt::kSpaceLgDip * dpi_s;
     float label_w = layout::kPanelLabelColumnWidthDip * dpi_s;
-    float gap = 10.0f * dpi_s;         // label–value gap
-    float item_spacing = 8.0f * dpi_s;
-    float card_w = std::min(600.0f * dpi_s, m_target_size.width - 40.0f * dpi_s);
+    float gap = dt::kSpace10Dip * dpi_s;         // label–value gap
+    float item_spacing = dt::kSpaceSmDip * dpi_s;
+    float card_w = std::min(600.0f * dpi_s, m_target_size.width - dt::kSpace40Dip * dpi_s);
     float value_w = card_w - pad * 2 - label_w - gap;
     float min_h = font_size * dpi_s * 1.6f;
     int   max_lines = 3;
@@ -459,7 +459,7 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
     if (!heights.empty()) card_h -= item_spacing;  // no trailing gap
 
     // Clamp to viewport
-    float max_card_h = m_target_size.height - 40.0f * dpi_s;
+    float max_card_h = m_target_size.height - dt::kSpace40Dip * dpi_s;
     if (card_h > max_card_h) card_h = max_card_h;
 
     float card_x = (m_target_size.width - card_w) * 0.5f;
@@ -505,14 +505,14 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
 
     // ── Hint: press Esc or click to dismiss ──
     ComPtr<IDWriteTextFormat> hint_fmt;
-    float hint_size = 10.0f * dpi_s;
-    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+    float hint_size = dt::kFontSizeXsDip * dpi_s;
+    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         hint_size, L"en-US", &hint_fmt);
     hint_fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     std::wstring hint = L"\u6309 I \u5173\u95ED";  // 按 I 关闭
-    D2D1_RECT_F hr = {card_x, card_y + card_h + 4.0f * dpi_s,
-                      card_x + card_w, card_y + card_h + 20.0f * dpi_s};
+    D2D1_RECT_F hr = {card_x, card_y + card_h + dt::kSpaceXsDip * dpi_s,
+                      card_x + card_w, card_y + card_h + dt::kSpace20Dip * dpi_s};
     m_d2d_context->DrawText(hint.c_str(), static_cast<uint32_t>(hint.size()),
         hint_fmt.Get(), &hr, dim_brush.Get());
 }
@@ -773,7 +773,7 @@ void Renderer::draw_comic_card_visual(
         dt::d2d(dt::kColorComicErrorText), &text);
     ComPtr<IDWriteTextFormat> format;
     m_dwrite_factory->CreateTextFormat(
-        L"Microsoft YaHei", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+        dt::kFontFamilyUi, nullptr, dt::kFontWeightNormal,
         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         metrics.error_font_size, L"zh-CN", &format);
     if (!format) return;
@@ -916,7 +916,7 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
 
         ComPtr<IDWriteTextFormat> format;
         m_dwrite_factory->CreateTextFormat(
-            L"Microsoft YaHei", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+            dt::kFontFamilyUi, nullptr, dt::kFontWeightNormal,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             font_size, L"zh-CN", &format);
         if (!format) return;
@@ -1044,11 +1044,11 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         m_d2d_context->FillEllipse(&knob, thumb.Get());
         const std::wstring label_text = L"页宽";
         const float dpi_s = m_dpi_y / 96.0f;
-        const float lw = measure_text(label_text, 11.0f * dpi_s);
-        const float lh = label_height(label_text, lw + 4.0f, 11.0f, 1);
-        draw_text_line(slider.track.left - lw - 8.0f * dpi_s,
-            slider.thumb_y - lh * 0.5f, lw + 4.0f, label_text,
-            label.Get(), 11.0f, nullptr, 1);
+        const float lw = measure_text(label_text, dt::kFontSizeSmDip * dpi_s);
+        const float lh = label_height(label_text, lw + dt::kSpaceXsDip, dt::kFontSizeSmDip, 1);
+        draw_text_line(slider.track.left - lw - dt::kSpaceSmDip * dpi_s,
+            slider.thumb_y - lh * 0.5f, lw + dt::kSpaceXsDip, label_text,
+            label.Get(), dt::kFontSizeSmDip, nullptr, 1);
     }
 
     // Persistent cruise indicator (visible while cruising or paused).
@@ -1057,17 +1057,17 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
             ? L"⏸ 已暂停 (P 继续)"
             : L"▶ 巡航中";
         const float dpi_s = m_dpi_y / 96.0f;
-        const float fs = 11.0f;
+        const float fs = dt::kFontSizeSmDip;
         const float tw2 = measure_text(text, fs * dpi_s);
         ComPtr<ID2D1SolidColorBrush> cruise_br;
         m_d2d_context->CreateSolidColorBrush(
             dt::d2d(dt::kColorCruiseIndicator), &cruise_br);
-        const float th2 = label_height(text, tw2 + 4.0f, fs, 1);
+        const float th2 = label_height(text, tw2 + dt::kSpaceXsDip, fs, 1);
         draw_text_line(
             layout.viewport.right - layout.metrics.edge_margin
-                - tw2 - 8.0f * dpi_s,
+                - tw2 - dt::kSpaceSmDip * dpi_s,
             layout.viewport.top + layout.metrics.edge_margin,
-            tw2 + 4.0f, text, cruise_br.Get(), fs, nullptr, 1);
+            tw2 + dt::kSpaceXsDip, text, cruise_br.Get(), fs, nullptr, 1);
         (void)th2;
     }
 
@@ -1091,8 +1091,8 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return;
     ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
-    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
@@ -1114,8 +1114,8 @@ float Renderer::label_height(const std::wstring& text, float w, float font_size,
     if (!m_dwrite_factory || text.empty()) return 0;
     ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
-    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     ComPtr<IDWriteTextLayout> layout;
     float max_h = (max_lines > 0) ? fs * 1.4f * max_lines : 1000.0f;
@@ -1145,9 +1145,9 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
     if (!m_d2d_context || !m_text_format) return 0.0f;
 
     float dpi_s = m_dpi_y / 96.0f;
-    float pad   = 24.0f * dpi_s;
-    float gap   = 8.0f * dpi_s;
-    float sec_gap = 24.0f * dpi_s;
+    float pad   = dt::kSpaceXlDip * dpi_s;
+    float gap   = dt::kSpaceSmDip * dpi_s;
+    float sec_gap = dt::kSpaceXlDip * dpi_s;
 
     float y0 = y_off;
     float y = y0 + pad - scroll_y;
@@ -1200,37 +1200,37 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     // ── Info rows (label emphasized, value slightly dimmed) ──
     float lw = layout::kPanelLabelColumnWidthDip * dpi_s;
-    float cgap = 8.0f * dpi_s;
+    float cgap = dt::kSpaceSmDip * dpi_s;
     float val_w = content_w - lw - cgap;
 
 
     for (auto& [label, value] : info) {
         if (y + gap > y_off + h) break;
         int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
-        float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
+        float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), dt::kFontSizeXsDip);
         float vw = 0;
         float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                  value, value_br.Get(), 10.0f, &vw, 10);
+                                  value, value_br.Get(), dt::kFontSizeXsDip, &vw, 10);
         if (out_clickable && !value.empty()) {
             D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
             out_clickable->push_back({cr, value, label});
             if (sel_idx == cur_idx) {
-                float hw = std::min(vw + 8.0f * dpi_s, val_w);
-                float hx = x + pad + lw + cgap - 4.0f * dpi_s;
-                D2D1_RECT_F hr = {hx, y, hx + hw + 4.0f * dpi_s, y2};
+                float hw = std::min(vw + dt::kSpaceSmDip * dpi_s, val_w);
+                float hx = x + pad + lw + cgap - dt::kSpaceXsDip * dpi_s;
+                D2D1_RECT_F hr = {hx, y, hx + hw + dt::kSpaceXsDip * dpi_s, y2};
                 D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                 ComPtr<ID2D1SolidColorBrush> sel_br;
                 m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSelection), &sel_br);
                 m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
-                draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f, nullptr, 10);
+                draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), dt::kFontSizeXsDip, nullptr, 10);
             }
         }
-        y = std::max(y1, y2) + gap - 4.0f * dpi_s;
+        y = std::max(y1, y2) + gap - dt::kSpaceXsDip * dpi_s;
     }
 
     // ── Generation info section ──
     if (!gen_info.empty()) {
-        float title_pad = 12.0f * dpi_s;
+        float title_pad = dt::kSpaceMdDip * dpi_s;
         y += title_pad;
         // Horizontal divider
         ComPtr<ID2D1SolidColorBrush> div_br;
@@ -1242,36 +1242,36 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
             ComPtr<ID2D1SolidColorBrush> title_br;
             m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSectionTitle), &title_br);
             float ty = draw_text_line(x + pad, y, content_w, L"\u751F\u6210\u4FE1\u606F",
-                                      title_br.Get(), 12.0f);
+                                      title_br.Get(), dt::kFontSizeMdDip);
             y = ty + title_pad;
         }
         for (auto& [label, value] : gen_info) {
             if (label.empty()) {
-                y = draw_text_line(x + pad, y, content_w, value, value_br.Get(), 10.0f)
-                    + gap - 4.0f * dpi_s;
+                y = draw_text_line(x + pad, y, content_w, value, value_br.Get(), dt::kFontSizeXsDip)
+                    + gap - dt::kSpaceXsDip * dpi_s;
                 continue;
             }
 
             int cur_idx = out_clickable ? static_cast<int>(out_clickable->size()) : -1;
-            float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), 10.0f);
+            float y1 = draw_text_line(x + pad, y, lw,      label, label_br.Get(), dt::kFontSizeXsDip);
             float vw = 0;
             float y2 = draw_text_line(x + pad + lw + cgap, y, val_w,
-                                      value, value_br.Get(), 10.0f, &vw, 10);
+                                      value, value_br.Get(), dt::kFontSizeXsDip, &vw, 10);
             if (out_clickable && !value.empty()) {
                 D2D1_RECT_F cr = {x + pad + lw + cgap, y, x + pad + lw + cgap + val_w, y2};
                 out_clickable->push_back({cr, value, label});
                 if (sel_idx == cur_idx) {
-                    float hw = std::min(vw + 8.0f * dpi_s, val_w);
-                    float hx = x + pad + lw + cgap - 4.0f * dpi_s;
-                    D2D1_RECT_F hr = {hx, y, hx + hw + 4.0f * dpi_s, y2};
+                    float hw = std::min(vw + dt::kSpaceSmDip * dpi_s, val_w);
+                    float hx = x + pad + lw + cgap - dt::kSpaceXsDip * dpi_s;
+                    D2D1_RECT_F hr = {hx, y, hx + hw + dt::kSpaceXsDip * dpi_s, y2};
                     D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                     ComPtr<ID2D1SolidColorBrush> sel_br;
                     m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSelection), &sel_br);
                     m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
-                    draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f, nullptr, 10);
+                    draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), dt::kFontSizeXsDip, nullptr, 10);
                 }
             }
-            y = std::max(y1, y2) + gap - 4.0f * dpi_s;
+            y = std::max(y1, y2) + gap - dt::kSpaceXsDip * dpi_s;
         }
     }
 
@@ -1288,9 +1288,9 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
         if (constraints.maximum_text_width > 0.0f
             && constraints.maximum_text_height > 0.0f) {
             ComPtr<IDWriteTextFormat> toast_format;
-            m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL, 11.0f * dpi_s, L"zh-CN",
+            m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+                dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL, dt::kFontSizeSmDip * dpi_s, L"zh-CN",
                 &toast_format);
             if (toast_format) {
                 toast_format->SetWordWrapping(
@@ -1374,7 +1374,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
     // Scrollbar on panel right edge
     float total_h = y - y0 + scroll_y + pad;  // extra pad for bottom margin
     if (total_h > h) {
-        float sb_w = 6.0f * dpi_s;
+        float sb_w = dt::kSpace6Dip * dpi_s;
         draw_scrollbar(x + w - sb_w - 2.0f * dpi_s, y_off, sb_w, h, total_h, h, scroll_y);
     }
     return total_h;
@@ -1458,7 +1458,7 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
     // Clip slightly larger than the strip so the current item's selection
     // border and its 1.25x top overhang (bottom-aligned magnification
     // grows upward by ~6 DIP) are not cut off.
-    const float clip_sw = 10.0f * dpi_s;
+    const float clip_sw = dt::kSpace10Dip * dpi_s;
     D2D1_RECT_F strip_clip = {x, y - clip_sw, x + w, y + h + clip_sw};
     m_d2d_context->PushAxisAlignedClip(&strip_clip, D2D1_ANTIALIAS_MODE_ALIASED);
 
@@ -1636,23 +1636,25 @@ void Renderer::draw_filmstrip_arrow(float cx, float cy, const wchar_t* glyph,
 {
     if (!m_d2d_context || !m_dwrite_factory) return;
     ComPtr<IDWriteTextFormat> tf;
-    if (FAILED(m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 12.0f * dpi_scale, L"en-US", &tf))) {
+    if (FAILED(m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+            dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, dt::kFontSizeMdDip * dpi_scale, L"en-US", &tf))) {
         return;
     }
     tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
     if (FAILED(m_dwrite_factory->CreateTextLayout(
-            glyph, 1, tf.Get(), 24.0f * dpi_scale, 24.0f * dpi_scale, &layout))) {
+            glyph, 1, tf.Get(), dt::kSpaceXlDip * dpi_scale,
+            dt::kSpaceXlDip * dpi_scale, &layout))) {
         return;
     }
     ComPtr<ID2D1SolidColorBrush> brush;
     m_d2d_context->CreateSolidColorBrush(
         dt::d2d(dt::kColorFilmstripArrow), &brush);
     m_d2d_context->DrawTextLayout(
-        D2D1::Point2F(cx - 12.0f * dpi_scale, cy - 12.0f * dpi_scale),
+        D2D1::Point2F(cx - dt::kSpaceMdDip * dpi_scale,
+            cy - dt::kSpaceMdDip * dpi_scale),
         layout.Get(), brush.Get());
 }
 
@@ -1665,8 +1667,8 @@ float Renderer::draw_text_line(float x, float y, float w,
     IDWriteTextFormat* fmt = m_text_format.Get();
     ComPtr<IDWriteTextFormat> sized_fmt;
     if (font_size > 0.0f && m_dwrite_factory) {
-        m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+        m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+            dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
             font_size * m_dpi_y / 96.0f, L"en-US", &sized_fmt);
         if (sized_fmt) fmt = sized_fmt.Get();
@@ -1707,8 +1709,8 @@ float Renderer::draw_text_line(float x, float y, float w,
 float Renderer::measure_text(const std::wstring& text, float font_size) {
     if (!m_dwrite_factory) return 0;
     ComPtr<IDWriteTextFormat> tf;
-    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         font_size, L"en-US", &tf);
     ComPtr<IDWriteTextLayout> layout;
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
@@ -1721,7 +1723,7 @@ float Renderer::measure_text(const std::wstring& text, float font_size) {
 void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int active_idx, float y) {
     if (!m_d2d_context || !m_dwrite_factory) return;
 
-    float h = 28.0f * m_dpi_y / 96.0f;
+    float h = dt::dip(dt::kSize28Dip, m_dpi_y);
     ComPtr<ID2D1SolidColorBrush> bg, text_brush, hover_bg;
     m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarBg), &bg);
     m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarText), &text_brush);
@@ -1731,9 +1733,9 @@ void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
     ComPtr<IDWriteTextFormat> tf;
-    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        13.0f * m_dpi_y / 96.0f, L"en-US", &tf);
+    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        dt::dip(dt::kFontSizeLgDip, m_dpi_y), L"en-US", &tf);
 
     float x = 12.0f;
     for (int i = 0; i < static_cast<int>(items.size()); ++i) {
@@ -1776,8 +1778,8 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     // ── Title text (left) ──
     ComPtr<IDWriteTextFormat> tf;
     float fs = layout::kTitleBarMenuFontSizeDip * dpi_s;
-    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightBold, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &tf);
     tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     float title_w = layout::kTitleBarTitleWidthDip * dpi_s;
@@ -1786,8 +1788,8 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
 
     // ── Menu items (after title) ──
     ComPtr<IDWriteTextFormat> mtf;
-    m_dwrite_factory->CreateTextFormat(L"Microsoft YaHei", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
         fs, L"en-US", &mtf);
     float mx = pad + title_w + layout::kTitleBarTitleGapDip * dpi_s;
     for (int i = 0; i < static_cast<int>(menu_items.size()); ++i) {
@@ -1800,13 +1802,13 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
 
         // Hover highlight
         if (i == active_menu) {
-            D2D1_RECT_F hr = {mx - 4.0f * dpi_s, 2.0f * dpi_s,
-                              mx + mw - 4.0f * dpi_s, h - 2.0f * dpi_s};
+            D2D1_RECT_F hr = {mx - dt::kSpaceXsDip * dpi_s, 2.0f * dpi_s,
+                              mx + mw - dt::kSpaceXsDip * dpi_s, h - 2.0f * dpi_s};
             m_d2d_context->FillRoundedRectangle(
                 D2D1::RoundedRect(hr, 4.0f * dpi_s, 4.0f * dpi_s), menu_hover_bg.Get());
         }
 
-        D2D1_POINT_2F pt = {mx + 4.0f * dpi_s, (h - m.height) * 0.5f};
+        D2D1_POINT_2F pt = {mx + dt::kSpaceXsDip * dpi_s, (h - m.height) * 0.5f};
         m_d2d_context->DrawTextLayout(pt, layout.Get(), menu_br.Get());
         mx += mw;
     }
@@ -1831,9 +1833,9 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
         ComPtr<ID2D1SolidColorBrush> sb;
         m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorWindowButtonSymbol), &sb);
         ComPtr<IDWriteTextFormat> stf;
-        float sfs = 10.0f * dpi_s;
-        m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
-            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+        float sfs = dt::kFontSizeXsDip * dpi_s;
+        m_dwrite_factory->CreateTextFormat(dt::kFontFamilySymbols, nullptr,
+            dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             sfs, L"en-US", &stf);
         stf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         stf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -1980,7 +1982,7 @@ void Renderer::draw_breadcrumb(const NavBreadcrumbRenderInput& input) {
         ID2D1SolidColorBrush* brush = item.ellipsis
             ? dim_br.Get()
             : (i == input.hover_item ? hover_br.Get() : text_br.Get());
-        const float tw = std::max(1.0f, item.width + 4.0f * dpi_s);
+        const float tw = std::max(1.0f, item.width + dt::kSpaceXsDip * dpi_s);
         const float th = label_height(text, tw, fs, 1);
         draw_text_line(item.x, input.y + (input.height - th) * 0.5f,
             tw, text, brush, fs, nullptr, 1);
@@ -2063,7 +2065,7 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
         }
     };
     draw_tab(tab_dirs, w_dirs, tx, input.tab == NavPanelTab::Directories);
-    tx += w_dirs + 16.0f * dpi_s;
+    tx += w_dirs + dt::kSpaceLgDip * dpi_s;
     draw_tab(tab_fav, w_fav, tx, input.tab == NavPanelTab::Favorites);
     m_d2d_context->DrawLine(
         D2D1::Point2F(g.x, g.tabs_y + g.tabs_h),
@@ -2094,7 +2096,7 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
             const float indent = layout::kNavIndentDip * dpi_s;
             const float row_left = g.tree_x + pad;
             const float row_right = g.tree_x + g.tree_w - pad
-                - g.scrollbar_w - 4.0f * dpi_s;
+                - g.scrollbar_w - dt::kSpaceXsDip * dpi_s;
             const D2D1_RECT_F clip = D2D1::RectF(
                 g.tree_x, g.tree_y, g.tree_x + g.tree_w,
                 g.tree_y + g.tree_h);
@@ -2148,14 +2150,14 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
                 }
                 const float reserved = badge_w + count_w
                     + ((badge_w > 0.0f || count_w > 0.0f)
-                        ? 6.0f * dpi_s : 0.0f);
+                        ? dt::kSpace6Dip * dpi_s : 0.0f);
                 const float name_w = std::max(8.0f, avail - reserved);
                 const float th = label_height(row.name, name_w, fs, 1);
                 const float ty = y + (row_h - th) * 0.5f;
                 draw_text_line(name_x, ty, name_w, row.name, name_br,
                     fs, nullptr, 1);
                 if (badge_w > 0.0f) {
-                    draw_text_line(name_x + name_w + 6.0f * dpi_s, ty,
+                    draw_text_line(name_x + name_w + dt::kSpace6Dip * dpi_s, ty,
                         badge_w + 4.0f, L"[递归]",
                         badge_br.Get(), small_fs, nullptr, 1);
                 }
@@ -2240,7 +2242,7 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
                     if (sep != std::wstring::npos)
                         name = name.substr(sep + 1);
                     if (row.recursive) name += L" *";
-                    const float nw = std::min(cell.w + 8.0f * dpi_s,
+                    const float nw = std::min(cell.w + dt::kSpaceSmDip * dpi_s,
                         measure_text(name, small_fs * dpi_s) + 4.0f);
                     draw_text_line(cell.x + (cell.w - nw) * 0.5f,
                         cell.label_y, nw, name,
@@ -2255,7 +2257,7 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
         const float arrow_w = layout::kNavArrowWidthDip * dpi_s;
         const float row_left = g.tree_x + pad;
         const float row_right = g.tree_x + g.tree_w - pad
-            - g.scrollbar_w - 4.0f * dpi_s;
+            - g.scrollbar_w - dt::kSpaceXsDip * dpi_s;
         const D2D1_RECT_F clip =
             D2D1::RectF(g.tree_x, g.tree_y, g.tree_x + g.tree_w,
                 g.tree_y + g.tree_h);
@@ -2307,14 +2309,14 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
                 count_w = measure_text(count_text, small_fs * dpi_s);
             }
             const float reserved = badge_w + count_w
-                + ((badge_w > 0.0f || count_w > 0.0f) ? 6.0f * dpi_s : 0.0f);
+                + ((badge_w > 0.0f || count_w > 0.0f) ? dt::kSpace6Dip * dpi_s : 0.0f);
             const float name_w = std::max(8.0f, avail - reserved);
             const float th = label_height(display, name_w, fs, 1);
             const float ty = y + (row.height - th) * 0.5f;
             draw_text_line(name_x, ty, name_w, display, name_br, fs,
                 nullptr, 1);
             if (badge_w > 0.0f) {
-                draw_text_line(name_x + name_w + 6.0f * dpi_s, ty,
+                draw_text_line(name_x + name_w + dt::kSpace6Dip * dpi_s, ty,
                     badge_w + 4.0f, L"[\u9012\u5F52]", badge_br.Get(),
                     small_fs, nullptr, 1);
             }

@@ -1,4 +1,4 @@
-// Unit tests for Phase 1 design tokens (colors only).
+// Unit tests for Phase 1+2 design tokens (colors, spacing, typography).
 // Run via CTest (design_tokens.unit).
 
 #include "design_tokens.h"
@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 namespace {
 
@@ -130,6 +131,60 @@ void test_drifted_accent_blues_remain_distinct() {
         "nav accent blue stays 0.89");
 }
 
+void test_dip() {
+    expect_near(mv::dt::scale(96.0f), 1.0f, 0.0f, "scale 96 -> 1x");
+    expect_near(mv::dt::scale(192.0f), 2.0f, 0.0f, "scale 192 -> 2x");
+    expect_near(mv::dt::scale(0.0f), 1.0f, 0.0f, "scale 0 -> 1x");
+    expect_near(mv::dt::scale(-96.0f), 1.0f, 0.0f, "scale negative -> 1x");
+
+    expect_near(mv::dt::dip(8.0f, 96.0f), 8.0f, 0.0f, "dip 8 @96 -> 8");
+    expect_near(mv::dt::dip(8.0f, 192.0f), 16.0f, 0.0f, "dip 8 @192 -> 16");
+    expect_near(mv::dt::dip(8.0f, 0.0f), 8.0f, 0.0f, "dip 8 @0 -> 8 (1x)");
+    expect_near(mv::dt::dip(8.0f, -96.0f), 8.0f, 0.0f,
+        "dip 8 @negative -> 8 (1x)");
+}
+
+void test_spacing_tokens() {
+    expect_near(mv::dt::kSpace3Dip, 3.0f, 0.0f, "kSpace3Dip == 3");
+    expect_near(mv::dt::kSpaceXsDip, 4.0f, 0.0f, "kSpaceXsDip == 4");
+    expect_near(mv::dt::kSpace6Dip, 6.0f, 0.0f, "kSpace6Dip == 6");
+    expect_near(mv::dt::kSpace7Dip, 7.0f, 0.0f, "kSpace7Dip == 7");
+    expect_near(mv::dt::kSpaceSmDip, 8.0f, 0.0f, "kSpaceSmDip == 8");
+    expect_near(mv::dt::kSpace10Dip, 10.0f, 0.0f, "kSpace10Dip == 10");
+    expect_near(mv::dt::kSpaceMdDip, 12.0f, 0.0f, "kSpaceMdDip == 12");
+    expect_near(mv::dt::kSpace14Dip, 14.0f, 0.0f, "kSpace14Dip == 14");
+    expect_near(mv::dt::kSpaceLgDip, 16.0f, 0.0f, "kSpaceLgDip == 16");
+    expect_near(mv::dt::kSpace20Dip, 20.0f, 0.0f, "kSpace20Dip == 20");
+    expect_near(mv::dt::kSpaceXlDip, 24.0f, 0.0f, "kSpaceXlDip == 24");
+    expect_near(mv::dt::kSize28Dip, 28.0f, 0.0f, "kSize28Dip == 28");
+    expect_near(mv::dt::kSpace2xlDip, 32.0f, 0.0f, "kSpace2xlDip == 32");
+    expect_near(mv::dt::kSize36Dip, 36.0f, 0.0f, "kSize36Dip == 36");
+    expect_near(mv::dt::kSpace40Dip, 40.0f, 0.0f, "kSpace40Dip == 40");
+    expect_near(mv::dt::kSize44Dip, 44.0f, 0.0f, "kSize44Dip == 44");
+    expect_near(mv::dt::kSize64Dip, 64.0f, 0.0f, "kSize64Dip == 64");
+    expect_near(mv::dt::kSize96Dip, 96.0f, 0.0f, "kSize96Dip == 96");
+    expect_near(mv::dt::kSize240Dip, 240.0f, 0.0f, "kSize240Dip == 240");
+    expect_near(mv::dt::kSize480Dip, 480.0f, 0.0f, "kSize480Dip == 480");
+}
+
+void test_typography_tokens() {
+    expect_near(mv::dt::kFontSizeXsDip, 10.0f, 0.0f, "kFontSizeXsDip == 10");
+    expect_near(mv::dt::kFontSizeSmDip, 11.0f, 0.0f, "kFontSizeSmDip == 11");
+    expect_near(mv::dt::kFontSizeMdDip, 12.0f, 0.0f, "kFontSizeMdDip == 12");
+    expect_near(mv::dt::kFontSizeLgDip, 13.0f, 0.0f, "kFontSizeLgDip == 13");
+    expect_near(mv::dt::kFontSizeXlDip, 14.0f, 0.0f, "kFontSizeXlDip == 14");
+
+    expect(std::wstring_view(mv::dt::kFontFamilyUi) == L"Microsoft YaHei",
+        "kFontFamilyUi stays Microsoft YaHei");
+    expect(std::wstring_view(mv::dt::kFontFamilySymbols) == L"Segoe UI",
+        "kFontFamilySymbols stays Segoe UI");
+
+    expect(mv::dt::kFontWeightNormal == DWRITE_FONT_WEIGHT_NORMAL,
+        "kFontWeightNormal == DWRITE_FONT_WEIGHT_NORMAL");
+    expect(mv::dt::kFontWeightBold == DWRITE_FONT_WEIGHT_BOLD,
+        "kFontWeightBold == DWRITE_FONT_WEIGHT_BOLD");
+}
+
 } // namespace
 
 int main() {
@@ -141,6 +196,9 @@ int main() {
         {"with_alpha", test_with_alpha},
         {"drifted_accent_blues_remain_distinct",
             test_drifted_accent_blues_remain_distinct},
+        {"dip", test_dip},
+        {"spacing_tokens", test_spacing_tokens},
+        {"typography_tokens", test_typography_tokens},
     };
 
     int failures = 0;
