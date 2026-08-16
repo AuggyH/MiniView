@@ -1527,16 +1527,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 update_content_viewport(false);
                 m_window.invalidate();
             }
-            // Filmstrip: any mouse movement in large-image mode raises the
-            // strip from the bottom (animated); 3s of stillness auto-hides it.
-            if (filmstrip_showable()) {
-                if (!m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
-                    reveal_filmstrip();
-                    m_window.invalidate();
-                } else if (m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
-                    cancel_filmstrip_hide();
-                    schedule_filmstrip_hide();
-                }
+        }
+        // Filmstrip: any mouse movement in large-image mode (windowed AND
+        // fullscreen) raises the strip from the bottom (animated); 3s of
+        // stillness auto-hides it.
+        if (filmstrip_showable()) {
+            if (!m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
+                reveal_filmstrip();
+                m_window.invalidate();
+            } else if (m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
+                cancel_filmstrip_hide();
+                schedule_filmstrip_hide();
             }
         }
         if (m_comic_reader.middle_autoscroll_active()) {
