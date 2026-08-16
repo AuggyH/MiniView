@@ -804,7 +804,9 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // window-client coordinates (DPI-virtualized, e.g. 1414 vs 2474),
         // so a strip-region rect lands outside the client area and the
         // animation would freeze after one frame ("flash" appearance).
-        if (m_filmstrip.animating()) {
+        // Both animation layers must re-arm: the model's horizontal
+        // handoff AND the App-level vertical rise/hide reveal.
+        if (m_filmstrip.animating() || m_filmstrip_reveal_animating) {
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
