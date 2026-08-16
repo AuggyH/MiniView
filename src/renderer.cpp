@@ -373,7 +373,10 @@ bool Renderer::end_frame() {
     }
 
     DXGI_PRESENT_PARAMETERS pp = {};
-    hr = m_swap_chain->Present1(0, 0, &pp);
+    // vsync: animation frames pace evenly with the display refresh; the
+    // transition layer now uses LINEAR sampling so a 4K frame stays well
+    // inside the 16.7ms budget instead of dropping to 30fps.
+    hr = m_swap_chain->Present1(1, 0, &pp);
     if (should_recreate_render_device(hr)) {
         discard_device_resources();
         return false;
@@ -1940,7 +1943,7 @@ void Renderer::draw_anim_thumb_faded(ID2D1Bitmap1* bmp, D2D1_RECT_F src,
     const D2D1_RECT_F rc =
         transition_interpolated_rect(src, dst, t, et, exit_curve);
     m_d2d_context->DrawBitmap(bmp, &rc, std::clamp(alpha, 0.0f, 1.0f),
-        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+        D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
 }
 
 void Renderer::draw_anim_image(ID2D1Bitmap1* image, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
@@ -1961,7 +1964,7 @@ void Renderer::draw_anim_image(ID2D1Bitmap1* image, D2D1_RECT_F src, D2D1_RECT_F
         (rc.left + rc.right - dw) * 0.5f, (rc.top + rc.bottom - dh) * 0.5f,
         (rc.left + rc.right + dw) * 0.5f, (rc.top + rc.bottom + dh) * 0.5f);
     m_d2d_context->DrawBitmap(image, &dest, 1.0f,
-        D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
+        D2D1_INTERPOLATION_MODE_LINEAR, nullptr);
 }
 
 void Renderer::push_clip_below(float y) {
