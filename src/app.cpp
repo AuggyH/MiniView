@@ -963,6 +963,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_anim_grid_snapshot.Reset();
                 KillTimer(hwnd, 4);
                 m_anim_timer = 0;
+                // 与渲染循环驱动路径一致: 进场完成后立即升起胶片条,
+                // 不能等下一次渲染才触发(否则时机随机拖后)。
+                if (m_anim_forward && !m_grid_mode && filmstrip_showable()) {
+                    reveal_filmstrip();
+                }
             }
             m_window.invalidate();
         }
@@ -1229,6 +1234,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 const D2D1_RECT_F fs = filmstrip_rect();
                 if (wheel_pt.x >= fs.left && wheel_pt.x < fs.right
                     && wheel_pt.y >= fs.top && wheel_pt.y < fs.bottom) {
+                    note_filmstrip_interaction();
                     const int before = m_filmstrip.current();
                     // Wheel direction: scrolling down (delta<0) advances to
                     // the next image (to the right), like the plain wheel.
@@ -1420,6 +1426,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (filmstrip_visible()) {
             int fs_hit = filmstrip_hit_test(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             if (fs_hit >= -1) {
+                note_filmstrip_interaction();
                 if (fs_hit >= 0 && fs_hit != m_current_idx) navigate_to(fs_hit);
                 return 0;
             }
@@ -1539,7 +1546,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // transition is running — the post-transition auto-rise owns that
         // window, so the reveal animation is never consumed invisibly.
         if (!m_animating && filmstrip_showable()) {
-            if (!m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
+            if (m_filmstrip_reveal_animating && !m_filmstrip_reveal_forward) {
+                // 收起动画进行中用户又移动鼠标: 反向重新升起。
+                reveal_filmstrip();
+                m_window.invalidate();
+            } else if (!m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
                 reveal_filmstrip();
                 m_window.invalidate();
             } else if (m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
@@ -4393,7 +4404,10 @@ void App::draw_transition_overlay() {
             ? static_cast<float>(m_toolbar_h) : 0.0f;
         const float left = m_nav_panel_state.visible(false)
             ? static_cast<float>(m_nav_visible_width) : 0.0f;
-        const float right = static_cast<float>(visible_panel_width());
+        // 转场全程按"无信息面板"的大图布局计算拟合矩形: 进入大图前已收起
+        // 面板, 返回网格的面板恢复不应把大图在退场起点往左推。网格端目标
+        // 单元格则来自恢复面板后的实时网格布局。
+        const float right = 0.0f;
         const float view_width = static_cast<float>(target_width)
             - left - right;
         const float view_height = static_cast<float>(target_height) - top;
@@ -4747,9 +4761,12 @@ void App::reveal_filmstrip() {
 void App::hide_filmstrip_animated() {
     cancel_filmstrip_hide();
     m_filmstrip_reveal_forward = false;
+    // Backward run: visual progress = 1 - E(raw), so a fully shown strip
+    // starts at raw=0 and ends hidden at raw=1. (Previously raw started at
+    // 1.0, completing instantly — the exit looked like an instant vanish.)
     m_filmstrip_reveal_raw = m_filmstrip_reveal_animating
         ? 1.0f - m_filmstrip_reveal_raw
-        : 1.0f;
+        : 0.0f;
     LARGE_INTEGER now, freq;
     QueryPerformanceCounter(&now);
     QueryPerformanceFrequency(&freq);
@@ -4799,6 +4816,18 @@ void App::cancel_filmstrip_hide() {
     if (m_filmstrip_timer) {
         KillTimer(m_window.handle(), kFilmstripHideTimerId);
         m_filmstrip_timer = 0;
+    }
+}
+
+void App::note_filmstrip_interaction() {
+    if (!filmstrip_showable()) return;
+    cancel_filmstrip_hide();
+    if (m_filmstrip_reveal_animating && !m_filmstrip_reveal_forward) {
+        // 正在收起时用户又操作了胶片条: 反向重新升起, 不打断播放。
+        reveal_filmstrip();
+    } else if (m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
+        // 已展开: 交互后重新计时 3s 静止收起。
+        schedule_filmstrip_hide();
     }
 }
 
