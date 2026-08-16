@@ -952,7 +952,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / dt::kDurationTransitionSec;  // 200ms
+            m_anim_t = elapsed / dt::kDurationTransitionSec;  // 250ms
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
@@ -4273,7 +4273,7 @@ void App::advance_transition_animation() {
     QueryPerformanceFrequency(&freq);
     const float elapsed =
         static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-    m_anim_t = elapsed / dt::kDurationTransitionSec;  // 200ms
+    m_anim_t = elapsed / dt::kDurationTransitionSec;  // 250ms
     if (m_anim_t >= 1.0f) {
         m_anim_t = 1.0f;
         m_animating = false;
