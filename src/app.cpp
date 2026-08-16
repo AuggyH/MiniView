@@ -5444,6 +5444,9 @@ void App::grid_render() {
 void App::render_frame() {
     advance_transition_animation();
     update_filmstrip_reveal();
+    // 水平滑动(翻页/滚轮)进行中视为持续交互: 不触发3s静止收起;
+    // 滑动结束后由最后一帧重新武装 3s 计时。
+    if (m_filmstrip.animating()) note_filmstrip_interaction();
     check_async_timeout();
     if (m_comic_reader.auto_scroll_owner()
         != mv::ComicAutoScrollOwner::None) {
