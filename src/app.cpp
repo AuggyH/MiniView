@@ -4039,7 +4039,7 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
     if (!forward) {
         // Apple-style exit: the FULL image zooms back into its cell (the
         // low-res thumbnail previously popped the quality at the start).
-        m_anim_thumb = m_renderer.image_bitmap();
+        m_anim_thumb = m_renderer.transition_image();
     }
     if (!m_anim_thumb) {
         (void)run_best_effort_transition_capture([this, thumb_idx]() {
@@ -4171,6 +4171,9 @@ void App::fit_to_window() {
     m_renderer.set_scale(std::min(cw / iw, ch / ih));
     m_renderer.set_offset(0, 0);
     m_renderer.set_scroll_y(0);
+    // Pre-build the fit-scale cache now so the transition and the first
+    // frames blit a small bitmap instead of re-sampling the original.
+    m_renderer.ensure_image_scaled();
 }
 
 void App::zoom_at_center(float factor) {
@@ -4403,7 +4406,7 @@ void App::draw_transition_overlay() {
         m_renderer.draw_fullscreen_bitmap(m_anim_grid_snapshot.Get());
     m_renderer.draw_fade_overlay(p, m_anim_forward);
     if (m_anim_forward) {
-        ID2D1Bitmap1* reveal = m_renderer.image_bitmap();
+        ID2D1Bitmap1* reveal = m_renderer.transition_image();
         if (!reveal) reveal = m_renderer.placeholder_bitmap();
         if (reveal)
             m_renderer.draw_anim_image(reveal, m_anim_src, m_anim_dst, p);

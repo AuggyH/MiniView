@@ -141,6 +141,11 @@ public:
     float content_width() const;
     ID2D1Bitmap1* image_bitmap() const { return m_image_bitmap.Get(); }
     ID2D1Bitmap1* placeholder_bitmap() const { return m_placeholder_bitmap.Get(); }
+    // Animation source: the pre-scaled fit cache when available, so the
+    // transition never re-samples the 4K original every frame.
+    ID2D1Bitmap1* transition_image() const {
+        return m_image_scaled ? m_image_scaled.Get() : m_image_bitmap.Get();
+    }
 
     // Test seam for device-loss recovery verification: release all
     // device-scoped resources exactly like a real device-loss path.
