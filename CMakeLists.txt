@@ -19,6 +19,8 @@ set(SOURCES
     src/renderer.cpp
     src/decoder.cpp
     src/app.cpp
+    src/menu_support.cpp
+    src/ole_support.cpp
     src/comic_reader_loader.cpp
     src/file_operation.cpp
     src/file_operation_windows.cpp
@@ -37,6 +39,8 @@ set(HEADERS
     src/open_error.h
     src/decoder.h
     src/app.h
+    src/menu_support.h
+    src/ole_support.h
     src/app_state.h
     src/layout.h
     src/design_tokens.h
