@@ -253,6 +253,9 @@ void test_path_snapshot_reuse() {
             [&] { return notify_count.load(std::memory_order_relaxed) > 0; });
         expect(ready, "worker must notify after decoding the snapshot path");
     }
+    // 主题色提取的通知可能先于尺寸写入到达, 轮询等待尺寸落地。
+    for (int i = 0; i < 200 && engine.orig_width(0) != 8; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     expect(engine.thumb_count() == 1, "engine must keep one thumb entry");
     expect(engine.orig_width(0) == 8,
         "worker must decode the snapshot path (width)");
