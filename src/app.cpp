@@ -1051,9 +1051,11 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             m_async_busy = false;
         }
         try {
-            // Defer the GPU upload while the filmstrip transition is still
-            // running — the heavy decode already happened on a worker.
-            if (m_filmstrip.animating()) {
+            // Defer the GPU upload while the filmstrip transition or the
+            // grid<->image transition is still running — the heavy decode
+            // already happened on a worker; a mid-animation upload would
+            // swap the zoom layer's bitmap and flash an unrelated image.
+            if (m_filmstrip.animating() || m_animating) {
                 m_pending_image = decoded;
                 m_pending_path = m_current_path;
                 return 0;
@@ -4049,8 +4051,36 @@ bool App::capture_grid_transition_source(int index) {
     return true;
 }
 
+void App::flush_pending_image_before_exit() {
+    // 快速翻页后立刻回网格: 若当前图已解码但为避开动画被延迟上传,
+    // 在退场捕获前同步落盘, 保证缩放层显示的是"用户最后看到的那张",
+    // 而不是上一张或入场图。
+    if (!m_pending_image) return;
+    if (m_pending_path != m_current_path) {
+        m_pending_image.Reset();
+        m_pending_path.clear();
+        return;
+    }
+    ComPtr<IWICBitmapSource> decoded = m_pending_image;
+    m_pending_image.Reset();
+    m_pending_path.clear();
+    try {
+        if (m_renderer.upload_image(decoded.Get())) {
+            m_current_wic = decoded;
+            m_has_image = true;
+            m_renderer.clear_placeholder();
+            m_placeholder_idx = -1;
+            update_content_viewport(false);
+            fit_to_window();
+        }
+    } catch (...) {
+        // 上传失败保持旧图; 退场层与屏幕一致, 不会出现第三张图闪烁。
+    }
+}
+
 void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
     if (m_animating) return;
+    if (!forward) flush_pending_image_before_exit();
     m_anim_forward = forward;
     m_anim_thumb.Reset();
     m_anim_reversed = false;
@@ -5525,7 +5555,7 @@ void App::render_frame() {
     // An image that arrived DURING the transition is uploaded now that the
     // animation is over — never between animation frames (the GPU upload
     // would stall the transition).
-    if (!m_filmstrip.animating() && m_pending_image) {
+    if (!m_filmstrip.animating() && !m_animating && m_pending_image) {
         ComPtr<IWICBitmapSource> decoded = m_pending_image;
         m_pending_image.Reset();
         const bool still_current = (m_pending_path == m_current_path);

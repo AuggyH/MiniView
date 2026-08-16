@@ -245,6 +245,7 @@ private:
     void    schedule_filmstrip_hide();
     void    cancel_filmstrip_hide();
     void    note_filmstrip_interaction();
+    void    flush_pending_image_before_exit();
     float   filmstrip_reveal_progress() const;
     void    reveal_filmstrip();
     void    hide_filmstrip_animated();
