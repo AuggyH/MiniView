@@ -195,6 +195,8 @@ void test_motion_tokens() {
         "kDurationFilmstripHideSec == 3.0 (静止 3s 收起)");
     expect_near(mv::dt::kDurationFilmstripRevealSec, 0.25f, 0.0f,
         "kDurationFilmstripRevealSec == 0.25 (升起/收起动画)");
+    expect(mv::dt::kMaxFullImagePixels == 64000000u,
+        "kMaxFullImagePixels == 64_000_000");
     expect(mv::dt::kDurationToastMs == 1000, "kDurationToastMs == 1000");
     expect(mv::dt::kDurationSelectionHighlightMs == 1000,
         "kDurationSelectionHighlightMs == 1000");

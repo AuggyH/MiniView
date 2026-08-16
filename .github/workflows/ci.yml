@@ -81,3 +81,25 @@ jobs:
 
       - name: 运行 Debug 自动化测试
         run: ctest --test-dir build -C Debug --output-on-failure
+
+  asan-build:
+    name: Windows / asan-build (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 配置 ASan 构建
+        run: >-
+          cmake -S . -B build -A x64
+          -DBUILD_TESTING=ON
+          -DMINVIEW_WARNINGS_AS_ERRORS=ON
+          -DCMAKE_CXX_FLAGS=/fsanitize=address
+
+      - name: 编译 ASan
+        run: cmake --build build --config Release -- /m
+
+      - name: 运行 ASan 自动化测试
+        run: ctest --test-dir build -C Release --output-on-failure

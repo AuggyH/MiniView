@@ -1,4 +1,6 @@
 #include "decoder.h"
+#include "design_tokens.h"
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -81,6 +83,34 @@ ComPtr<IWICBitmapSource> Decoder::decode(const std::wstring& path) {
     HRESULT hr = decoder->GetFrame(0, &frame);
     if (FAILED(hr))
         throw std::runtime_error(decode_error(path, "Failed to get image frame", hr));
+
+    // 全分辨率解码受像素上限保护: 超过 kMaxFullImagePixels 时按比例
+    // 降采样到上限内(保持宽高比), 避免单张超大图耗光 512MiB 软预算。
+    uint32_t fw = 0, fh = 0;
+    if (FAILED(frame->GetSize(&fw, &fh))) {
+        throw std::runtime_error(decode_error(path, "Failed to get image size", hr));
+    }
+    const uint64_t pixels = static_cast<uint64_t>(fw) * fh;
+    if (pixels > static_cast<uint64_t>(dt::kMaxFullImagePixels)) {
+        const double scale = std::sqrt(
+            static_cast<double>(dt::kMaxFullImagePixels)
+                / static_cast<double>(pixels));
+        uint32_t sw = std::max(1u, static_cast<uint32_t>(fw * scale));
+        uint32_t sh = std::max(1u, static_cast<uint32_t>(fh * scale));
+        while (static_cast<uint64_t>(sw) * sh
+            > static_cast<uint64_t>(dt::kMaxFullImagePixels)) {
+            if (sw > sh) --sw; else --sh;
+        }
+        ComPtr<IWICBitmapScaler> scaler;
+        hr = m_factory->CreateBitmapScaler(&scaler);
+        if (FAILED(hr))
+            throw std::runtime_error("Failed to create bitmap scaler");
+        hr = scaler->Initialize(frame.Get(), sw, sh,
+            WICBitmapInterpolationModeFant);
+        if (FAILED(hr))
+            throw std::runtime_error("Failed to scale oversized image");
+        return materialize(convert_to_pbgra(scaler.Get()).Get());
+    }
 
     // Convert to GPU-friendly format at FULL resolution — no downscaling
     return convert_to_pbgra(frame.Get());

@@ -267,6 +267,7 @@ MV_DT_VALUE(kDurationFilmstripHandoffSec, 0.30f);  // filmstrip slot handoff
 MV_DT_VALUE(kDurationFilmstripHideSec, 3.0f);      // 静止 3s 自动收起
 MV_DT_VALUE(kDurationFilmstripRevealSec, 0.25f);   // 鼠标移动升起/收起动画
 MV_DT_VALUE(kDurationToastMs, 1000);
+MV_DT_VALUE(kMaxFullImagePixels, 64000000u);      // 大图全分辨率解码上限(64MP≈256MiB)
 MV_DT_VALUE(kDurationSelectionHighlightMs, 1000);
 MV_DT_VALUE(kDurationImageDebounceMs, 250);
 MV_DT_VALUE(kDurationScrollPauseMs, 80);
