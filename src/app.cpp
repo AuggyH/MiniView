@@ -2,6 +2,7 @@
 #include "app_state.h"
 #include "album_sampler.h"
 #include "design_tokens.h"
+#include "fast_image_dims.h"
 #include "file_operation.h"
 #include "renderer_state.h"
 #include "selection_remap.h"
@@ -5257,6 +5258,30 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
 
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     int effective_cell = std::max(1, static_cast<int>(m_thumb_cell * m_thumb_zoom));
+    // 首帧补全真实尺寸(历史无漂移方案): 文件头快速解析, 仅不支持格式
+    // 回退 WIC probe。结果写回 pool, 后续重建不再重复读取。
+    for (int i = 0; i < total; ++i) {
+        auto& dim = m_grid_dims[static_cast<size_t>(i)];
+        if (dim.first != 0 && dim.second != 0) continue;
+        try {
+            auto fast = fast_image_dimensions(m_index.path_at(i));
+            if (fast) {
+                dim = *fast;
+            } else if (auto info = m_decoder.probe(m_index.path_at(i))) {
+                dim = {info->width, info->height};
+            }
+        } catch (...) {}
+        if (dim.first != 0 && dim.second != 0) {
+            std::lock_guard lock(m_thumb_engine.pool()->mutex);
+            if (i >= 0 && i < static_cast<int>(m_thumb_engine.pool()->thumbs.size())) {
+                auto& thumb = m_thumb_engine.pool()->thumbs[static_cast<size_t>(i)];
+                if (thumb.orig_w == 0 || thumb.orig_h == 0) {
+                    thumb.orig_w = dim.first;
+                    thumb.orig_h = dim.second;
+                }
+            }
+        }
+    }
     GridLayoutInput input;
     input.item_count = total;
     input.area_width = grid_area_width;

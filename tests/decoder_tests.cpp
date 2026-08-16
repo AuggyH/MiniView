@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include "fast_image_dims.h"
 
 #include <array>
 #include <chrono>
@@ -168,6 +169,33 @@ int main() {
         materialize_threw = true;
     }
     expect(materialize_threw, "materialize(nullptr) must throw");
+
+    // 文件头快速尺寸解析(网格无漂移首帧布局依赖它)
+    {
+        const fs::path png = temp.path() / L"dims.png";
+        std::ofstream out(png, std::ios::binary);
+        const std::array<unsigned char, 8> sig = {
+            0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+        out.write(reinterpret_cast<const char*>(sig.data()), sig.size());
+        auto put_be = [&](uint32_t v) {
+            out.put(static_cast<char>((v >> 24) & 0xff));
+            out.put(static_cast<char>((v >> 16) & 0xff));
+            out.put(static_cast<char>((v >> 8) & 0xff));
+            out.put(static_cast<char>(v & 0xff));
+        };
+        put_be(13);                        // IHDR length
+        out.write("IHDR", 4);
+        put_be(1234);                      // width
+        put_be(567);                       // height
+        out.put(8); out.put(6); out.put(0); out.put(0); out.put(0);  // bit/color/comp/filter/interlace
+        out.close();
+        const auto png_dims = mv::fast_image_dimensions(png.wstring());
+        expect(png_dims && png_dims->first == 1234 && png_dims->second == 567,
+            "fast_image_dimensions must read PNG IHDR without WIC");
+        const auto bmp_dims = mv::fast_image_dimensions(valid.wstring());
+        expect(bmp_dims && bmp_dims->first == 8 && bmp_dims->second == 6,
+            "fast_image_dimensions must read BMP header without WIC");
+    }
 
     if (failures != 0) {
         std::cerr << failures << " assertion(s) failed\n";

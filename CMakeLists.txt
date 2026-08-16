@@ -40,6 +40,7 @@ set(HEADERS
     src/app_state.h
     src/layout.h
     src/design_tokens.h
+    src/fast_image_dims.h
     src/comic_reader_loader.h
     src/comic_reader_model.h
     src/file_operation.h
