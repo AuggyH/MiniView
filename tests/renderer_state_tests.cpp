@@ -46,21 +46,18 @@ void expect_near(float actual, float expected, const char* message) {
 void test_transition_ease() {
     expect_near(mv::transition_ease(0.0f), 0.0f, "ease(0) must be 0");
     expect_near(mv::transition_ease(1.0f), 1.0f, "ease(1) must be 1");
-    expect_near(mv::transition_ease(0.5f), 0.5f, "symmetric ease must be 0.5 at midpoint");
-    expect_near(mv::transition_ease(0.25f), 0.15625f,
-        "ease(0.25) must be 15.625% (visible middle, not ease-out 68%)");
+    expect_near(mv::transition_ease(0.5f), 0.9375f,
+        "quartic ease-out must be 93.75% at midpoint");
+    expect_near(mv::transition_ease(0.25f), 0.68359375f,
+        "quartic ease-out must be 68.36% at 25% (Quick Look measured)");
+    expect_near(mv::transition_ease(0.75f), 0.99609375f,
+        "quartic ease-out must be 99.61% at 75%");
     expect_near(mv::transition_ease(-0.5f), 0.0f, "ease must clamp below 0");
     expect_near(mv::transition_ease(1.5f), 1.0f, "ease must clamp above 1");
     expect(mv::transition_ease(0.2f) < mv::transition_ease(0.4f)
             && mv::transition_ease(0.4f) < mv::transition_ease(0.6f)
             && mv::transition_ease(0.6f) < mv::transition_ease(0.8f),
         "ease must be monotonic on [0, 1]");
-    // Mirror property: entry and exit progress must be exact time-mirrors.
-    for (const float s : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 0.37f}) {
-        expect_near(mv::transition_ease(s),
-            1.0f - mv::transition_ease(1.0f - s),
-            "ease(s) must equal 1 - ease(1 - s)");
-    }
 }
 
 void test_device_loss_detection() {

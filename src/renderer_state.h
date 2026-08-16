@@ -36,13 +36,14 @@ inline bool renderer_generation_changed(uint64_t cached, uint64_t current) {
     return cached != current;
 }
 
-// Symmetric ease-in-out (smoothstep): E(s) = s^2 * (3 - 2s), with
-// E(s) = 1 - E(1 - s). The grid<->image transition uses this so an exit
-// played with the same forward curve is the exact time-mirror of entry —
-// the motion stays visible through the middle of both directions.
+// Quartic ease-out E(s) = 1 - (1-s)^4 — measured from macOS Quick Look
+// screen recordings (60fps frame analysis, 2026-08-16): open progress fits
+// this curve best with ~250ms total. Used by the grid<->image transition
+// (the filmstrip handoff uses the same interpolator).
 inline float transition_ease(float t) {
     const float s = std::clamp(t, 0.0f, 1.0f);
-    return s * s * (3.0f - 2.0f * s);
+    const float u = 1.0f - s;
+    return 1.0f - u * u * u * u;
 }
 
 struct ComicRenderRect {

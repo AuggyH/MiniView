@@ -187,12 +187,16 @@ void test_typography_tokens() {
 }
 
 void test_motion_tokens() {
-    expect_near(mv::dt::kDurationTransitionSec, 0.20f, 0.0f,
-        "kDurationTransitionSec == 0.20 (200ms)");
+    expect_near(mv::dt::kDurationTransitionSec, 0.25f, 0.0f,
+        "kDurationTransitionSec == 0.25 (Quick Look 实测 233-267ms)");
     expect_near(mv::dt::kDurationFilmstripHandoffSec, 0.30f, 0.0f,
         "kDurationFilmstripHandoffSec == 0.30 (filmstrip keeps 300ms)");
     expect_near(mv::dt::kDurationFilmstripHideSec, 1.5f, 0.0f,
         "kDurationFilmstripHideSec == 1.5");
+    expect_near(mv::dt::kTransitionCloseCollapseStart, 0.60f, 0.0f,
+        "kTransitionCloseCollapseStart == 0.60");
+    expect_near(mv::dt::kTransitionCloseFadeFloor, 0.65f, 0.0f,
+        "kTransitionCloseFadeFloor == 0.65");
     expect(mv::dt::kDurationToastMs == 1000, "kDurationToastMs == 1000");
     expect(mv::dt::kDurationSelectionHighlightMs == 1000,
         "kDurationSelectionHighlightMs == 1000");

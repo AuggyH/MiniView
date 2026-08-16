@@ -262,9 +262,11 @@ MV_DT_GDI_COLOR(kColorFallbackTextGdi,     128, 128, 128);
     inline constexpr auto name = (value);                          \
     static_assert(name == (value), "design token value changed: " #name)
 
-MV_DT_VALUE(kDurationTransitionSec, 0.20f);        // grid <-> image transition
+MV_DT_VALUE(kDurationTransitionSec, 0.25f);        // grid <-> image transition (Quick Look 实测 233-267ms)
 MV_DT_VALUE(kDurationFilmstripHandoffSec, 0.30f);  // filmstrip slot handoff
 MV_DT_VALUE(kDurationFilmstripHideSec, 1.5f);      // fullscreen filmstrip auto-hide
+MV_DT_VALUE(kTransitionCloseCollapseStart, 0.60f); // 退场: 前 60% 全尺寸淡出
+MV_DT_VALUE(kTransitionCloseFadeFloor, 0.65f);     // 退场: 收拢开始时剩余透明度
 MV_DT_VALUE(kDurationToastMs, 1000);
 MV_DT_VALUE(kDurationSelectionHighlightMs, 1000);
 MV_DT_VALUE(kDurationImageDebounceMs, 250);

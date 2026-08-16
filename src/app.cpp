@@ -4717,11 +4717,11 @@ void App::reverse_transition() {
 // Draws the transition overlay for the current composition. The entry
 // (forward) layers a grid snapshot, the solid background veil fading in,
 // the full image growing inside the interpolated rect, and the zooming
-// thumbnail; the exit is its mirror (veil fading out, image shrinking to
-// the cell). The shared curve is symmetric ease-in-out, so the forward
-// exit run is the exact time-mirror of entry. A reversed run rewinds the
-// same composition via p, so both render paths (image and grid) must share
-// this exact geometry.
+// thumbnail. The exit follows the Quick Look recording: the image stays
+// at the fitted rect and fades out for the first 60% of the run, then
+// collapses into the cell over the final 40% (veil reveals the grid
+// underneath the whole time). A reversed run rewinds the same composition
+// via p, so both render paths (image and grid) share this exact geometry.
 void App::draw_transition_overlay() {
     if (!m_animating) return;
     const float p = m_anim_reversed ? (1.0f - m_anim_t) : m_anim_t;
@@ -4776,8 +4776,28 @@ void App::draw_transition_overlay() {
         if (reveal)
             m_renderer.draw_anim_image(reveal, m_anim_src, m_anim_dst, p);
     }
-    if (m_anim_thumb)
-        m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, p);
+    if (m_anim_thumb) {
+        if (m_anim_forward) {
+            m_renderer.draw_anim_thumb(m_anim_thumb.Get(), m_anim_src, m_anim_dst, p);
+        } else {
+            // Quick Look close (measured): full-size fade-out for the first
+            // 60%, then the rect collapses into the cell over the final 40%.
+            const float fade_phase = std::clamp(
+                p / dt::kTransitionCloseCollapseStart, 0.0f, 1.0f);
+            if (p < dt::kTransitionCloseCollapseStart) {
+                const float alpha = 1.0f
+                    - (1.0f - dt::kTransitionCloseFadeFloor) * fade_phase;
+                m_renderer.draw_anim_thumb_faded(m_anim_thumb.Get(),
+                    m_anim_src, m_anim_src, 0.0f, alpha);
+            } else {
+                const float u = (p - dt::kTransitionCloseCollapseStart)
+                    / (1.0f - dt::kTransitionCloseCollapseStart);
+                const float alpha = dt::kTransitionCloseFadeFloor * (1.0f - u);
+                m_renderer.draw_anim_thumb_faded(m_anim_thumb.Get(),
+                    m_anim_src, m_anim_dst, u, alpha);
+            }
+        }
+    }
 }
 
 void App::interrupt_transition(mv::TransitionTrigger trigger, int nav_dir) {

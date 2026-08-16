@@ -1875,8 +1875,7 @@ void Renderer::draw_fade_overlay(float t, bool forward) {
     // the grid underneath. Three transforms total — translation, scale,
     // background opacity — nothing else.
     const float s = std::clamp(t, 0.0f, 1.0f);
-    // Symmetric ease-in-out: E(s) = 1 - E(1 - s), so a forward exit run
-    // fades exactly like entry fades in (time-mirrored).
+    // Quartic ease-out, shared with the motion curve (Quick Look measured).
     const float et = transition_ease(s);
     const float alpha = forward ? et : (1.0f - et);
     if (alpha <= 0.0f) return;
@@ -1896,9 +1895,8 @@ void Renderer::draw_fullscreen_bitmap(ID2D1Bitmap1* bmp) {
         D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, nullptr);
 }
 
-// Shared transition geometry: symmetric ease-in-out (smoothstep) so the
-// entry and exit runs are exact time-mirrors. (The filmstrip handoff keeps
-// its own quartic ease-out curve.)
+// Shared transition geometry: quartic ease-out (Quick Look measured),
+// same interpolator as the filmstrip handoff.
 static D2D1_RECT_F transition_interpolated_rect(
     D2D1_RECT_F src, D2D1_RECT_F dst, float t, float& out_et) {
     const float s = std::clamp(t, 0.0f, 1.0f);
@@ -1922,17 +1920,22 @@ static D2D1_RECT_F transition_interpolated_rect(
 }
 
 void Renderer::draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t) {
-    if (!m_d2d_context || !bmp) return;
-    if (src.right <= src.left || src.bottom <= src.top) return;
-    if (dst.right <= dst.left || dst.bottom <= dst.top) return;
-    float et = 0.0f;
-    const D2D1_RECT_F rc = transition_interpolated_rect(src, dst, t, et);
     // Content handoff: fade the zooming layer out over the final third so
     // the full image underneath takes over without a pop.
     const float s = std::clamp(t, 0.0f, 1.0f);
     const float fade = s < 0.68f
         ? 1.0f : std::max(0.0f, 1.0f - (s - 0.68f) / 0.32f);
-    m_d2d_context->DrawBitmap(bmp, &rc, fade,
+    draw_anim_thumb_faded(bmp, src, dst, t, fade);
+}
+
+void Renderer::draw_anim_thumb_faded(ID2D1Bitmap1* bmp, D2D1_RECT_F src,
+    D2D1_RECT_F dst, float t, float alpha) {
+    if (!m_d2d_context || !bmp) return;
+    if (src.right <= src.left || src.bottom <= src.top) return;
+    if (dst.right <= dst.left || dst.bottom <= dst.top) return;
+    float et = 0.0f;
+    const D2D1_RECT_F rc = transition_interpolated_rect(src, dst, t, et);
+    m_d2d_context->DrawBitmap(bmp, &rc, std::clamp(alpha, 0.0f, 1.0f),
         D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
 }
 
