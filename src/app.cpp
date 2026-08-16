@@ -4704,6 +4704,17 @@ void App::update_filmstrip_reveal() {
 
 void App::reveal_filmstrip() {
     if (m_animating || !filmstrip_showable()) return;
+    // Instant pre-sync: the strip must already be centered on the current
+    // item when it rises — never play a horizontal centering handoff on top
+    // of the vertical rise animation.
+    const int total = static_cast<int>(m_index.size());
+    if (m_filmstrip.item_count() != total) m_filmstrip.set_items(total);
+    const float dpi_s =
+        static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
+    const float strip_w = static_cast<float>(m_renderer.target_size().width)
+        - static_cast<float>(visible_panel_width());
+    m_filmstrip.set_viewport(strip_w, dpi_s);
+    m_filmstrip.sync_current_now(m_current_idx);
     cancel_filmstrip_hide();
     m_filmstrip_reveal_forward = true;
     // Flip the raw clock so the current visual position continues smoothly.

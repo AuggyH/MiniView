@@ -142,6 +142,22 @@ void test_center_current() {
     expect(model.right_overflow(), "at home right overflow shown");
 }
 
+void test_sync_current_now() {
+    mv::FilmstripModel model;
+    model.set_items(100);
+    model.set_viewport(640.0f, 1.0f);
+    model.set_current(50);            // starts a 300ms centering handoff
+    expect(model.animating(), "set_current must start the horizontal handoff");
+    model.sync_current_now(70);       // first-appearance instant sync
+    expect(!model.animating(), "sync_current_now must cancel the horizontal handoff");
+    expect(model.current() == 70, "sync_current_now must update the current item");
+    expect(model.scroll() == model.display_scroll(),
+        "sync_current_now must snap display scroll to the centered target");
+    const mv::FilmstripItemRect r = model.item_rect(70);
+    expect_near(r.left + r.width * 0.5f, 640.0f * 0.5f, 1.0f,
+        "sync_current_now must center the item immediately");
+}
+
 void test_overflow_logic() {
     mv::FilmstripModel model;
     model.set_items(50);
@@ -334,6 +350,7 @@ int main() {
         {"aspect_ratio", test_aspect_ratio},
         {"windowed_visible_range", test_windowed_visible_range},
         {"center_current", test_center_current},
+        {"sync_current_now", test_sync_current_now},
         {"overflow_logic", test_overflow_logic},
         {"panel_avoidance", test_panel_avoidance},
         {"hit_test", test_hit_test},

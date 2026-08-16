@@ -103,14 +103,29 @@ public:
         return center - m_viewport * 0.5f;
     }
 
+    // Instant, animation-free sync used when the strip first appears:
+    // centers the current item immediately so the vertical rise animation
+    // never overlaps a horizontal centering handoff.
+    void sync_current_now(int index) {
+        if (index < 0 || index >= m_count) return;
+        m_current = index;
+        m_prev_current = -1;
+        m_prev_zoom_start = 1.0f;
+        m_zoom_t = 1.0f;
+        m_scroll = scroll_for_current(index);
+        m_display_scroll = m_scroll;
+        m_scroll_from = m_scroll;
+        m_scroll_target = m_scroll;
+        m_anim_time = 1.0f;
+    }
+
     // Centers the given item in the viewport (no clamping at the ends).
     // With animate=true the strip plays the full handoff transition: the
     // strip scrolls forward one slot, the previous item's border fades
     // out while it shrinks 1.25x -> 1.0x, and the new item's border fades
     // in while it grows 1.0x -> 1.25x (all driven by advance_animation).
     // With animate=false (wheel paging) the switch is instant.
-    void set_current(int index, bool animate = true) {
-        if (index < 0 || index >= m_count) return;
+    void set_current(int index, bool animate = true) {        if (index < 0 || index >= m_count) return;
         if (m_current != index) {
             if (animate) {
                 // The old item becomes the shrinking previous item. Its
