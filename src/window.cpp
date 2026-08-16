@@ -1,4 +1,5 @@
 #include "window.h"
+#include "design_tokens.h"
 #include <stdexcept>
 #include <dwmapi.h>
 
@@ -20,7 +21,7 @@ bool Window::create(const std::wstring& /*title*/, int width, int height) {
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hinst;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = CreateSolidBrush(RGB(26, 26, 26));  // dark background
+    wc.hbrBackground = CreateSolidBrush(dt::kColorWindowBgGdi);  // dark background
     wc.lpszClassName = WINDOW_CLASS_NAME;
 
     RegisterClassExW(&wc);

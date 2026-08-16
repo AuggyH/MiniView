@@ -1,4 +1,5 @@
 #pragma once
+#include "design_tokens.h"
 #include "renderer_state.h"
 #include "layout.h"
 
@@ -33,7 +34,7 @@ struct FilmstripRenderItem {
     float width = 0.0f;
     float height = 0.0f;
     ID2D1Bitmap1* bitmap = nullptr;
-    D2D1_COLOR_F placeholder_color = {0.10f, 0.10f, 0.12f, 1.0f};
+    D2D1_COLOR_F placeholder_color = dt::d2d(dt::kColorPlaceholder);
     bool current = false;
     float zoom = 1.0f;  // magnified zoom (border alpha + float ordering)
 };
@@ -110,10 +111,12 @@ public:
     void draw_comic_controls(const ComicControlsRenderInput& input);
     void draw_selection_border(D2D1_RECT_F rc, float alpha = 1.0f);
     void draw_label(float x, float y, float w, const std::wstring& text, float font_size,
-        float r = 0.82f, float g = 0.82f, float b = 0.85f);
+        float r = dt::kColorLabelDefault.r, float g = dt::kColorLabelDefault.g,
+        float b = dt::kColorLabelDefault.b);
     float label_height(const std::wstring& text, float w, float font_size, int max_lines = 2);
 
-    void clear(float r = 0.102f, float g = 0.102f, float b = 0.102f);
+    void clear(float r = dt::kColorCanvas.r, float g = dt::kColorCanvas.g,
+        float b = dt::kColorCanvas.b);
 
     void set_dpi(float dpi_x, float dpi_y);
     D2D1_SIZE_U target_size() const { return m_target_size; }

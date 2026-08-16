@@ -154,7 +154,7 @@ bool Renderer::create_text_resources() {
     if (!m_d2d_context) return false;
     ComPtr<ID2D1SolidColorBrush> overlay_brush;
     hr = m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f),
+        dt::d2d(dt::kColorOverlayText),
         &overlay_brush);
     if (FAILED(hr)) return false;
 
@@ -383,7 +383,7 @@ void Renderer::draw_hint(const std::wstring& text) {
     if (!m_d2d_context || !m_text_format) return;
     ComPtr<ID2D1SolidColorBrush> brush;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.5f, 0.5f, 0.5f, 0.8f), &brush);
+        dt::d2d(dt::kColorHintText), &brush);
     D2D1_RECT_F rc = {0, 0,
         static_cast<float>(m_target_size.width),
         static_cast<float>(m_target_size.height)};
@@ -413,11 +413,11 @@ void Renderer::draw_status_message(const std::wstring& text) {
     ComPtr<ID2D1SolidColorBrush> border;
     ComPtr<ID2D1SolidColorBrush> foreground;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.18f, 0.08f, 0.06f, 0.96f), &background);
+        dt::d2d(dt::kColorStatusErrorBg), &background);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.88f, 0.38f, 0.24f, 1.0f), &border);
+        dt::d2d(dt::kColorStatusErrorBorder), &border);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.96f, 0.90f, 0.88f, 1.0f), &foreground);
+        dt::d2d(dt::kColorStatusErrorText), &foreground);
     if (!background || !border || !foreground) return;
 
     m_d2d_context->FillRoundedRectangle(rounded, background.Get());
@@ -468,8 +468,8 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
 
     // ── Card background ──
     ComPtr<ID2D1SolidColorBrush> bg, border;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.06f, 0.06f, 0.08f, 0.94f), &bg);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.22f, 0.22f, 0.28f, 0.7f), &border);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoCardBg), &bg);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoCardBorder), &border);
 
     D2D1_RECT_F rc = {card_x, card_y, card_x + card_w, card_y + card_h};
     D2D1_ROUNDED_RECT rr = {rc, radius, radius};
@@ -478,9 +478,9 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
 
     // ── Brushes ──
     ComPtr<ID2D1SolidColorBrush> label_brush, value_brush, dim_brush;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.45f, 0.45f, 0.50f, 1.0f), &label_brush);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.88f, 0.88f, 0.90f, 1.0f), &value_brush);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.35f, 0.35f, 0.38f, 1.0f), &dim_brush);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoLabel), &label_brush);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoValue), &value_brush);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoDim), &dim_brush);
 
     // ── Pass 2: draw items ──
     float cur_y = card_y + pad;
@@ -537,7 +537,7 @@ void Renderer::draw_overlay(float bottom_inset) {
     // Shadow
     ComPtr<ID2D1SolidColorBrush> shadow;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.6f), &shadow);
+        dt::d2d(dt::kColorOverlayShadow), &shadow);
     D2D1_RECT_F sl = {x + 1.0f, y + 1.0f, x + max_w + 1.0f, y + OVERLAY_FONT_SIZE + 5.0f};
     m_d2d_context->DrawText(text.c_str(), static_cast<uint32_t>(text.size()),
         m_text_format.Get(), &sl, shadow.Get());
@@ -603,7 +603,7 @@ void Renderer::draw_grid_placeholder(float x, float y, float w, float h, D2D1_CO
     // Keep an unloaded or very dark thumbnail visibly distinct from the
     // #1A1A1A canvas so a fast scroll never looks like an empty grid.
     if (std::max({color.r, color.g, color.b}) < 0.18f)
-        color = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
+        color = dt::d2d(dt::kColorPlaceholderMin);
 
     float radius = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
     D2D1_RECT_F rc = {x, y, x + w, y + h};
@@ -657,9 +657,9 @@ void Renderer::draw_favourite_badge(float x, float y, float size) {
     if (!m_d2d_context || !m_dwrite_factory || size <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> chip, heart;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.10f, 0.10f, 0.11f, 0.92f), &chip);
+        dt::d2d(dt::kColorFavouriteChip), &chip);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.92f, 0.32f, 0.42f, 1.0f), &heart);
+        dt::d2d(dt::kColorFavouriteHeart), &heart);
     const D2D1_RECT_F rect = D2D1::RectF(x, y, x + size, y + size);
     const float radius = size * 0.3f;
     m_d2d_context->FillRoundedRectangle(
@@ -737,8 +737,8 @@ void Renderer::draw_comic_card_visual(
     const bool failed = visual == ComicPageVisual::Error;
     ComPtr<ID2D1SolidColorBrush> background;
     m_d2d_context->CreateSolidColorBrush(
-        failed ? D2D1::ColorF(0.20f, 0.12f, 0.12f, 1.0f)
-               : D2D1::ColorF(0.16f, 0.16f, 0.18f, 1.0f),
+        failed ? dt::d2d(dt::kColorComicErrorBg)
+               : dt::d2d(dt::kColorComicPlaceholderBg),
         &background);
     if (!background) return;
 
@@ -752,8 +752,8 @@ void Renderer::draw_comic_card_visual(
 
     ComPtr<ID2D1SolidColorBrush> border;
     m_d2d_context->CreateSolidColorBrush(
-        failed ? D2D1::ColorF(0.42f, 0.24f, 0.24f, 1.0f)
-               : D2D1::ColorF(0.22f, 0.22f, 0.25f, 1.0f),
+        failed ? dt::d2d(dt::kColorComicErrorBorder)
+               : dt::d2d(dt::kColorComicPlaceholderBorder),
         &border);
     if (border) {
         if (metrics.corner_radius > 0.0f) {
@@ -770,7 +770,7 @@ void Renderer::draw_comic_card_visual(
 
     ComPtr<ID2D1SolidColorBrush> text;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.88f, 0.72f, 0.72f, 1.0f), &text);
+        dt::d2d(dt::kColorComicErrorText), &text);
     ComPtr<IDWriteTextFormat> format;
     m_dwrite_factory->CreateTextFormat(
         L"Microsoft YaHei", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
@@ -818,7 +818,7 @@ void Renderer::draw_comic_pages(
     const D2D1_RECT_F viewport_rect = to_d2d_rect(plan.viewport);
     ComPtr<ID2D1SolidColorBrush> background;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.102f, 0.102f, 0.102f, 1.0f),
+        dt::d2d(dt::kColorCanvas),
         &background);
     if (background) {
         m_d2d_context->FillRectangle(&viewport_rect, background.Get());
@@ -857,12 +857,12 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         ComPtr<ID2D1SolidColorBrush> track_brush;
         ComPtr<ID2D1SolidColorBrush> thumb_brush;
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.48f, 0.48f, 0.52f, 0.26f), &track_brush);
+            dt::d2d(dt::kColorComicScrollbarTrack), &track_brush);
         const D2D1_COLOR_F thumb_color = layout.scrollbar.dragging
-            ? D2D1::ColorF(0.78f, 0.78f, 0.84f, 0.96f)
+            ? dt::d2d(dt::kColorComicScrollbarThumbActive)
             : layout.scrollbar.hovered
-                ? D2D1::ColorF(0.66f, 0.66f, 0.72f, 0.90f)
-                : D2D1::ColorF(0.50f, 0.50f, 0.56f, 0.72f);
+                ? dt::d2d(dt::kColorComicScrollbarThumbHover)
+                : dt::d2d(dt::kColorComicScrollbarThumbIdle);
         m_d2d_context->CreateSolidColorBrush(thumb_color, &thumb_brush);
         if (track_brush) {
             const D2D1_ROUNDED_RECT track = {
@@ -894,12 +894,12 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         ComPtr<ID2D1SolidColorBrush> border;
         ComPtr<ID2D1SolidColorBrush> text;
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.08f, 0.08f, 0.09f, background_alpha),
+            dt::d2d(dt::with_alpha(dt::kColorComicOverlayBg, background_alpha)),
             &background);
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.56f, 0.56f, 0.62f, 0.34f), &border);
+            dt::d2d(dt::kColorComicOverlayBorder), &border);
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.91f, 0.91f, 0.93f, 0.94f), &text);
+            dt::d2d(dt::kColorComicOverlayText), &text);
         const float radius = std::min(
             overlay.bounds.height() * 0.28f,
             8.0f * layout.metrics.dpi_scale);
@@ -964,12 +964,12 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         ComPtr<ID2D1SolidColorBrush> ring;
         ComPtr<ID2D1SolidColorBrush> arrow;
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.10f, 0.10f, 0.12f, 0.58f), &zone);
+            dt::d2d(dt::kColorAutoscrollZone), &zone);
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.72f, 0.72f, 0.78f, 0.72f), &ring);
+            dt::d2d(dt::kColorAutoscrollRing), &ring);
         const float arrow_alpha = 0.72f + 0.24f * layout.autoscroll.intensity;
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.84f, 0.84f, 0.90f, arrow_alpha), &arrow);
+            dt::d2d(dt::with_alpha(dt::kColorAutoscrollArrow, arrow_alpha)), &arrow);
         if (zone) {
             m_d2d_context->FillEllipse(&dead_zone, zone.Get());
             m_d2d_context->FillEllipse(&anchor_dot, zone.Get());
@@ -1027,11 +1027,11 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         ComPtr<ID2D1SolidColorBrush> thumb;
         ComPtr<ID2D1SolidColorBrush> label;
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.30f, 0.30f, 0.36f, 0.9f), &track);
+            dt::d2d(dt::kColorWidthSliderTrack), &track);
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.62f, 0.62f, 0.70f, 1.0f), &thumb);
+            dt::d2d(dt::kColorWidthSliderThumb), &thumb);
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.55f, 0.55f, 0.60f, 1.0f), &label);
+            dt::d2d(dt::kColorTextDim), &label);
         m_d2d_context->FillRoundedRectangle(
             D2D1::RoundedRect(
                 D2D1::RectF(slider.track.left, slider.track.top,
@@ -1061,7 +1061,7 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         const float tw2 = measure_text(text, fs * dpi_s);
         ComPtr<ID2D1SolidColorBrush> cruise_br;
         m_d2d_context->CreateSolidColorBrush(
-            D2D1::ColorF(0.55f, 0.62f, 0.72f, 1.0f), &cruise_br);
+            dt::d2d(dt::kColorCruiseIndicator), &cruise_br);
         const float th2 = label_height(text, tw2 + 4.0f, fs, 1);
         draw_text_line(
             layout.viewport.right - layout.metrics.edge_margin
@@ -1078,7 +1078,7 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc, float alpha) {
     if (!m_d2d_context) return;
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.29f, 0.56f, 1.0f, alpha), &br);
+        dt::d2d(dt::with_alpha(dt::kColorSelectionAccent, alpha)), &br);
     float r = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
     float sw = 2.0f * m_dpi_y / 96.0f;
     float outer_r = r + sw;
@@ -1158,18 +1158,18 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
     // Panel background (fixed, not scrolled)
     ComPtr<ID2D1SolidColorBrush> bg;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.10f, 0.10f, 0.12f, 0.95f), &bg);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelBg), &bg);
     D2D1_RECT_F rc = {x, y_off, x + w, y_off + h};
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
     // Divider line
     ComPtr<ID2D1SolidColorBrush> line;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.24f, 1.0f), &line);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelDivider), &line);
     m_d2d_context->DrawLine({x, y_off}, {x, y_off + h}, line.Get(), 1.0f);
 
     ComPtr<ID2D1SolidColorBrush> label_br, value_br;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.80f, 0.80f, 0.82f, 1.0f), &label_br);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.60f, 0.60f, 0.64f, 1.0f), &value_br);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelLabel), &label_br);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelValue), &value_br);
 
     float content_w = w - pad * 2;
 
@@ -1220,7 +1220,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 D2D1_RECT_F hr = {hx, y, hx + hw + 4.0f * dpi_s, y2};
                 D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                 ComPtr<ID2D1SolidColorBrush> sel_br;
-                m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
+                m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSelection), &sel_br);
                 m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
                 draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f, nullptr, 10);
             }
@@ -1234,13 +1234,13 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
         y += title_pad;
         // Horizontal divider
         ComPtr<ID2D1SolidColorBrush> div_br;
-        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.24f, 1.0f), &div_br);
+        m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelDivider), &div_br);
         m_d2d_context->DrawLine({x + pad, y}, {x + pad + content_w, y}, div_br.Get(), 1.0f);
         y += title_pad;
         // Section title
         {
             ComPtr<ID2D1SolidColorBrush> title_br;
-            m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.70f, 0.70f, 0.74f, 1.0f), &title_br);
+            m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSectionTitle), &title_br);
             float ty = draw_text_line(x + pad, y, content_w, L"\u751F\u6210\u4FE1\u606F",
                                       title_br.Get(), 12.0f);
             y = ty + title_pad;
@@ -1266,7 +1266,7 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                     D2D1_RECT_F hr = {hx, y, hx + hw + 4.0f * dpi_s, y2};
                     D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
                     ComPtr<ID2D1SolidColorBrush> sel_br;
-                    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.40f, 0.70f, 0.35f), &sel_br);
+                    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSelection), &sel_br);
                     m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
                     draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), 10.0f, nullptr, 10);
                 }
@@ -1341,9 +1341,9 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                     ComPtr<ID2D1SolidColorBrush> toast_bg;
                     ComPtr<ID2D1SolidColorBrush> toast_txt;
                     m_d2d_context->CreateSolidColorBrush(
-                        D2D1::ColorF(0.15f, 0.15f, 0.18f, 0.92f), &toast_bg);
+                        dt::d2d(dt::kColorPanelToastBg), &toast_bg);
                     m_d2d_context->CreateSolidColorBrush(
-                        D2D1::ColorF(0.85f, 0.85f, 0.88f, 1.0f), &toast_txt);
+                        dt::d2d(dt::kColorPanelToastText), &toast_txt);
                     if (toast_bg && toast_txt) {
                         const D2D1_RECT_F bounds = {
                             layout.bounds.left, layout.bounds.top,
@@ -1393,13 +1393,12 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
 
     float inner_w  = active ? w - 2.0f : w - 6.0f;  // wider when active
     float offset_x = (w - inner_w) / 2.0f;
-    float alpha    = active ? 0.95f : 0.70f;
-    float r = active ? 0.58f : 0.40f;
-    float g = active ? 0.58f : 0.40f;
-    float b = active ? 0.64f : 0.45f;
 
     ComPtr<ID2D1SolidColorBrush> thumb;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(r, g, b, alpha), &thumb);
+    m_d2d_context->CreateSolidColorBrush(
+        dt::d2d(active ? dt::kColorScrollbarThumbActive
+                       : dt::kColorScrollbarThumbIdle),
+        &thumb);
 
     D2D1_RECT_F tr = {x + offset_x, thumb_y, x + offset_x + inner_w, thumb_y + thumb_h};
     float radius = inner_w * 0.4f;
@@ -1431,14 +1430,15 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
         constexpr float kGradStart = 0.5f;  // fade begins at 50% height
         std::array<D2D1_GRADIENT_STOP, 9> stops{};
         constexpr int kFadeSegs = 7;  // eased segments from start..top
-        stops[0] = {0.0f, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.5f)};
-        stops[1] = {kGradStart, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.5f)};
+        stops[0] = {0.0f, dt::d2d(dt::with_alpha(dt::kColorBlack, 0.5f))};
+        stops[1] = {kGradStart, dt::d2d(dt::with_alpha(dt::kColorBlack, 0.5f))};
         for (int i = 0; i < kFadeSegs; ++i) {
             const float t = static_cast<float>(i + 1) / kFadeSegs;  // 1/7..1
             const float eased = t * t * (3.0f - 2.0f * t);  // smoothstep
             const float pos = kGradStart + (1.0f - kGradStart) * t;
             stops[2 + i] = {pos,
-                D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.5f * (1.0f - eased))};
+                dt::d2d(dt::with_alpha(dt::kColorBlack,
+                    0.5f * (1.0f - eased)))};
         }
         ComPtr<ID2D1GradientStopCollection> coll;
         if (SUCCEEDED(m_d2d_context->CreateGradientStopCollection(
@@ -1473,10 +1473,10 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
         m_filmstrip_mask_width = w;
         constexpr float kFade = 0.06f;  // 6% of strip width per edge
         const D2D1_GRADIENT_STOP stops[4] = {
-            {0.00f, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f)},
-            {kFade, D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f)},
-            {1.0f - kFade, D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f)},
-            {1.00f, D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f)},
+            {0.00f, dt::d2d(dt::with_alpha(dt::kColorBlack, 0.0f))},
+            {kFade, dt::d2d(dt::with_alpha(dt::kColorBlack, 1.0f))},
+            {1.0f - kFade, dt::d2d(dt::with_alpha(dt::kColorBlack, 1.0f))},
+            {1.00f, dt::d2d(dt::with_alpha(dt::kColorBlack, 0.0f))},
         };
         ComPtr<ID2D1GradientStopCollection> coll;
         if (SUCCEEDED(m_d2d_context->CreateGradientStopCollection(
@@ -1538,7 +1538,7 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
             // Skeleton placeholder with the image's dominant color.
             D2D1_COLOR_F fill = item.placeholder_color;
             if (std::max({fill.r, fill.g, fill.b}) < 0.18f)
-                fill = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
+                fill = dt::d2d(dt::kColorPlaceholderMin);
             D2D1_ROUNDED_RECT rr = {rc, radius, radius};
             ComPtr<ID2D1SolidColorBrush> brush;
             m_d2d_context->CreateSolidColorBrush(fill, &brush);
@@ -1584,7 +1584,7 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
         } else {
             D2D1_COLOR_F fill = item.placeholder_color;
             if (std::max({fill.r, fill.g, fill.b}) < 0.18f)
-                fill = D2D1::ColorF(0.18f, 0.18f, 0.20f, 1.0f);
+                fill = dt::d2d(dt::kColorPlaceholderMin);
             D2D1_ROUNDED_RECT rr = {rc, radius, radius};
             ComPtr<ID2D1SolidColorBrush> brush;
             m_d2d_context->CreateSolidColorBrush(fill, &brush);
@@ -1650,7 +1650,7 @@ void Renderer::draw_filmstrip_arrow(float cx, float cy, const wchar_t* glyph,
     }
     ComPtr<ID2D1SolidColorBrush> brush;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.82f, 0.82f, 0.85f, 1.0f), &brush);
+        dt::d2d(dt::kColorFilmstripArrow), &brush);
     m_d2d_context->DrawTextLayout(
         D2D1::Point2F(cx - 12.0f * dpi_scale, cy - 12.0f * dpi_scale),
         layout.Get(), brush.Get());
@@ -1723,9 +1723,9 @@ void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int
 
     float h = 28.0f * m_dpi_y / 96.0f;
     ComPtr<ID2D1SolidColorBrush> bg, text_brush, hover_bg;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.11f, 0.11f, 0.13f, 1.0f), &bg);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.8f, 0.8f, 0.82f, 1.0f), &text_brush);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.18f, 0.18f, 0.22f, 1.0f), &hover_bg);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarBg), &bg);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarText), &text_brush);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarHoverBg), &hover_bg);
 
     D2D1_RECT_F rc = {0, y, w, y + h};
     m_d2d_context->FillRectangle(&rc, bg.Get());
@@ -1769,9 +1769,9 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
 
     // ── Brushes ──
     ComPtr<ID2D1SolidColorBrush> title_br, menu_br, menu_hover_bg;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &title_br);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.72f, 0.72f, 0.75f, 1.0f), &menu_br);
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.22f, 0.22f, 0.26f, 1.0f), &menu_hover_bg);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorTitleText), &title_br);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorTitleMenuText), &menu_br);
+    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorTitleMenuHoverBg), &menu_hover_bg);
 
     // ── Title text (left) ──
     ComPtr<IDWriteTextFormat> tf;
@@ -1819,14 +1819,17 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
         if (hover) {
             ComPtr<ID2D1SolidColorBrush> bb;
             float a = press ? 0.7f : 0.35f;
-            m_d2d_context->CreateSolidColorBrush(is_close
-                ? D2D1::ColorF(0.91f, 0.30f, 0.24f, a)
-                : D2D1::ColorF(0.70f, 0.70f, 0.70f, a), &bb);
+            m_d2d_context->CreateSolidColorBrush(
+                dt::d2d(dt::with_alpha(
+                    is_close ? dt::kColorWindowButtonCloseHover
+                             : dt::kColorWindowButtonHover,
+                    a)),
+                &bb);
             D2D1_RECT_F br = {bx, 0, bx + btn_w, h};
             m_d2d_context->FillRectangle(&br, bb.Get());
         }
         ComPtr<ID2D1SolidColorBrush> sb;
-        m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(0.88f, 0.88f, 0.88f, 1.0f), &sb);
+        m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorWindowButtonSymbol), &sb);
         ComPtr<IDWriteTextFormat> stf;
         float sfs = 10.0f * dpi_s;
         m_dwrite_factory->CreateTextFormat(L"Segoe UI", nullptr,
@@ -1856,7 +1859,7 @@ void Renderer::draw_fade_overlay(float t, bool forward) {
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.102f, 0.102f, 0.102f, std::clamp(alpha, 0.0f, 1.0f)), &br);
+        dt::d2d(dt::with_alpha(dt::kColorCanvas, std::clamp(alpha, 0.0f, 1.0f))), &br);
     D2D1_RECT_F rc = {0, 0, static_cast<float>(m_target_size.width),
                       static_cast<float>(m_target_size.height)};
     m_d2d_context->FillRectangle(&rc, br.Get());
@@ -1959,13 +1962,13 @@ void Renderer::draw_breadcrumb(const NavBreadcrumbRenderInput& input) {
 
     ComPtr<ID2D1SolidColorBrush> text_br, hover_br, dim_br, line_br;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &text_br);
+        dt::d2d(dt::kColorTitleText), &text_br);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.97f, 0.97f, 0.98f, 1.0f), &hover_br);
+        dt::d2d(dt::kColorBreadcrumbHover), &hover_br);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.55f, 0.55f, 0.60f, 1.0f), &dim_br);
+        dt::d2d(dt::kColorTextDim), &dim_br);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.20f, 0.20f, 0.22f, 1.0f), &line_br);
+        dt::d2d(dt::kColorBreadcrumbLine), &line_br);
 
     for (int i = 0; i < static_cast<int>(input.layout->items.size()); ++i) {
         const auto& item = input.layout->items[i];
@@ -2001,25 +2004,25 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
     ComPtr<ID2D1SolidColorBrush> bg_br, line_br, text_br, dim_br,
         bright_br, hover_bg, sel_bg, accent_br, badge_br, error_br;
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.11f, 0.11f, 0.13f, 1.0f), &bg_br);       // #1c1c21
+        dt::d2d(dt::kColorToolbarBg), &bg_br);       // #1c1c21
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.16f, 0.16f, 0.19f, 1.0f), &line_br);     // #292931
+        dt::d2d(dt::kColorNavLine), &line_br);     // #292931
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.80f, 0.80f, 0.83f, 1.0f), &text_br);
+        dt::d2d(dt::kColorTitleText), &text_br);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.50f, 0.50f, 0.55f, 1.0f), &dim_br);      // #80808c
+        dt::d2d(dt::kColorNavDim), &dim_br);      // #80808c
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.93f, 0.93f, 0.95f, 1.0f), &bright_br);
+        dt::d2d(dt::kColorNavBright), &bright_br);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.15f, 0.15f, 0.18f, 1.0f), &hover_bg);    // #26262e
+        dt::d2d(dt::kColorNavHoverBg), &hover_bg);    // #26262e
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.18f, 0.18f, 0.22f, 1.0f), &sel_bg);      // #2e2e38
+        dt::d2d(dt::kColorToolbarHoverBg), &sel_bg);      // #2e2e38
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.29f, 0.56f, 0.89f, 1.0f), &accent_br);   // #4A90E2
+        dt::d2d(dt::kColorNavAccent), &accent_br);   // #4A90E2
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.42f, 0.62f, 0.85f, 1.0f), &badge_br);
+        dt::d2d(dt::kColorNavBadge), &badge_br);
     m_d2d_context->CreateSolidColorBrush(
-        D2D1::ColorF(0.69f, 0.50f, 0.50f, 1.0f), &error_br);    // #b08080
+        dt::d2d(dt::kColorNavError), &error_br);    // #b08080
 
     // Panel background + right edge
     m_d2d_context->FillRectangle(

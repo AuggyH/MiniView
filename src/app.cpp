@@ -1,5 +1,6 @@
 #include "app.h"
 #include "app_state.h"
+#include "design_tokens.h"
 #include "file_operation.h"
 #include "renderer_state.h"
 #include <stdexcept>
@@ -835,12 +836,12 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         // Separator (only itemData == 0, not by itemID)
         if (dis->itemData == 0) {
-            COLORREF bg = RGB(32, 32, 36);
+            COLORREF bg = dt::kColorMenuBgGdi;
             HBRUSH br = CreateSolidBrush(bg);
             FillRect(hdc, &rc, br);
             DeleteObject(br);
             int mid_y = (rc.top + rc.bottom) / 2;
-            COLORREF sep_c = RGB(60, 60, 65);
+            COLORREF sep_c = dt::kColorMenuSeparatorGdi;
             HPEN pen = CreatePen(PS_SOLID, 1, sep_c);
             HGDIOBJ old_pen = SelectObject(hdc, pen);
             MoveToEx(hdc, rc.left + static_cast<int>(28 * dpi), mid_y, nullptr);
@@ -856,7 +857,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         bool disabled = d->disabled || (dis->itemState & ODS_GRAYED);
 
         // Background
-        COLORREF bg = selected ? RGB(50, 50, 55) : RGB(32, 32, 36);
+        COLORREF bg = selected ? dt::kColorMenuSelectedBgGdi
+                               : dt::kColorMenuBgGdi;
         HBRUSH br = CreateSolidBrush(bg);
         FillRect(hdc, &rc, br);
         DeleteObject(br);
@@ -867,7 +869,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT icon_rc = { static_cast<int>(rc.left + pad_l), rc.top,
                          static_cast<int>(rc.left + pad_l + icon_w), rc.bottom };
         if (d->checked) {
-            SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(220,220,225));
+            SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
+                                       : dt::kColorMenuCheckEnabledGdi);
             HFONT f = CreateFontW(-MulDiv(12, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                 DEFAULT_PITCH, L"Segoe UI");
@@ -882,7 +885,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         float icon_right = pad_l + icon_w + 8.0f * dpi;
         RECT text_rc = { static_cast<int>(rc.left + icon_right), rc.top,
                          rc.right - 4, rc.bottom };
-        SetTextColor(hdc, disabled ? RGB(100,100,105) : RGB(230,230,235));
+        SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
+                                   : dt::kColorMenuTextGdi);
         HFONT f2 = CreateFontW(-MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH, L"Microsoft YaHei");
@@ -892,7 +896,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         // Shortcut
         if (!d->shortcut.empty()) {
-            SetTextColor(hdc, disabled ? RGB(80,80,85) : RGB(160,160,168));
+            SetTextColor(hdc, disabled ? dt::kColorMenuShortcutDisabledGdi
+                                       : dt::kColorMenuShortcutGdi);
             DrawTextW(hdc, d->shortcut.c_str(), -1, &text_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         }
         SelectObject(hdc, old_font);
@@ -3652,7 +3657,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     s_toolbar_h   = m_toolbar_h;
 
     // CBT hook: subclass popup menu to enforce dark background
-    static HBRUSH s_menu_bg = CreateSolidBrush(RGB(32, 32, 36));
+    static HBRUSH s_menu_bg = CreateSolidBrush(dt::kColorMenuBgGdi);
     HHOOK cbt_hook = SetWindowsHookExW(WH_CBT,
         [](int code, WPARAM wp, LPARAM lp) -> LRESULT {
             if (code == HCBT_CREATEWND) {
@@ -3707,7 +3712,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     x -= static_cast<int>(24 * dpi_s_tb);
 
     // Dark menu background (recursive)
-    HBRUSH menu_br = CreateSolidBrush(RGB(32, 32, 36));
+    HBRUSH menu_br = CreateSolidBrush(dt::kColorMenuBgGdi);
     ApplyMenuTheme(popup, menu_br);
 
     int cmd = TrackPopupMenu(popup, TPM_RETURNCMD | TPM_NONOTIFY,
@@ -5560,7 +5565,7 @@ void App::grid_render() {
             } else {
                 auto color = placeholder_colors.find(index);
                 D2D1_COLOR_F fill = color == placeholder_colors.end()
-                    ? D2D1::ColorF(0.10f, 0.10f, 0.12f, 1.0f) : color->second;
+                    ? dt::d2d(dt::kColorPlaceholder) : color->second;
                 m_renderer.draw_grid_placeholder(x, row_y, width,
                     static_cast<float>(row.row_h), fill);
             }
@@ -5656,11 +5661,11 @@ void App::render_frame() {
         HDC hdc = BeginPaint(m_window.handle(), &ps);
         if (hdc) {
             RECT rc = ps.rcPaint;
-            HBRUSH bg = CreateSolidBrush(RGB(26, 26, 26));  // #1a1a1a
+            HBRUSH bg = CreateSolidBrush(dt::kColorWindowBgGdi);  // #1a1a1a
             FillRect(hdc, &rc, bg);
             DeleteObject(bg);
             SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(128, 128, 128));
+            SetTextColor(hdc, dt::kColorFallbackTextGdi);
             const wchar_t* msg = !m_open_error.empty() ? m_open_error.c_str()
                 : (m_has_image ? L"\u52A0\u8F7D\u4E2D..."
                 : (m_index.directory().empty() ? L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6"

@@ -38,6 +38,7 @@ set(HEADERS
     src/app.h
     src/app_state.h
     src/layout.h
+    src/design_tokens.h
     src/comic_reader_loader.h
     src/comic_reader_model.h
     src/file_operation.h
@@ -156,6 +157,11 @@ if(BUILD_TESTING)
         tests/renderer_state_tests.cpp
     )
     add_test(NAME renderer_state.unit COMMAND renderer_state_tests)
+
+    mv_add_unit_test(design_tokens_tests
+        tests/design_tokens_tests.cpp
+    )
+    add_test(NAME design_tokens.unit COMMAND design_tokens_tests)
 
     mv_add_unit_test(file_operation_tests
         tests/file_operation_tests.cpp
