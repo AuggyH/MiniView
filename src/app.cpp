@@ -1069,6 +1069,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             m_current_wic = decoded;
             m_has_image = true;
+            m_uploaded_path = m_current_path;
             m_renderer.clear_placeholder();
             m_placeholder_idx = -1;
             update_content_viewport(false);
@@ -2334,6 +2335,7 @@ bool App::open_image(const std::wstring& path) {
         update_content_viewport(false);
         fit_to_window();
         m_current_wic = bitmap;
+        m_uploaded_path = path;
         m_renderer.clear_placeholder();
         m_placeholder_idx = -1;
         m_pending_image.Reset();
@@ -4068,6 +4070,7 @@ void App::flush_pending_image_before_exit() {
         if (m_renderer.upload_image(decoded.Get())) {
             m_current_wic = decoded;
             m_has_image = true;
+            m_uploaded_path = m_current_path;
             m_renderer.clear_placeholder();
             m_placeholder_idx = -1;
             update_content_viewport(false);
@@ -4108,9 +4111,15 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
         ? request_index
         : ((m_current_idx >= 0) ? m_current_idx : m_grid_saved_idx);
     if (!forward) {
-        // Apple-style exit: the FULL image zooms back into its cell (the
-        // low-res thumbnail previously popped the quality at the start).
-        m_anim_thumb = m_renderer.transition_image();
+        // Apple-style exit: the image zooms back into its cell. 只有当前图
+        // 确实已上传到 GPU 时才用全图/缩放缓存; 快速翻页后当前图可能仍在
+        // 异步解码, 此时绝不缩放旧图/入场图(那是闪烁来源), 改用当前项的
+        // 占位缩略图; 没有占位则只播放幕布揭示网格。
+        if (m_uploaded_path == m_current_path) {
+            m_anim_thumb = m_renderer.transition_image();
+        } else {
+            m_anim_thumb = m_renderer.placeholder_bitmap();
+        }
     }
     if (!m_anim_thumb) {
         (void)run_best_effort_transition_capture([this, thumb_idx]() {
@@ -5567,6 +5576,7 @@ void App::render_frame() {
                 if (m_renderer.upload_image(decoded.Get())) {
                     m_current_wic = decoded;
                     m_has_image = true;
+                    m_uploaded_path = m_current_path;
                     m_renderer.clear_placeholder();
                     m_placeholder_idx = -1;
                     update_content_viewport(false);

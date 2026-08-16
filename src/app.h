@@ -266,6 +266,7 @@ private:
     std::unique_ptr<DeleteComposition> m_delete_composition;
 
     std::wstring m_current_path;
+    std::wstring m_uploaded_path;  // 当前已上传到 GPU 的图片路径
     Microsoft::WRL::ComPtr<IWICBitmapSource> m_current_wic;
     int          m_current_idx = -1;
     bool         m_has_image = false;
