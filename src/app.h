@@ -91,6 +91,13 @@ private:
     friend class AppComicPort;
 
     LRESULT handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+    LRESULT handle_command_message(HWND hwnd, WPARAM wp, LPARAM lp);
+    LRESULT handle_key_message(HWND hwnd, WPARAM wp, LPARAM lp);
+    LRESULT handle_mouse_message(HWND hwnd, UINT message, WPARAM wp, LPARAM lp);
+    LRESULT handle_paint_message(HWND hwnd);
+    LRESULT handle_timer_message(HWND hwnd, WPARAM wp);
+    LRESULT handle_async_message(HWND hwnd, UINT message, WPARAM wp, LPARAM lp);
+    LRESULT handle_window_message(HWND hwnd, UINT message, WPARAM wp, LPARAM lp);
     bool    open_image(const std::wstring& path);
     void    show_open_error(OpenInputRoute route);
     void    open_directory(const std::wstring& path);

@@ -366,50 +366,197 @@ void App::finish_grid_scroll() {
 
 LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-
+    case WM_COMMAND:
+        return handle_command_message(hwnd, wp, lp);
+    case WM_PAINT:
+        return handle_paint_message(hwnd);
+    case WM_TIMER:
+        return handle_timer_message(hwnd, wp);
+    case WM_MOUSEWHEEL:
+    case WM_LBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONDBLCLK:
+    case WM_NCMOUSEMOVE:
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+        return handle_mouse_message(hwnd, msg, wp, lp);
+    case WM_KEYDOWN:
+        return handle_key_message(hwnd, wp, lp);
+    case WM_THUMB_READY:
+    case WM_METADATA_READY:
+    case WM_COMIC_READY:
+    case WM_NAV_SCAN_READY:
+    case WM_NAV_TREE_READY:
+    case WM_DIR_CHANGED:
+    case WM_FOLDER_ICON_READY:
+    case WM_IMAGE_READY:
+    case WM_RENDER_RETRY:
+        return handle_async_message(hwnd, msg, wp, lp);
     case WM_NCCALCSIZE:
-        if (wp == TRUE) return 0;  // no inset for caption — custom title bar
-        break;
+    case WM_NCHITTEST:
+    case WM_CLOSE:
+    case WM_SIZE:
+    case WM_ERASEBKGND:
+    case WM_MEASUREITEM:
+    case WM_DRAWITEM:
+    case WM_DPICHANGED:
+    case WM_CONTEXTMENU:
+    case WM_IME_STARTCOMPOSITION:
+    case WM_IME_ENDCOMPOSITION:
+    case WM_KILLFOCUS:
+    case WM_ACTIVATEAPP:
+    case WM_CAPTURECHANGED:
+    case WM_CANCELMODE:
+    case WM_DROPFILES:
+    case WM_COPYDATA:
+    case WM_SETCURSOR:
+        return handle_window_message(hwnd, msg, wp, lp);
+    default:
+        return -1;
+    }
+}
 
-    case WM_NCHITTEST: {
-        POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-        ScreenToClient(hwnd, &pt);
-        float dpi_s = m_renderer.is_valid()
-            ? static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f : 1.0f;
-        int th = static_cast<int>(m_title_h * dpi_s);
-        if (toolbar_visible() && pt.y >= 0 && pt.y < th) {
-            const float tw = static_cast<float>(m_renderer.target_size().width);
-            const TitleBarLayout title{0.0f, tw, static_cast<float>(th), dpi_s};
-            // Window buttons → HTCLIENT (handled by WM_LBUTTONDOWN)
-            if (title_bar_window_button_at(title,
-                    static_cast<float>(pt.x)) >= 0) {
-                return HTCLIENT;
-            }
-            // Menu items → HTCLIENT (handled by WM_LBUTTONDOWN)
-            std::vector<float> menu_widths;
-            menu_widths.reserve(m_toolbar_items.size());
-            const float fsize = title_bar_menu_font_size(title);
-            for (const auto& item : m_toolbar_items)
-                menu_widths.push_back(m_renderer.measure_text(item, fsize));
-            if (title_bar_menu_item_at(title,
-                    static_cast<float>(pt.x), menu_widths) >= 0) {
-                return HTCLIENT;
-            }
-            return HTCAPTION;  // rest → drag
+LRESULT App::handle_command_message(HWND hwnd, WPARAM wp, LPARAM /*lp*/) {
+    if (m_delete_composition->handle_command(
+            DeleteCommandEntry::WindowCommand, LOWORD(wp)))
+        return 0;
+    switch (LOWORD(wp)) {
+    case IDM_OPEN_FILE: {
+        OPENFILENAMEW ofn = {};
+        wchar_t file[MAX_PATH] = {};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = hwnd;
+        ofn.lpstrFilter = L"\u56FE\u7247\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tiff;*.tif\0\u6240\u6709\u6587\u4EF6\0*.*\0";
+        ofn.lpstrFile = file; ofn.nMaxFile = MAX_PATH;
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+        if (GetOpenFileNameW(&ofn)) open_image(file);
+        return 0;
+    }
+    case IDM_OPEN_FOLDER: {
+        BROWSEINFOW bi = {};
+        bi.hwndOwner = hwnd;
+        bi.lpszTitle = L"\u9009\u62E9\u6587\u4EF6\u5939";
+        bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+        LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+        if (pidl) {
+            wchar_t dir[MAX_PATH];
+            if (SHGetPathFromIDListW(pidl, dir)) open_directory(dir);
+            CoTaskMemFree(pidl);
         }
-        break;
+        return 0;
+    }
+    case IDM_EXIT:
+        reset_comic_controls(ComicAppCancelTrigger::ExitMode);
+        DestroyWindow(hwnd);
+        return 0;
+    case IDM_FULLSCREEN: toggle_fullscreen(hwnd); return 0;
+    case IDM_COMIC: toggle_comic_reader(); return 0;
+    case IDM_COMIC_SEAMLESS:
+        if (m_comic_reader.enabled()) {
+            m_comic_reader.set_seamless(!m_comic_reader.seamless());
+            request_comic_pages();
+            m_window.invalidate();
+        }
+        return 0;
+    case IDM_COMIC_AUTOSCROLL:
+        (void)dispatch_comic_command(ComicAppCommand::ToggleCruise);
+        return 0;
+    case IDM_COMIC_SPEED_05:
+        (void)dispatch_comic_command(ComicAppCommand::SetSpeed05); return 0;
+    case IDM_COMIC_SPEED_10:
+        (void)dispatch_comic_command(ComicAppCommand::SetSpeed10); return 0;
+    case IDM_COMIC_SPEED_15:
+        (void)dispatch_comic_command(ComicAppCommand::SetSpeed15); return 0;
+    case IDM_COMIC_SPEED_20:
+        (void)dispatch_comic_command(ComicAppCommand::SetSpeed20); return 0;
+    case IDM_RECURSIVE:
+        if (can_toggle_recursive(
+                m_grid_mode, m_has_image, m_index.directory()))
+            toggle_recursive();
+        return 0;
+    case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
+    case IDM_INFO:         toggle_info(); return 0;
+    case IDM_NAV_PANEL:    toggle_nav_panel(); return 0;
+    case IDM_LABELS:       toggle_grid_labels(); return 0;
+    case IDM_SORT_NAME:   if (m_grid_mode) set_sort_mode(SortMode::Name);   return 0;
+    case IDM_SORT_DATE:   if (m_grid_mode) set_sort_mode(SortMode::Date);   return 0;
+    case IDM_SORT_SIZE:   if (m_grid_mode) set_sort_mode(SortMode::Size);   return 0;
+    case IDM_SORT_RANDOM: if (m_grid_mode) set_sort_mode(SortMode::Random); return 0;
+    case IDM_COPY_IMAGE:  copy_image_data(); return 0;
+    case IDM_COPY_PATH:   copy_file_paths(); return 0;
+    case IDM_CREATE_COPY: create_file_copies(); return 0;
+    case IDM_EXPLORER: open_in_explorer(); return 0;
+    case IDM_ABOUT:
+        MessageBoxW(hwnd,
+            L"MinView Native v0.6.0\n\nC++20 / Direct2D + WIC\nGPU \u52A0\u901F\u56FE\u7247\u6D4F\u89C8\u5668\n\u96F6\u5916\u90E8\u4F9D\u8D56",
+            L"\u5173\u4E8E MinView", MB_OK | MB_ICONINFORMATION);
+        return 0;
+    }
+    return -1;
+}
+
+LRESULT App::handle_key_message(HWND hwnd, WPARAM wp, LPARAM lp) {
+    bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+
+    if (m_comic_reader.middle_autoscroll_active() && wp != 'P') {
+        const ComicAppCancelTrigger reason = wp == VK_ESCAPE
+            ? ComicAppCancelTrigger::Escape
+            : ComicAppCancelTrigger::KeyboardPage;
+        cancel_comic_auto_scroll(reason);
     }
 
-    case WM_CLOSE:
-        reset_comic_controls(ComicAppCancelTrigger::ExitMode);
-        return -1;
+    DeleteKeyGuards delete_guards;
+    delete_guards.shift_down = shift;
+    delete_guards.control_down = ctrl;
+    delete_guards.main_window_focused =
+            GetForegroundWindow() == hwnd && GetFocus() == hwnd;
+    delete_guards.ime_composing = m_ime_composing;
+    if (m_delete_composition->handle_key(
+            static_cast<UINT>(wp), lp, delete_guards))
+        return 0;
 
-    case WM_COMMAND:
-        if (m_delete_composition->handle_command(
-                DeleteCommandEntry::WindowCommand, LOWORD(wp)))
-            return 0;
-        switch (LOWORD(wp)) {
-        case IDM_OPEN_FILE: {
+    // ── Left navigation panel keys (Issue #5 P2) ──
+    if (!m_ime_composing && !ctrl && !shift && wp == 'B') {
+        toggle_nav_panel();
+        return 0;
+    }
+    if (!m_ime_composing && !ctrl && !shift && wp == VK_TAB) {
+        cycle_nav_focus();
+        return 0;
+    }
+    // The directory tree owns arrow/return navigation; the album tab
+    // has none, so its clicks release the panel focus and main-area
+    // shortcuts (F/N/D/S/R/A/L/Space) keep working there.
+    if (m_nav_panel_state.focused()
+        && m_nav_panel_state.tab() == NavPanelTab::Directories
+        && handle_nav_panel_key(hwnd, wp, ctrl, shift)) {
+        return 0;
+    }
+
+    if (ctrl) {
+        if (m_comic_reader.enabled()) {
+            switch (wp) {
+            case '0': case VK_NUMPAD0:
+                cancel_comic_auto_scroll(
+                    ComicAppCancelTrigger::KeyboardPage);
+                m_comic_reader.reset_width();
+                clear_comic_cache();
+                request_comic_pages();
+                m_window.invalidate();
+                return 0;
+            case VK_OEM_PLUS: case VK_ADD:
+                adjust_comic_width(0.10f); return 0;
+            case VK_OEM_MINUS: case VK_SUBTRACT:
+                adjust_comic_width(-0.10f); return 0;
+            }
+        }
+        switch (wp) {
+        case '0': case VK_NUMPAD0: fit_to_window(); m_window.invalidate(); return 0;
+        case VK_OEM_PLUS: case VK_ADD:   zoom_at_center(1.25f); return 0;
+        case VK_OEM_MINUS: case VK_SUBTRACT: zoom_at_center(1.0f/1.25f); return 0;
+        case 'O': {
             OPENFILENAMEW ofn = {};
             wchar_t file[MAX_PATH] = {};
             ofn.lStructSize = sizeof(ofn);
@@ -420,453 +567,188 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (GetOpenFileNameW(&ofn)) open_image(file);
             return 0;
         }
-        case IDM_OPEN_FOLDER: {
-            BROWSEINFOW bi = {};
-            bi.hwndOwner = hwnd;
-            bi.lpszTitle = L"\u9009\u62E9\u6587\u4EF6\u5939";
-            bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-            LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
-            if (pidl) {
-                wchar_t dir[MAX_PATH];
-                if (SHGetPathFromIDListW(pidl, dir)) open_directory(dir);
-                CoTaskMemFree(pidl);
-            }
+        case 'C':
+            copy_image_data();
             return 0;
-        }
-        case IDM_EXIT:
-            reset_comic_controls(ComicAppCancelTrigger::ExitMode);
-            DestroyWindow(hwnd);
-            return 0;
-        case IDM_FULLSCREEN: toggle_fullscreen(hwnd); return 0;
-        case IDM_COMIC: toggle_comic_reader(); return 0;
-        case IDM_COMIC_SEAMLESS:
-            if (m_comic_reader.enabled()) {
-                m_comic_reader.set_seamless(!m_comic_reader.seamless());
-                request_comic_pages();
-                m_window.invalidate();
-            }
-            return 0;
-        case IDM_COMIC_AUTOSCROLL:
-            (void)dispatch_comic_command(ComicAppCommand::ToggleCruise);
-            return 0;
-        case IDM_COMIC_SPEED_05:
-            (void)dispatch_comic_command(ComicAppCommand::SetSpeed05); return 0;
-        case IDM_COMIC_SPEED_10:
-            (void)dispatch_comic_command(ComicAppCommand::SetSpeed10); return 0;
-        case IDM_COMIC_SPEED_15:
-            (void)dispatch_comic_command(ComicAppCommand::SetSpeed15); return 0;
-        case IDM_COMIC_SPEED_20:
-            (void)dispatch_comic_command(ComicAppCommand::SetSpeed20); return 0;
-        case IDM_RECURSIVE:
+        case 'R':
             if (can_toggle_recursive(
                     m_grid_mode, m_has_image, m_index.directory()))
                 toggle_recursive();
             return 0;
-        case IDM_THUMB_SQUARE: if (m_grid_mode) toggle_thumb_square(); return 0;
-        case IDM_INFO:         toggle_info(); return 0;
-        case IDM_NAV_PANEL:    toggle_nav_panel(); return 0;
-        case IDM_LABELS:       toggle_grid_labels(); return 0;
-        case IDM_SORT_NAME:   if (m_grid_mode) set_sort_mode(SortMode::Name);   return 0;
-        case IDM_SORT_DATE:   if (m_grid_mode) set_sort_mode(SortMode::Date);   return 0;
-        case IDM_SORT_SIZE:   if (m_grid_mode) set_sort_mode(SortMode::Size);   return 0;
-        case IDM_SORT_RANDOM: if (m_grid_mode) set_sort_mode(SortMode::Random); return 0;
-        case IDM_COPY_IMAGE:  copy_image_data(); return 0;
-        case IDM_COPY_PATH:   copy_file_paths(); return 0;
-        case IDM_CREATE_COPY: create_file_copies(); return 0;
-        case IDM_EXPLORER: open_in_explorer(); return 0;
-        case IDM_ABOUT:
-            MessageBoxW(hwnd,
-                L"MinView Native v0.6.0\n\nC++20 / Direct2D + WIC\nGPU \u52A0\u901F\u56FE\u7247\u6D4F\u89C8\u5668\n\u96F6\u5916\u90E8\u4F9D\u8D56",
-                L"\u5173\u4E8E MinView", MB_OK | MB_ICONINFORMATION);
-            return 0;
         }
-        break;
-
-    case WM_SIZE: {
-        uint32_t w = LOWORD(lp), h = HIWORD(lp);
-        if (w > 0 && h > 0) {
-            if (!m_renderer.resize(w, h)) m_window.invalidate();
-            m_grid_layout_dirty = true;
-            update_content_viewport(false);
-        }
-        return 0;
-    }
-    case WM_PAINT: {
-        // A nested paint (PrintWindow capture, DWM re-composition) can be
-        // dispatched while the outer render is mid-frame. Rendering twice
-        // corrupts the D2D clip stack and kills the device; ignore nested
-        // paints — the outer frame completes and presents normally.
-        if (m_render_busy) return 0;
-        m_render_busy = true;
-        render_frame();
-        m_render_busy = false;
-        ValidateRect(hwnd, nullptr);
-        // Re-arm the transition: while the filmstrip animation runs, keep
-        // invalidating so the next animation frame is painted. FULL-window
-        // invalidation is required — filmstrip_rect() returns PHYSICAL
-        // coordinates (renderer target size) while InvalidateRect takes
-        // window-client coordinates (DPI-virtualized, e.g. 1414 vs 2474),
-        // so a strip-region rect lands outside the client area and the
-        // animation would freeze after one frame ("flash" appearance).
-        // Both animation layers must re-arm: the model's horizontal
-        // handoff AND the App-level vertical rise/hide reveal.
-        if (m_filmstrip.animating() || m_filmstrip_reveal_animating) {
-            InvalidateRect(hwnd, nullptr, FALSE);
-        }
-        return 0;
+        return -1;
     }
 
-    case WM_ERASEBKGND:
-        return 0;
-
-    case WM_MEASUREITEM: {
-        auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
-        if (mis->CtlType != ODT_MENU) break;
-        if (mis->itemData == 0) {  // separator
-            mis->itemWidth  = 20;
-            mis->itemHeight = static_cast<UINT>(dt::kSpaceSmDip * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
-            return TRUE;
-        }
-        auto* d = reinterpret_cast<OwnerItemData*>(mis->itemData);
-        if (!d) break;
-        float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-        float text_w = m_renderer.measure_text(d->text, dt::kFontSizeXsDip * dpi);
-        float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, dt::kFontSizeXsDip * dpi);
-        float icon_w = dt::kSpaceLgDip * dpi;
-        float pad_l = dt::kSpaceXsDip * dpi;
-        float pad_icon = dt::kSpaceSmDip * dpi;
-        float pad_shortcut = dt::kSpaceLgDip * dpi;
-        mis->itemWidth  = static_cast<UINT>(icon_w + pad_icon + text_w + pad_shortcut + shortcut_w + pad_l * 2);
-        mis->itemHeight = static_cast<UINT>(dt::kSize28Dip * dpi);
-        return TRUE;
-    }
-
-    case WM_DRAWITEM: {
-        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
-        if (dis->CtlType != ODT_MENU) break;
-        HDC hdc = dis->hDC;
-        RECT rc = dis->rcItem;
-        float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-
-        // Separator (only itemData == 0, not by itemID)
-        if (dis->itemData == 0) {
-            COLORREF bg = dt::kColorMenuBgGdi;
-            HBRUSH br = CreateSolidBrush(bg);
-            FillRect(hdc, &rc, br);
-            DeleteObject(br);
-            int mid_y = (rc.top + rc.bottom) / 2;
-            COLORREF sep_c = dt::kColorMenuSeparatorGdi;
-            HPEN pen = CreatePen(PS_SOLID, 1, sep_c);
-            HGDIOBJ old_pen = SelectObject(hdc, pen);
-            MoveToEx(hdc, rc.left + static_cast<int>(dt::kSize28Dip * dpi), mid_y, nullptr);
-            LineTo(hdc, rc.right - 4, mid_y);
-            SelectObject(hdc, old_pen);
-            DeleteObject(pen);
-            return TRUE;
-        }
-
-        auto* d = reinterpret_cast<OwnerItemData*>(dis->itemData);
-        if (!d) break;
-        bool selected = (dis->itemState & ODS_SELECTED) != 0;
-        bool disabled = d->disabled || (dis->itemState & ODS_GRAYED);
-
-        // Background
-        COLORREF bg = selected ? dt::kColorMenuSelectedBgGdi
-                               : dt::kColorMenuBgGdi;
-        HBRUSH br = CreateSolidBrush(bg);
-        FillRect(hdc, &rc, br);
-        DeleteObject(br);
-
-        // Icon/checkmark area
-        float icon_w = dt::kSpaceLgDip * dpi;
-        float pad_l = dt::kSpaceXsDip * dpi;
-        RECT icon_rc = { static_cast<int>(rc.left + pad_l), rc.top,
-                         static_cast<int>(rc.left + pad_l + icon_w), rc.bottom };
-        if (d->checked) {
-            SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
-                                       : dt::kColorMenuCheckEnabledGdi);
-            HFONT f = CreateFontW(-MulDiv(static_cast<int>(dt::kFontSizeMdDip), GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                DEFAULT_PITCH, dt::kFontFamilySymbols);
-            HGDIOBJ old_font = SelectObject(hdc, f);
-            SetBkMode(hdc, TRANSPARENT);
-            DrawTextW(hdc, L"\x2713", 1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(hdc, old_font);
-            DeleteObject(f);
-        }
-
-        // Text
-        float icon_right = pad_l + icon_w + dt::kSpaceSmDip * dpi;
-        RECT text_rc = { static_cast<int>(rc.left + icon_right), rc.top,
-                         rc.right - 4, rc.bottom };
-        SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
-                                   : dt::kColorMenuTextGdi);
-        HFONT f2 = CreateFontW(-MulDiv(static_cast<int>(dt::kFontSizeXsDip), GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH, dt::kFontFamilyUi);
-        HGDIOBJ old_font = SelectObject(hdc, f2);
-        SetBkMode(hdc, TRANSPARENT);
-        DrawTextW(hdc, d->text.c_str(), -1, &text_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        // Shortcut
-        if (!d->shortcut.empty()) {
-            SetTextColor(hdc, disabled ? dt::kColorMenuShortcutDisabledGdi
-                                       : dt::kColorMenuShortcutGdi);
-            DrawTextW(hdc, d->shortcut.c_str(), -1, &text_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-        }
-        SelectObject(hdc, old_font);
-        DeleteObject(f2);
-        return TRUE;
-    }
-
-    case WM_TIMER:
-        if (wp == kRenderRetryTimerId) {
-            KillTimer(hwnd, kRenderRetryTimerId);
-            m_render_retry_timer = 0;
+    switch (wp) {
+    case '0': case VK_NUMPAD0:
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
+            m_comic_reader.reset_width();
+            clear_comic_cache();
+            request_comic_pages();
             m_window.invalidate();
             return 0;
         }
-        if (wp == kComicTimerId && m_comic_timer) {
-            handle_comic_timer(hwnd);
+        return -1;
+    case VK_OEM_PLUS: case VK_ADD:
+        if (m_comic_reader.enabled()) { adjust_comic_width(0.10f); return 0; }
+        return -1;
+    case VK_OEM_MINUS: case VK_SUBTRACT:
+        if (m_comic_reader.enabled()) { adjust_comic_width(-0.10f); return 0; }
+        return -1;
+    case VK_ESCAPE:
+        if (m_animating) {
+            interrupt_transition(mv::TransitionTrigger::Escape, 0);
+            return 0;
         }
-        if (wp == kImageDebounceTimerId) {
-            KillTimer(hwnd, kImageDebounceTimerId);
-            if (!m_debounce_path.empty()) {
-                std::wstring pending = m_debounce_path;
-                m_debounce_path.clear();
-                open_image(pending);  // full decode after paging stops
-            }
+        if (m_comic_reader.enabled() && !leave_comic_reader(true)) return 0;
+        if (route_grid_exit(GridExitTrigger::Escape,
+                GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
+            m_from_grid = false;
+            start_transition(hwnd, false);
+            begin_animation(hwnd);
+            toggle_grid();
+            return 0;
         }
-        if (wp == 1 && m_grid_mode) {
-            finish_grid_scroll();
-            m_window.invalidate();
-        }
-        if (wp == 2) {
-            m_panel_sel = -1;
-            KillTimer(hwnd, 2);
-            m_sel_timer = 0;
-            m_window.invalidate();
-        }
-        if (wp == 3) {
-            m_panel_copied.clear();
-            KillTimer(hwnd, 3);
-            m_toast_timer = 0;
-            m_window.invalidate();
-        }
-        if (wp == 4 && m_anim_timer) {
-            LARGE_INTEGER now, freq;
-            QueryPerformanceCounter(&now);
-            QueryPerformanceFrequency(&freq);
-            float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / dt::kDurationTransitionSec;  // 250ms
-            if (m_anim_t >= 1.0f) {
-                m_anim_t = 1.0f;
-                m_animating = false;
-                m_anim_thumb.Reset();
-                m_anim_reversed = false;
-                m_anim_grid_snapshot.Reset();
-                KillTimer(hwnd, 4);
-                m_anim_timer = 0;
-                // 与渲染循环驱动路径一致: 进场完成后立即升起胶片条,
-                // 不能等下一次渲染才触发(否则时机随机拖后)。
-                if (m_anim_forward && !m_grid_mode && filmstrip_showable()) {
-                    reveal_filmstrip();
-                }
-            }
-            m_window.invalidate();
-        }
-        if (wp == kFilmstripHideTimerId) {
-            if (m_filmstrip_timer) {
-                KillTimer(hwnd, kFilmstripHideTimerId);
-                m_filmstrip_timer = 0;
-            }
-            if (m_filmstrip_revealed || m_filmstrip_reveal_animating) {
-                hide_filmstrip_animated();
-                m_window.invalidate();
-            }
-        }
-        if (wp == kAsyncWatchdogTimerId) {
-            check_async_timeout();
-            if (async_slots_active()) {
-                SetTimer(hwnd, kAsyncWatchdogTimerId, 1000, nullptr);
-            } else {
-                KillTimer(hwnd, kAsyncWatchdogTimerId);
-            }
-        }
+        if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
         return 0;
-
-    case WM_THUMB_READY:
-        if (m_grid_mode || filmstrip_visible()) m_window.invalidate();
-        // A placeholder waiting for its thumbnail gets it now.
-        if (!m_grid_mode && m_placeholder_idx >= 0) {
-            auto pit = m_thumb_d2d.find(m_placeholder_idx);
-            if (pit != m_thumb_d2d.end())
-                m_renderer.set_placeholder(pit->second.Get());
+    case VK_F11:   toggle_fullscreen(hwnd); return 0;
+    case VK_SPACE: {
+        if (m_animating) {
+            interrupt_transition(mv::TransitionTrigger::Space, 0);
+            return 0;
         }
-        return 0;
-
-    case WM_METADATA_READY:
-        apply_metadata_result();
-        return 0;
-
-    case WM_COMIC_READY:
-        apply_comic_results();
-        return 0;
-
-    case WM_NAV_SCAN_READY:
-        apply_nav_scan_result();
-        return 0;
-
-    case WM_NAV_TREE_READY:
-        apply_nav_tree_result();
-        return 0;
-
-    case WM_DIR_CHANGED:
-        // A watched directory changed: rescan the current collection in
-        // place so new/deleted images appear without manual refresh.
-        request_collection_refresh();
-        return 0;
-
-    case WM_FOLDER_ICON_READY:
-        handle_folder_icon_ready(lp);
-        return 0;
-
-    case WM_IMAGE_READY: {
-        // Async big-image decode finished on a worker. Finish on the UI
-        // thread: materialize + upload + commit. Stale generations (user
-        // paged again) are dropped.
-        const ULONGLONG gen = static_cast<ULONGLONG>(wp);
-        ComPtr<IWICBitmapSource> decoded;
-        std::wstring prev_path;
-        int prev_idx = -1;
-        {
-            std::lock_guard lock(m_async->mutex);
-            if (gen != m_async->gen) return 0;  // stale page flip — drop
-            prev_path = m_async->current_prev_path;
-            prev_idx = m_async->current_prev_idx;
-            if (!m_async->wic) {                // decode failed — keep previous
-                m_async_busy = false;
-                m_current_path = prev_path;     // roll identity back with the bitmap
-                m_current_idx = prev_idx;
-                return 0;
-            }
-            decoded = m_async->wic;
-            m_async->wic.Reset();
-            m_async_busy = false;
+        if (m_comic_reader.enabled() && !leave_comic_reader(true)) return 0;
+        if (route_grid_exit(GridExitTrigger::Space,
+                GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
+            m_from_grid = false;
+            start_transition(hwnd, false);
+            begin_animation(hwnd);
+            toggle_grid();
+            return 0;
         }
-        try {
-            // Defer the GPU upload while the filmstrip transition or the
-            // grid<->image transition is still running — the heavy decode
-            // already happened on a worker; a mid-animation upload would
-            // swap the zoom layer's bitmap and flash an unrelated image.
-            if (m_filmstrip.animating() || m_animating) {
-                m_pending_image = decoded;
-                m_pending_path = m_current_path;
-                return 0;
-            }
-            if (!m_renderer.upload_image(decoded.Get())) {
-                // Upload failed (typically device loss): keep the previous
-                // bitmap and restore its identity.
-                m_current_path = prev_path;
-                m_current_idx = prev_idx;
-                return 0;
-            }
-            m_current_wic = decoded;
-            m_has_image = true;
-            m_uploaded_path = m_current_path;
-            m_renderer.clear_placeholder();
-            m_placeholder_idx = -1;
-            update_content_viewport(false);
-            fit_to_window();
-            preload_neighbors();
-            m_window.invalidate();
-        } catch (...) {
-            // Keep the previous image on decode/materialize failure.
+        GridEntryRouteState route_state;
+        route_state.grid_mode = m_grid_mode;
+        route_state.animating = m_animating;
+        route_state.selected_index = m_grid_sel;
+        route_state.item_count = static_cast<int>(m_index.size());
+        const auto request = route_grid_entry(
+            GridEntryTrigger::Space, route_state);
+        if (request) {
+            enter_grid_image(hwnd, *request);
+            return 0;
         }
-        return 0;
+        return 0;  // in normal image mode, do nothing
     }
-
-    case WM_RENDER_RETRY:
-        // Device loss recovery: recreate only after a short delay so the
-        // old flip-model swapchain fully detaches from the DWM (an
-        // immediate CreateSwapChainForHwnd fails with E_ACCESSDENIED
-        // forever and the window stays black).
-        if (!m_render_retry_timer) {
-            m_render_retry_timer =
-                SetTimer(hwnd, kRenderRetryTimerId, dt::kDurationRenderRetryMs, nullptr);
+    case VK_BACK:
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
         }
+        navigate_to(m_current_idx - 1);
         return 0;
-
-    case WM_DPICHANGED: {
-        float dpi = static_cast<float>(LOWORD(wp));
-        m_renderer.set_dpi(dpi, dpi);
-        apply_dpi_layout(dpi);
-        m_grid_layout_dirty = true;
-        update_content_viewport(false);
-        // Resize to suggested rect
-        RECT* rc = reinterpret_cast<RECT*>(lp);
-        if (rc) {
-            SetWindowPos(hwnd, nullptr, rc->left, rc->top,
-                rc->right - rc->left, rc->bottom - rc->top,
-                SWP_NOZORDER | SWP_NOACTIVATE);
+    case VK_RETURN:
+        if (m_has_image || m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
+        return -1;
+    case 'A':
+        if (m_grid_mode) { toggle_thumb_square(); return 0; }
+        return -1;
+    case 'L':
+        return toggle_grid_labels() ? 0 : -1;
+    case 'F':
+        if (!m_ime_composing) { toggle_favourite_current(); return 0; }
+        return -1;
+    case 'I':
+        toggle_info(); return 0;
+    case 'M':
+        toggle_comic_reader(); return 0;
+    case 'P':
+        return dispatch_comic_command(ComicAppCommand::ToggleCruise) ? 0 : -1;
+    case VK_OEM_4:
+        return dispatch_comic_command(ComicAppCommand::DecreaseSpeed) ? 0 : -1;
+    case VK_OEM_6:
+        return dispatch_comic_command(ComicAppCommand::IncreaseSpeed) ? 0 : -1;
+    case 'N':
+        if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Name); return 0; }
+        return -1;
+    case 'D':
+        if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Date); return 0; }
+        return -1;
+    case 'S':
+        if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Size); return 0; }
+        return -1;
+    case 'R':
+        if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Random); return 0; }
+        return -1;
+    case VK_LEFT:
+        if (m_animating) {
+            interrupt_transition(mv::TransitionTrigger::ArrowLeft, -1);
+            return 0;
         }
-        m_window.invalidate();
-        return 0;
+        if (m_grid_mode) { grid_navigate(-1, shift); return 0; }
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
+        }
+        navigate_to(m_current_idx - 1); return 0;
+    case VK_RIGHT:
+        if (m_animating) {
+            interrupt_transition(mv::TransitionTrigger::ArrowRight, 1);
+            return 0;
+        }
+        if (m_grid_mode) { grid_navigate(1, shift); return 0; }
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
+        }
+        navigate_to(m_current_idx + 1); return 0;
+    case VK_UP:
+        if (m_grid_mode) { grid_navigate(-m_grid_cols, shift); return 0; }
+        return -1;
+    case VK_DOWN:
+        if (m_grid_mode) { grid_navigate(m_grid_cols, shift); return 0; }
+        return -1;
+    case VK_HOME:
+        if (m_grid_mode) { select_item(0, shift, false); grid_ensure_visible(); return 0; }
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
+            m_comic_reader.home(); sync_comic_current();
+            request_comic_pages(); m_window.invalidate(); return 0;
+        }
+        navigate_to(0); return 0;
+    case VK_END:
+        if (m_grid_mode) { select_item(static_cast<int>(m_index.size()) - 1, shift, false); grid_ensure_visible(); return 0; }
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
+            m_comic_reader.end(); sync_comic_current();
+            request_comic_pages(); m_window.invalidate(); return 0;
+        }
+        navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
+    case VK_PRIOR:
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
+            m_comic_reader.page_up(); sync_comic_current();
+            request_comic_pages(); m_window.invalidate(); return 0;
+        }
+        return -1;
+    case VK_NEXT:
+        if (m_comic_reader.enabled()) {
+            cancel_comic_auto_scroll(
+                ComicAppCancelTrigger::KeyboardPage);
+            m_comic_reader.page_down(); sync_comic_current();
+            request_comic_pages(); m_window.invalidate(); return 0;
+        }
+        return -1;
     }
+    return -1;
+}
 
-    case WM_CONTEXTMENU: {
-        int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);  // screen coords
-        POINT pt = {cx, cy};
-        ScreenToClient(hwnd, &pt);  // convert to client coords for hit-test
-        // Album panel (收藏 tab): row or empty-space menu
-        if (nav_panel_visible() && pt.x < nav_panel_width()
-            && pt.y >= m_toolbar_h
-            && m_nav_panel_state.tab() == NavPanelTab::Favorites) {
-            const auto& g = m_nav_panel_geometry;
-            if (g.w > 0.0f && pt.y >= g.tree_y
-                && pt.y < g.tree_y + g.tree_h) {
-                if (m_album_store.folder_view != AlbumFolderView::Tree) {
-                    const int cell_row = album_icon_hit(pt.x, pt.y);
-                    if (cell_row >= 0) {
-                        const auto& row = m_album_rows
-                            [static_cast<size_t>(cell_row)];
-                        m_album_menu_target =
-                            {row.album_index, row.folder_index, true};
-                        show_album_row_menu(hwnd, cx, cy);
-                        return 0;
-                    }
-                }
-                const int idx = album_row_hit(pt.x, pt.y);
-                if (idx >= 0) {
-                    const auto& row =
-                        m_album_rows[static_cast<size_t>(idx)];
-                    if (row.kind == AlbumPanelRow::Kind::Album) {
-                        m_album_menu_target =
-                            {row.album_index, -1, false};
-                        show_album_row_menu(hwnd, cx, cy);
-                    } else if (row.kind == AlbumPanelRow::Kind::Folder) {
-                        m_album_menu_target =
-                            {row.album_index, row.folder_index, true};
-                        show_album_row_menu(hwnd, cx, cy);
-                    }
-                } else {
-                    m_album_menu_target = {-1, -1, false};
-                    show_album_row_menu(hwnd, cx, cy);
-                }
-                return 0;
-            }
-        }
-        if (m_grid_mode) {
-            // Right-click: select item under cursor and show menu
-            if (!grid_click(pt.x, pt.y, false, false))
-                return 0;  // no menu on empty space
-            show_context_menu(hwnd, cx, cy);  // screen coords for popup
-        } else {
-            show_context_menu(hwnd, cx, cy);
-        }
-        return 0;
-    }
-
+LRESULT App::handle_mouse_message(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+    switch (message) {
     case WM_MOUSEWHEEL: {
         if (m_comic_reader.enabled()) {
             cancel_comic_auto_scroll(ComicAppCancelTrigger::MouseWheel);
@@ -1496,6 +1378,440 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         return 0;
+    }
+    return -1;
+}
+
+LRESULT App::handle_paint_message(HWND hwnd) {
+    // A nested paint (PrintWindow capture, DWM re-composition) can be
+    // dispatched while the outer render is mid-frame. Rendering twice
+    // corrupts the D2D clip stack and kills the device; ignore nested
+    // paints — the outer frame completes and presents normally.
+    if (m_render_busy) return 0;
+    m_render_busy = true;
+    render_frame();
+    m_render_busy = false;
+    ValidateRect(hwnd, nullptr);
+    // Re-arm the transition: while the filmstrip animation runs, keep
+    // invalidating so the next animation frame is painted. FULL-window
+    // invalidation is required — filmstrip_rect() returns PHYSICAL
+    // coordinates (renderer target size) while InvalidateRect takes
+    // window-client coordinates (DPI-virtualized, e.g. 1414 vs 2474),
+    // so a strip-region rect lands outside the client area and the
+    // animation would freeze after one frame ("flash" appearance).
+    // Both animation layers must re-arm: the model's horizontal
+    // handoff AND the App-level vertical rise/hide reveal.
+    if (m_filmstrip.animating() || m_filmstrip_reveal_animating) {
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    return 0;
+}
+
+LRESULT App::handle_timer_message(HWND hwnd, WPARAM wp) {
+    if (wp == kRenderRetryTimerId) {
+        KillTimer(hwnd, kRenderRetryTimerId);
+        m_render_retry_timer = 0;
+        m_window.invalidate();
+        return 0;
+    }
+    if (wp == kComicTimerId && m_comic_timer) {
+        handle_comic_timer(hwnd);
+    }
+    if (wp == kImageDebounceTimerId) {
+        KillTimer(hwnd, kImageDebounceTimerId);
+        if (!m_debounce_path.empty()) {
+            std::wstring pending = m_debounce_path;
+            m_debounce_path.clear();
+            open_image(pending);  // full decode after paging stops
+        }
+    }
+    if (wp == 1 && m_grid_mode) {
+        finish_grid_scroll();
+        m_window.invalidate();
+    }
+    if (wp == 2) {
+        m_panel_sel = -1;
+        KillTimer(hwnd, 2);
+        m_sel_timer = 0;
+        m_window.invalidate();
+    }
+    if (wp == 3) {
+        m_panel_copied.clear();
+        KillTimer(hwnd, 3);
+        m_toast_timer = 0;
+        m_window.invalidate();
+    }
+    if (wp == 4 && m_anim_timer) {
+        LARGE_INTEGER now, freq;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&freq);
+        float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
+        m_anim_t = elapsed / dt::kDurationTransitionSec;  // 250ms
+        if (m_anim_t >= 1.0f) {
+            m_anim_t = 1.0f;
+            m_animating = false;
+            m_anim_thumb.Reset();
+            m_anim_reversed = false;
+            m_anim_grid_snapshot.Reset();
+            KillTimer(hwnd, 4);
+            m_anim_timer = 0;
+            // 与渲染循环驱动路径一致: 进场完成后立即升起胶片条,
+            // 不能等下一次渲染才触发(否则时机随机拖后)。
+            if (m_anim_forward && !m_grid_mode && filmstrip_showable()) {
+                reveal_filmstrip();
+            }
+        }
+        m_window.invalidate();
+    }
+    if (wp == kFilmstripHideTimerId) {
+        if (m_filmstrip_timer) {
+            KillTimer(hwnd, kFilmstripHideTimerId);
+            m_filmstrip_timer = 0;
+        }
+        if (m_filmstrip_revealed || m_filmstrip_reveal_animating) {
+            hide_filmstrip_animated();
+            m_window.invalidate();
+        }
+    }
+    if (wp == kAsyncWatchdogTimerId) {
+        check_async_timeout();
+        if (async_slots_active()) {
+            SetTimer(hwnd, kAsyncWatchdogTimerId, 1000, nullptr);
+        } else {
+            KillTimer(hwnd, kAsyncWatchdogTimerId);
+        }
+    }
+    return 0;
+}
+
+LRESULT App::handle_async_message(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+    switch (message) {
+    case WM_THUMB_READY:
+        if (m_grid_mode || filmstrip_visible()) m_window.invalidate();
+        // A placeholder waiting for its thumbnail gets it now.
+        if (!m_grid_mode && m_placeholder_idx >= 0) {
+            auto pit = m_thumb_d2d.find(m_placeholder_idx);
+            if (pit != m_thumb_d2d.end())
+                m_renderer.set_placeholder(pit->second.Get());
+        }
+        return 0;
+
+    case WM_METADATA_READY:
+        apply_metadata_result();
+        return 0;
+
+    case WM_COMIC_READY:
+        apply_comic_results();
+        return 0;
+
+    case WM_NAV_SCAN_READY:
+        apply_nav_scan_result();
+        return 0;
+
+    case WM_NAV_TREE_READY:
+        apply_nav_tree_result();
+        return 0;
+
+    case WM_DIR_CHANGED:
+        // A watched directory changed: rescan the current collection in
+        // place so new/deleted images appear without manual refresh.
+        request_collection_refresh();
+        return 0;
+
+    case WM_FOLDER_ICON_READY:
+        handle_folder_icon_ready(lp);
+        return 0;
+
+    case WM_IMAGE_READY: {
+        // Async big-image decode finished on a worker. Finish on the UI
+        // thread: materialize + upload + commit. Stale generations (user
+        // paged again) are dropped.
+        const ULONGLONG gen = static_cast<ULONGLONG>(wp);
+        ComPtr<IWICBitmapSource> decoded;
+        std::wstring prev_path;
+        int prev_idx = -1;
+        {
+            std::lock_guard lock(m_async->mutex);
+            if (gen != m_async->gen) return 0;  // stale page flip — drop
+            prev_path = m_async->current_prev_path;
+            prev_idx = m_async->current_prev_idx;
+            if (!m_async->wic) {                // decode failed — keep previous
+                m_async_busy = false;
+                m_current_path = prev_path;     // roll identity back with the bitmap
+                m_current_idx = prev_idx;
+                return 0;
+            }
+            decoded = m_async->wic;
+            m_async->wic.Reset();
+            m_async_busy = false;
+        }
+        try {
+            // Defer the GPU upload while the filmstrip transition or the
+            // grid<->image transition is still running — the heavy decode
+            // already happened on a worker; a mid-animation upload would
+            // swap the zoom layer's bitmap and flash an unrelated image.
+            if (m_filmstrip.animating() || m_animating) {
+                m_pending_image = decoded;
+                m_pending_path = m_current_path;
+                return 0;
+            }
+            if (!m_renderer.upload_image(decoded.Get())) {
+                // Upload failed (typically device loss): keep the previous
+                // bitmap and restore its identity.
+                m_current_path = prev_path;
+                m_current_idx = prev_idx;
+                return 0;
+            }
+            m_current_wic = decoded;
+            m_has_image = true;
+            m_uploaded_path = m_current_path;
+            m_renderer.clear_placeholder();
+            m_placeholder_idx = -1;
+            update_content_viewport(false);
+            fit_to_window();
+            preload_neighbors();
+            m_window.invalidate();
+        } catch (...) {
+            // Keep the previous image on decode/materialize failure.
+        }
+        return 0;
+    }
+
+    case WM_RENDER_RETRY:
+        // Device loss recovery: recreate only after a short delay so the
+        // old flip-model swapchain fully detaches from the DWM (an
+        // immediate CreateSwapChainForHwnd fails with E_ACCESSDENIED
+        // forever and the window stays black).
+        if (!m_render_retry_timer) {
+            m_render_retry_timer =
+                SetTimer(hwnd, kRenderRetryTimerId, dt::kDurationRenderRetryMs, nullptr);
+        }
+        return 0;
+    }
+    return -1;
+}
+
+LRESULT App::handle_window_message(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+    switch (message) {
+    case WM_NCCALCSIZE:
+        if (wp == TRUE) return 0;  // no inset for caption — custom title bar
+        return -1;
+
+    case WM_NCHITTEST: {
+        POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        ScreenToClient(hwnd, &pt);
+        float dpi_s = m_renderer.is_valid()
+            ? static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f : 1.0f;
+        int th = static_cast<int>(m_title_h * dpi_s);
+        if (toolbar_visible() && pt.y >= 0 && pt.y < th) {
+            const float tw = static_cast<float>(m_renderer.target_size().width);
+            const TitleBarLayout title{0.0f, tw, static_cast<float>(th), dpi_s};
+            // Window buttons → HTCLIENT (handled by WM_LBUTTONDOWN)
+            if (title_bar_window_button_at(title,
+                    static_cast<float>(pt.x)) >= 0) {
+                return HTCLIENT;
+            }
+            // Menu items → HTCLIENT (handled by WM_LBUTTONDOWN)
+            std::vector<float> menu_widths;
+            menu_widths.reserve(m_toolbar_items.size());
+            const float fsize = title_bar_menu_font_size(title);
+            for (const auto& item : m_toolbar_items)
+                menu_widths.push_back(m_renderer.measure_text(item, fsize));
+            if (title_bar_menu_item_at(title,
+                    static_cast<float>(pt.x), menu_widths) >= 0) {
+                return HTCLIENT;
+            }
+            return HTCAPTION;  // rest → drag
+        }
+        return -1;
+    }
+
+    case WM_CLOSE:
+        reset_comic_controls(ComicAppCancelTrigger::ExitMode);
+        return -1;
+
+    case WM_SIZE: {
+        uint32_t w = LOWORD(lp), h = HIWORD(lp);
+        if (w > 0 && h > 0) {
+            if (!m_renderer.resize(w, h)) m_window.invalidate();
+            m_grid_layout_dirty = true;
+            update_content_viewport(false);
+        }
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 0;
+
+    case WM_MEASUREITEM: {
+        auto* mis = reinterpret_cast<MEASUREITEMSTRUCT*>(lp);
+        if (mis->CtlType != ODT_MENU) return -1;
+        if (mis->itemData == 0) {  // separator
+            mis->itemWidth  = 20;
+            mis->itemHeight = static_cast<UINT>(dt::kSpaceSmDip * static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f);
+            return TRUE;
+        }
+        auto* d = reinterpret_cast<OwnerItemData*>(mis->itemData);
+        if (!d) return -1;
+        float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+        float text_w = m_renderer.measure_text(d->text, dt::kFontSizeXsDip * dpi);
+        float shortcut_w = d->shortcut.empty() ? 0 : m_renderer.measure_text(d->shortcut, dt::kFontSizeXsDip * dpi);
+        float icon_w = dt::kSpaceLgDip * dpi;
+        float pad_l = dt::kSpaceXsDip * dpi;
+        float pad_icon = dt::kSpaceSmDip * dpi;
+        float pad_shortcut = dt::kSpaceLgDip * dpi;
+        mis->itemWidth  = static_cast<UINT>(icon_w + pad_icon + text_w + pad_shortcut + shortcut_w + pad_l * 2);
+        mis->itemHeight = static_cast<UINT>(dt::kSize28Dip * dpi);
+        return TRUE;
+    }
+
+    case WM_DRAWITEM: {
+        auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lp);
+        if (dis->CtlType != ODT_MENU) return -1;
+        HDC hdc = dis->hDC;
+        RECT rc = dis->rcItem;
+        float dpi = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+
+        // Separator (only itemData == 0, not by itemID)
+        if (dis->itemData == 0) {
+            COLORREF bg = dt::kColorMenuBgGdi;
+            HBRUSH br = CreateSolidBrush(bg);
+            FillRect(hdc, &rc, br);
+            DeleteObject(br);
+            int mid_y = (rc.top + rc.bottom) / 2;
+            COLORREF sep_c = dt::kColorMenuSeparatorGdi;
+            HPEN pen = CreatePen(PS_SOLID, 1, sep_c);
+            HGDIOBJ old_pen = SelectObject(hdc, pen);
+            MoveToEx(hdc, rc.left + static_cast<int>(dt::kSize28Dip * dpi), mid_y, nullptr);
+            LineTo(hdc, rc.right - 4, mid_y);
+            SelectObject(hdc, old_pen);
+            DeleteObject(pen);
+            return TRUE;
+        }
+
+        auto* d = reinterpret_cast<OwnerItemData*>(dis->itemData);
+        if (!d) return -1;
+        bool selected = (dis->itemState & ODS_SELECTED) != 0;
+        bool disabled = d->disabled || (dis->itemState & ODS_GRAYED);
+
+        // Background
+        COLORREF bg = selected ? dt::kColorMenuSelectedBgGdi
+                               : dt::kColorMenuBgGdi;
+        HBRUSH br = CreateSolidBrush(bg);
+        FillRect(hdc, &rc, br);
+        DeleteObject(br);
+
+        // Icon/checkmark area
+        float icon_w = dt::kSpaceLgDip * dpi;
+        float pad_l = dt::kSpaceXsDip * dpi;
+        RECT icon_rc = { static_cast<int>(rc.left + pad_l), rc.top,
+                         static_cast<int>(rc.left + pad_l + icon_w), rc.bottom };
+        if (d->checked) {
+            SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
+                                       : dt::kColorMenuCheckEnabledGdi);
+            HFONT f = CreateFontW(-MulDiv(static_cast<int>(dt::kFontSizeMdDip), GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                DEFAULT_PITCH, dt::kFontFamilySymbols);
+            HGDIOBJ old_font = SelectObject(hdc, f);
+            SetBkMode(hdc, TRANSPARENT);
+            DrawTextW(hdc, L"\x2713", 1, &icon_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, old_font);
+            DeleteObject(f);
+        }
+
+        // Text
+        float icon_right = pad_l + icon_w + dt::kSpaceSmDip * dpi;
+        RECT text_rc = { static_cast<int>(rc.left + icon_right), rc.top,
+                         rc.right - 4, rc.bottom };
+        SetTextColor(hdc, disabled ? dt::kColorMenuTextDisabledGdi
+                                   : dt::kColorMenuTextGdi);
+        HFONT f2 = CreateFontW(-MulDiv(static_cast<int>(dt::kFontSizeXsDip), GetDeviceCaps(hdc, LOGPIXELSY), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH, dt::kFontFamilyUi);
+        HGDIOBJ old_font = SelectObject(hdc, f2);
+        SetBkMode(hdc, TRANSPARENT);
+        DrawTextW(hdc, d->text.c_str(), -1, &text_rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        // Shortcut
+        if (!d->shortcut.empty()) {
+            SetTextColor(hdc, disabled ? dt::kColorMenuShortcutDisabledGdi
+                                       : dt::kColorMenuShortcutGdi);
+            DrawTextW(hdc, d->shortcut.c_str(), -1, &text_rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
+        SelectObject(hdc, old_font);
+        DeleteObject(f2);
+        return TRUE;
+    }
+
+    case WM_DPICHANGED: {
+        float dpi = static_cast<float>(LOWORD(wp));
+        m_renderer.set_dpi(dpi, dpi);
+        apply_dpi_layout(dpi);
+        m_grid_layout_dirty = true;
+        update_content_viewport(false);
+        // Resize to suggested rect
+        RECT* rc = reinterpret_cast<RECT*>(lp);
+        if (rc) {
+            SetWindowPos(hwnd, nullptr, rc->left, rc->top,
+                rc->right - rc->left, rc->bottom - rc->top,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        m_window.invalidate();
+        return 0;
+    }
+
+    case WM_CONTEXTMENU: {
+        int cx = GET_X_LPARAM(lp), cy = GET_Y_LPARAM(lp);  // screen coords
+        POINT pt = {cx, cy};
+        ScreenToClient(hwnd, &pt);  // convert to client coords for hit-test
+        // Album panel (收藏 tab): row or empty-space menu
+        if (nav_panel_visible() && pt.x < nav_panel_width()
+            && pt.y >= m_toolbar_h
+            && m_nav_panel_state.tab() == NavPanelTab::Favorites) {
+            const auto& g = m_nav_panel_geometry;
+            if (g.w > 0.0f && pt.y >= g.tree_y
+                && pt.y < g.tree_y + g.tree_h) {
+                if (m_album_store.folder_view != AlbumFolderView::Tree) {
+                    const int cell_row = album_icon_hit(pt.x, pt.y);
+                    if (cell_row >= 0) {
+                        const auto& row = m_album_rows
+                            [static_cast<size_t>(cell_row)];
+                        m_album_menu_target =
+                            {row.album_index, row.folder_index, true};
+                        show_album_row_menu(hwnd, cx, cy);
+                        return 0;
+                    }
+                }
+                const int idx = album_row_hit(pt.x, pt.y);
+                if (idx >= 0) {
+                    const auto& row =
+                        m_album_rows[static_cast<size_t>(idx)];
+                    if (row.kind == AlbumPanelRow::Kind::Album) {
+                        m_album_menu_target =
+                            {row.album_index, -1, false};
+                        show_album_row_menu(hwnd, cx, cy);
+                    } else if (row.kind == AlbumPanelRow::Kind::Folder) {
+                        m_album_menu_target =
+                            {row.album_index, row.folder_index, true};
+                        show_album_row_menu(hwnd, cx, cy);
+                    }
+                } else {
+                    m_album_menu_target = {-1, -1, false};
+                    show_album_row_menu(hwnd, cx, cy);
+                }
+                return 0;
+            }
+        }
+        if (m_grid_mode) {
+            // Right-click: select item under cursor and show menu
+            if (!grid_click(pt.x, pt.y, false, false))
+                return 0;  // no menu on empty space
+            show_context_menu(hwnd, cx, cy);  // screen coords for popup
+        } else {
+            show_context_menu(hwnd, cx, cy);
+        }
+        return 0;
+    }
 
     case WM_IME_STARTCOMPOSITION:
         m_ime_composing = true;
@@ -1525,257 +1841,6 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         finish_comic_scrollbar_drag();
         return -1;
-
-    case WM_KEYDOWN: {
-        bool ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        bool shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
-
-        if (m_comic_reader.middle_autoscroll_active() && wp != 'P') {
-            const ComicAppCancelTrigger reason = wp == VK_ESCAPE
-                ? ComicAppCancelTrigger::Escape
-                : ComicAppCancelTrigger::KeyboardPage;
-            cancel_comic_auto_scroll(reason);
-        }
-
-        DeleteKeyGuards delete_guards;
-        delete_guards.shift_down = shift;
-        delete_guards.control_down = ctrl;
-        delete_guards.main_window_focused =
-                GetForegroundWindow() == hwnd && GetFocus() == hwnd;
-        delete_guards.ime_composing = m_ime_composing;
-        if (m_delete_composition->handle_key(
-                static_cast<UINT>(wp), lp, delete_guards))
-            return 0;
-
-        // ── Left navigation panel keys (Issue #5 P2) ──
-        if (!m_ime_composing && !ctrl && !shift && wp == 'B') {
-            toggle_nav_panel();
-            return 0;
-        }
-        if (!m_ime_composing && !ctrl && !shift && wp == VK_TAB) {
-            cycle_nav_focus();
-            return 0;
-        }
-        // The directory tree owns arrow/return navigation; the album tab
-        // has none, so its clicks release the panel focus and main-area
-        // shortcuts (F/N/D/S/R/A/L/Space) keep working there.
-        if (m_nav_panel_state.focused()
-            && m_nav_panel_state.tab() == NavPanelTab::Directories
-            && handle_nav_panel_key(hwnd, wp, ctrl, shift)) {
-            return 0;
-        }
-
-        if (ctrl) {
-            if (m_comic_reader.enabled()) {
-                switch (wp) {
-                case '0': case VK_NUMPAD0:
-                    cancel_comic_auto_scroll(
-                        ComicAppCancelTrigger::KeyboardPage);
-                    m_comic_reader.reset_width();
-                    clear_comic_cache();
-                    request_comic_pages();
-                    m_window.invalidate();
-                    return 0;
-                case VK_OEM_PLUS: case VK_ADD:
-                    adjust_comic_width(0.10f); return 0;
-                case VK_OEM_MINUS: case VK_SUBTRACT:
-                    adjust_comic_width(-0.10f); return 0;
-                }
-            }
-            switch (wp) {
-            case '0': case VK_NUMPAD0: fit_to_window(); m_window.invalidate(); return 0;
-            case VK_OEM_PLUS: case VK_ADD:   zoom_at_center(1.25f); return 0;
-            case VK_OEM_MINUS: case VK_SUBTRACT: zoom_at_center(1.0f/1.25f); return 0;
-            case 'O': {
-                OPENFILENAMEW ofn = {};
-                wchar_t file[MAX_PATH] = {};
-                ofn.lStructSize = sizeof(ofn);
-                ofn.hwndOwner = hwnd;
-                ofn.lpstrFilter = L"\u56FE\u7247\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tiff;*.tif\0\u6240\u6709\u6587\u4EF6\0*.*\0";
-                ofn.lpstrFile = file; ofn.nMaxFile = MAX_PATH;
-                ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-                if (GetOpenFileNameW(&ofn)) open_image(file);
-                return 0;
-            }
-            case 'C':
-                copy_image_data();
-                return 0;
-            case 'R':
-                if (can_toggle_recursive(
-                        m_grid_mode, m_has_image, m_index.directory()))
-                    toggle_recursive();
-                return 0;
-            }
-            return -1;
-        }
-
-        switch (wp) {
-        case '0': case VK_NUMPAD0:
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-                m_comic_reader.reset_width();
-                clear_comic_cache();
-                request_comic_pages();
-                m_window.invalidate();
-                return 0;
-            }
-            return -1;
-        case VK_OEM_PLUS: case VK_ADD:
-            if (m_comic_reader.enabled()) { adjust_comic_width(0.10f); return 0; }
-            return -1;
-        case VK_OEM_MINUS: case VK_SUBTRACT:
-            if (m_comic_reader.enabled()) { adjust_comic_width(-0.10f); return 0; }
-            return -1;
-        case VK_ESCAPE:
-            if (m_animating) {
-                interrupt_transition(mv::TransitionTrigger::Escape, 0);
-                return 0;
-            }
-            if (m_comic_reader.enabled() && !leave_comic_reader(true)) return 0;
-            if (route_grid_exit(GridExitTrigger::Escape,
-                    GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
-                m_from_grid = false;
-                start_transition(hwnd, false);
-                begin_animation(hwnd);
-                toggle_grid();
-                return 0;
-            }
-            if (m_fullscreen) { toggle_fullscreen(hwnd); return 0; }
-            return 0;
-        case VK_F11:   toggle_fullscreen(hwnd); return 0;
-        case VK_SPACE: {
-            if (m_animating) {
-                interrupt_transition(mv::TransitionTrigger::Space, 0);
-                return 0;
-            }
-            if (m_comic_reader.enabled() && !leave_comic_reader(true)) return 0;
-            if (route_grid_exit(GridExitTrigger::Space,
-                    GridExitRouteState{m_animating, m_from_grid, m_has_image})) {
-                m_from_grid = false;
-                start_transition(hwnd, false);
-                begin_animation(hwnd);
-                toggle_grid();
-                return 0;
-            }
-            GridEntryRouteState route_state;
-            route_state.grid_mode = m_grid_mode;
-            route_state.animating = m_animating;
-            route_state.selected_index = m_grid_sel;
-            route_state.item_count = static_cast<int>(m_index.size());
-            const auto request = route_grid_entry(
-                GridEntryTrigger::Space, route_state);
-            if (request) {
-                enter_grid_image(hwnd, *request);
-                return 0;
-            }
-            return 0;  // in normal image mode, do nothing
-        }
-        case VK_BACK:
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-            }
-            navigate_to(m_current_idx - 1);
-            return 0;
-        case VK_RETURN:
-            if (m_has_image || m_grid_mode) { toggle_fullscreen(hwnd); return 0; }
-            return -1;
-        case 'A':
-            if (m_grid_mode) { toggle_thumb_square(); return 0; }
-            return -1;
-        case 'L':
-            return toggle_grid_labels() ? 0 : -1;
-        case 'F':
-            if (!m_ime_composing) { toggle_favourite_current(); return 0; }
-            return -1;
-        case 'I':
-            toggle_info(); return 0;
-        case 'M':
-            toggle_comic_reader(); return 0;
-        case 'P':
-            return dispatch_comic_command(ComicAppCommand::ToggleCruise) ? 0 : -1;
-        case VK_OEM_4:
-            return dispatch_comic_command(ComicAppCommand::DecreaseSpeed) ? 0 : -1;
-        case VK_OEM_6:
-            return dispatch_comic_command(ComicAppCommand::IncreaseSpeed) ? 0 : -1;
-        case 'N':
-            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Name); return 0; }
-            return -1;
-        case 'D':
-            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Date); return 0; }
-            return -1;
-        case 'S':
-            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Size); return 0; }
-            return -1;
-        case 'R':
-            if (!ctrl && m_grid_mode) { set_sort_mode(SortMode::Random); return 0; }
-            return -1;
-        case VK_LEFT:
-            if (m_animating) {
-                interrupt_transition(mv::TransitionTrigger::ArrowLeft, -1);
-                return 0;
-            }
-            if (m_grid_mode) { grid_navigate(-1, shift); return 0; }
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-            }
-            navigate_to(m_current_idx - 1); return 0;
-        case VK_RIGHT:
-            if (m_animating) {
-                interrupt_transition(mv::TransitionTrigger::ArrowRight, 1);
-                return 0;
-            }
-            if (m_grid_mode) { grid_navigate(1, shift); return 0; }
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-            }
-            navigate_to(m_current_idx + 1); return 0;
-        case VK_UP:
-            if (m_grid_mode) { grid_navigate(-m_grid_cols, shift); return 0; }
-            return -1;
-        case VK_DOWN:
-            if (m_grid_mode) { grid_navigate(m_grid_cols, shift); return 0; }
-            return -1;
-        case VK_HOME:
-            if (m_grid_mode) { select_item(0, shift, false); grid_ensure_visible(); return 0; }
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-                m_comic_reader.home(); sync_comic_current();
-                request_comic_pages(); m_window.invalidate(); return 0;
-            }
-            navigate_to(0); return 0;
-        case VK_END:
-            if (m_grid_mode) { select_item(static_cast<int>(m_index.size()) - 1, shift, false); grid_ensure_visible(); return 0; }
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-                m_comic_reader.end(); sync_comic_current();
-                request_comic_pages(); m_window.invalidate(); return 0;
-            }
-            navigate_to(static_cast<int>(m_index.size()) - 1); return 0;
-        case VK_PRIOR:
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-                m_comic_reader.page_up(); sync_comic_current();
-                request_comic_pages(); m_window.invalidate(); return 0;
-            }
-            return -1;
-        case VK_NEXT:
-            if (m_comic_reader.enabled()) {
-                cancel_comic_auto_scroll(
-                    ComicAppCancelTrigger::KeyboardPage);
-                m_comic_reader.page_down(); sync_comic_current();
-                request_comic_pages(); m_window.invalidate(); return 0;
-            }
-            return -1;
-        }
-        break;
-    }
 
     case WM_DROPFILES: {
         HDROP drop = reinterpret_cast<HDROP>(wp);
@@ -1814,7 +1879,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SetCursor(LoadCursor(nullptr, IDC_HAND));
             return TRUE;
         }
-        break;  // fall through to DefWindowProc for other areas
+        return -1;  // fall through to DefWindowProc for other areas
     }
     return -1;
 }
