@@ -2170,7 +2170,9 @@ void App::open_directory(const std::wstring& path) {
 bool App::open_image(const std::wstring& path) {
     if (m_comic_reader.enabled()) leave_comic_reader(false);
     // 大图模式仅展示大图本身 + 胶片条: 收起信息面板, 避免转场中面板
-    // 刷新重置叠加在动画上, 也避免布局在转场前后变化。
+    // 刷新重置叠加在动画上, 也避免布局在转场前后变化。记住网格状态,
+    // 返回网格时原样恢复。
+    m_panel_expanded_in_grid = m_panel_expanded;
     m_panel_expanded = false;
     m_panel_clickable.clear();
     namespace fs = std::filesystem;
@@ -4471,6 +4473,9 @@ void App::toggle_grid() {
     update_content_viewport(!m_grid_mode);
 
     if (m_grid_mode) {
+        // 返回网格: 恢复进入大图前的信息面板状态(同一面板组件与数据),
+        // 布局随网格宽度重新计算, 不发生跳变。
+        m_panel_expanded = m_panel_expanded_in_grid;
         int n = static_cast<int>(m_index.size());
         bool re_entry = (m_thumb_engine.thumb_count() == static_cast<size_t>(n));
         if (!re_entry) {
@@ -4527,6 +4532,7 @@ void App::toggle_grid() {
         m_grid_saved_idx = m_grid_sel;
         finish_grid_scroll();
         // 大图模式仅大图 + 胶片条: 收起信息面板, 转场几何以无面板布局计算。
+        m_panel_expanded_in_grid = m_panel_expanded;
         m_panel_expanded = false;
         m_panel_clickable.clear();
         // Don't stop thumb loader or clear cache — reuse on re-entry

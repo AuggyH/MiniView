@@ -485,6 +485,7 @@ private:
     bool  m_thumb_square = false;
     bool  m_show_labels = true;
     bool  m_panel_expanded = false;  // big-image mode: image + filmstrip only
+    bool  m_panel_expanded_in_grid = false;  // grid panel state to restore
     bool  m_from_grid = false;  // current image has a grid context → Space/Esc returns
     bool  m_toolbar_revealed = false;
     bool  m_ime_composing = false;
