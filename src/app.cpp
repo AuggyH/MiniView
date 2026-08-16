@@ -5385,14 +5385,12 @@ void App::grid_render() {
     }
 
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
-    std::unordered_map<int, D2D1_COLOR_F> placeholder_colors;
     {
         std::lock_guard lock(m_thumb_engine.pool()->mutex);
         for (int r = top_row; r <= bottom_row; ++r) {
             const auto& row = rows[static_cast<size_t>(r)];
             for (int i = row.start_idx; i < row.end_idx; ++i) {
                 if (i >= static_cast<int>(m_thumb_engine.pool()->thumbs.size())) continue;
-                placeholder_colors.emplace(i, m_thumb_engine.pool()->thumbs[i].dominant_color);
                 if (m_thumb_engine.pool()->thumbs[i].loaded && !m_thumb_d2d.count(i) && m_thumb_engine.pool()->thumbs[i].wic)
                     ready.push_back({i, m_thumb_engine.pool()->thumbs[i].wic});
             }
@@ -5450,11 +5448,8 @@ void App::grid_render() {
                 m_renderer.draw_grid_thumbnail(x, row_y, width,
                     static_cast<float>(row.row_h), bitmap->second.Get(), m_thumb_square);
             } else {
-                auto color = placeholder_colors.find(index);
-                D2D1_COLOR_F fill = color == placeholder_colors.end()
-                    ? dt::d2d(dt::kColorPlaceholder) : color->second;
                 m_renderer.draw_grid_placeholder(x, row_y, width,
-                    static_cast<float>(row.row_h), fill);
+                    static_cast<float>(row.row_h), dt::d2d(dt::kColorPlaceholder));
             }
 
             bool selected = grid_item_has_selection_border(

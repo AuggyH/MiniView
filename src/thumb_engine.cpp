@@ -118,29 +118,6 @@ void thumb_loader_worker(
                     if (idx < 0 || idx >= static_cast<int>(paths.size())) continue;
                     const std::wstring path = paths[static_cast<size_t>(idx)];
 
-                    // 骨架屏主题色优先: 先解 64px 小图提取主色并立即通知,
-                    // 让占位块在本项完整缩略图排到之前就有颜色。
-                    try {
-                        auto tiny = decoder.decode_scaled(path, 64);
-                        if (tiny) {
-                            const D2D1_COLOR_F dom =
-                                decoder.extract_dominant(tiny.Get());
-                            bool color_changed = false;
-                            {
-                                std::lock_guard lock(pool->mutex);
-                                if (idx >= 0
-                                    && idx < static_cast<int>(pool->thumbs.size())
-                                    && !pool->thumbs[static_cast<size_t>(idx)].loaded) {
-                                    const auto old = pool->thumbs[static_cast<size_t>(idx)].dominant_color;
-                                    pool->thumbs[static_cast<size_t>(idx)].dominant_color = dom;
-                                    color_changed = old.r != dom.r || old.g != dom.g
-                                        || old.b != dom.b || old.a != dom.a;
-                                }
-                            }
-                            if (color_changed && notify) notify();
-                        }
-                    } catch (...) {}
-
                     // Probe dimensions early (before decode) for accurate
                     // layout. Skip probing when the directory preload
                     // already supplied them.
