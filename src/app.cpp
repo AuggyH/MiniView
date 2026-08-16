@@ -5257,6 +5257,16 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
 
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     int effective_cell = std::max(1, static_cast<int>(m_thumb_cell * m_thumb_zoom));
+    // 尺寸未齐之前使用方形骨架布局(行高/列宽固定), 避免 justified 在
+    // 维度逐项到达时对已可见行产生垂直+水平双向漂移; 全部尺寸就绪后
+    // 一次性切换到用户布局(方形或 justified)。
+    bool all_dims_ready = true;
+    for (const auto& dim : m_grid_dims) {
+        if (dim.first == 0 || dim.second == 0) {
+            all_dims_ready = false;
+            break;
+        }
+    }
     GridLayoutInput input;
     input.item_count = total;
     input.area_width = grid_area_width;
@@ -5264,7 +5274,7 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
     input.gap_h = m_thumb_gap_h;
     input.gap_v = m_thumb_gap_v;
     input.pad = m_thumb_pad;
-    input.square = m_thumb_square;
+    input.square = all_dims_ready ? m_thumb_square : true;
     input.show_labels = m_show_labels;
     input.dpi_scale = dpi_scale;
     input.dims = m_grid_dims;
@@ -5505,6 +5515,26 @@ void App::grid_render() {
 void App::render_frame() {
     advance_transition_animation();
     update_filmstrip_reveal();
+    // Advance filmstrip scroll/zoom transition using REAL elapsed time so
+    // dropped frames slow the rendering but never stretch the animation.
+    // Must run BEFORE the grid/image branch: entering grid while a handoff
+    // is in flight would otherwise never finish it (and the WM_PAINT re-arm
+    // would spin an endless repaint loop -> unresponsive window).
+    {
+        LARGE_INTEGER now, freq;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&freq);
+        float anim_dt = 1.0f / 60.0f;
+        if (m_last_anim_tick.QuadPart != 0) {
+            anim_dt = static_cast<float>(now.QuadPart - m_last_anim_tick.QuadPart)
+                / static_cast<float>(freq.QuadPart);
+            anim_dt = std::clamp(anim_dt, 0.0f, 0.05f);
+        }
+        m_last_anim_tick = now;
+        if (m_filmstrip.advance_animation(anim_dt)) {
+            m_window.invalidate();
+        }
+    }
     // 水平滑动(翻页/滚轮)进行中视为持续交互: 不触发3s静止收起;
     // 滑动结束后由最后一帧重新武装 3s 计时。
     if (m_filmstrip.animating()) note_filmstrip_interaction();
@@ -5548,21 +5578,6 @@ void App::render_frame() {
         return;
     }
 
-    // Advance filmstrip scroll/zoom transition using REAL elapsed time so
-    // dropped frames slow the rendering but never stretch the animation.
-    LARGE_INTEGER now, freq;
-    QueryPerformanceCounter(&now);
-    QueryPerformanceFrequency(&freq);
-    float anim_dt = 1.0f / 60.0f;
-    if (m_last_anim_tick.QuadPart != 0) {
-        anim_dt = static_cast<float>(now.QuadPart - m_last_anim_tick.QuadPart)
-            / static_cast<float>(freq.QuadPart);
-        anim_dt = std::clamp(anim_dt, 0.0f, 0.05f);
-    }
-    m_last_anim_tick = now;
-    if (m_filmstrip.advance_animation(anim_dt)) {
-        m_window.invalidate();
-    }
     // An image that arrived DURING the transition is uploaded now that the
     // animation is over — never between animation frames (the GPU upload
     // would stall the transition).
