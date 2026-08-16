@@ -36,41 +36,35 @@ inline bool renderer_generation_changed(uint64_t cached, uint64_t current) {
     return cached != current;
 }
 
-// Entry geometry, Quick Look-copied rhythm: reach ~90% size in the first
-// 32% of the run, then settle to 100% with a quartic ease-out tail.
-// The image stays fully opaque throughout.
-inline float transition_ease(float t) {
-    const float s = std::clamp(t, 0.0f, 1.0f);
-    const float fast_end = dt::kTransitionEntryFastFraction;
-    if (s < fast_end) {
-        return dt::kTransitionEntryFastReach * (s / fast_end);
+// CSS ease-in-out cubic-bezier(0.42, 0, 0.58, 1) — the curve from the
+// frame-level affine fit of the Quick Look recording (open ~249ms,
+// close ~251ms, FLIP geometry with uniform scale + center translation).
+// Symmetric: E(s) = 1 - E(1 - s), so the exit replayed forward is the
+// exact time-mirror of the entry.
+inline float css_ease_in_out(float x) {
+    const float s = std::clamp(x, 0.0f, 1.0f);
+    constexpr float x1 = 0.42f;
+    constexpr float x2 = 0.58f;
+    // Solve the X(t) cubic for t, then evaluate Y(t).
+    float lo = 0.0f, hi = 1.0f;
+    for (int i = 0; i < 24; ++i) {
+        const float t = (lo + hi) * 0.5f;
+        const float u = 1.0f - t;
+        const float bx = u * u * u * 0.0f + 3.0f * u * u * t * x1
+            + 3.0f * u * t * t * x2 + t * t * t * 1.0f;
+        if (bx < s) lo = t; else hi = t;
     }
-    const float u = (s - fast_end) / (1.0f - fast_end);
-    const float tail = 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u) * (1.0f - u);
-    return dt::kTransitionEntryFastReach
-        + (1.0f - dt::kTransitionEntryFastReach) * tail;
+    const float t = (lo + hi) * 0.5f;
+    const float u = 1.0f - t;
+    const float by = 3.0f * u * u * t * 0.0f + 3.0f * u * t * t * 1.0f
+        + t * t * t * 1.0f;
+    return by;
 }
 
-// Exit geometry, Quick Look-copied rhythm: hold the fitted rect for the
-// first 60% (background veil reveals the grid), then collapse into the
-// cell over the final 40% with a quartic ease-out. Fully opaque.
-inline float transition_ease_exit(float t) {
-    const float s = std::clamp(t, 0.0f, 1.0f);
-    const float hold_end = dt::kTransitionExitHoldFraction;
-    if (s < hold_end) return 0.0f;
-    const float u = (s - hold_end) / (1.0f - hold_end);
-    const float one_minus = 1.0f - u;
-    return 1.0f - one_minus * one_minus * one_minus * one_minus;
-}
-
-// Exit veil: symmetric ease-in-out over the hold phase, fully revealing
-// the grid exactly when the image starts collapsing.
-inline float transition_veil_exit(float t) {
-    const float s = std::clamp(t, 0.0f, 1.0f);
-    const float hold_end = dt::kTransitionExitHoldFraction;
-    const float u = std::clamp(s / hold_end, 0.0f, 1.0f);
-    return u * u * (3.0f - 2.0f * u);
-}
+// Entry and exit share one FLIP curve; the image stays fully opaque.
+inline float transition_ease(float t) { return css_ease_in_out(t); }
+inline float transition_ease_exit(float t) { return css_ease_in_out(t); }
+inline float transition_veil_exit(float t) { return css_ease_in_out(t); }
 
 struct ComicRenderRect {
     float left = 0.0f;

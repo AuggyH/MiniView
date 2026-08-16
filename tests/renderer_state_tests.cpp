@@ -46,18 +46,23 @@ void expect_near(float actual, float expected, const char* message) {
 void test_transition_ease() {
     expect_near(mv::transition_ease(0.0f), 0.0f, "ease(0) must be 0");
     expect_near(mv::transition_ease(1.0f), 1.0f, "ease(1) must be 1");
-    expect_near(mv::transition_ease(0.16f), 0.45f,
-        "fast phase is linear to 90% at 32% (0.16 -> 0.45)");
-    expect_near(mv::transition_ease(0.32f), 0.90f,
-        "entry must reach 90% size at 32% of the run");
-    expect_near(mv::transition_ease(0.5f), 0.9707585f,
-        "entry must settle to ~97.1% at midpoint");
+    expect_near(mv::transition_ease(0.25f), 0.129162f,
+        "CSS ease-in-out must be 12.92% at 25% (Quick Look affine fit)");
+    expect_near(mv::transition_ease(0.5f), 0.5f,
+        "CSS ease-in-out must be 50% at midpoint");
+    expect_near(mv::transition_ease(0.75f), 0.870838f,
+        "CSS ease-in-out must be 87.08% at 75%");
     expect_near(mv::transition_ease(-0.5f), 0.0f, "ease must clamp below 0");
     expect_near(mv::transition_ease(1.5f), 1.0f, "ease must clamp above 1");
     expect(mv::transition_ease(0.2f) < mv::transition_ease(0.4f)
             && mv::transition_ease(0.4f) < mv::transition_ease(0.6f)
             && mv::transition_ease(0.6f) < mv::transition_ease(0.8f),
         "ease must be monotonic on [0, 1]");
+    for (const float s : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 0.37f}) {
+        expect_near(mv::transition_ease(s),
+            1.0f - mv::transition_ease(1.0f - s),
+            "CSS ease-in-out must satisfy E(s)=1-E(1-s)");
+    }
 }
 
 void test_device_loss_detection() {
@@ -78,34 +83,37 @@ void test_device_loss_detection() {
 }
 
 void test_transition_ease_exit() {
+    // Exit is the exact time-mirror: same CSS ease-in-out curve.
     expect_near(mv::transition_ease_exit(0.0f), 0.0f, "exit ease(0) must be 0");
     expect_near(mv::transition_ease_exit(1.0f), 1.0f, "exit ease(1) must be 1");
-    expect_near(mv::transition_ease_exit(0.5f), 0.0f,
-        "exit must hold full size through the first 60%");
-    expect_near(mv::transition_ease_exit(0.6f), 0.0f,
-        "exit collapse starts exactly at 60%");
-    expect_near(mv::transition_ease_exit(0.7f), 0.68359375f,
-        "exit collapse is quartic: 68.36% at 70% of the run");
+    expect_near(mv::transition_ease_exit(0.25f), 0.129162f,
+        "exit ease must be 12.92% at 25% (mirror of entry)");
+    expect_near(mv::transition_ease_exit(0.5f), 0.5f,
+        "exit ease must be 50% at midpoint");
+    expect_near(mv::transition_ease_exit(0.75f), 0.870838f,
+        "exit ease must be 87.08% at 75%");
     expect_near(mv::transition_ease_exit(-0.5f), 0.0f,
         "exit ease must clamp below 0");
     expect_near(mv::transition_ease_exit(1.5f), 1.0f,
         "exit ease must clamp above 1");
-    expect(mv::transition_ease_exit(0.55f) < mv::transition_ease_exit(0.7f)
-            && mv::transition_ease_exit(0.7f) < mv::transition_ease_exit(0.9f),
+    expect(mv::transition_ease_exit(0.2f) < mv::transition_ease_exit(0.5f)
+            && mv::transition_ease_exit(0.5f) < mv::transition_ease_exit(0.8f),
         "exit ease must be monotonic");
 }
 
 void test_transition_veil_exit() {
+    // Background crossfade uses the same FLIP curve as geometry.
     expect_near(mv::transition_veil_exit(0.0f), 0.0f, "veil(0) must be 0");
-    expect_near(mv::transition_veil_exit(0.3f), 0.5f,
-        "veil must be 0.5 at half of the hold phase");
-    expect_near(mv::transition_veil_exit(0.6f), 1.0f,
-        "veil must fully reveal the grid when collapse starts");
+    expect_near(mv::transition_veil_exit(0.25f), 0.129162f,
+        "veil must be 12.92% at 25%");
+    expect_near(mv::transition_veil_exit(0.5f), 0.5f, "veil must be 0.5 at 50%");
+    expect_near(mv::transition_veil_exit(0.75f), 0.870838f,
+        "veil must be 87.08% at 75%");
     expect_near(mv::transition_veil_exit(1.0f), 1.0f, "veil(1) must be 1");
     expect_near(mv::transition_veil_exit(-0.5f), 0.0f,
         "veil must clamp below 0");
-    expect(mv::transition_veil_exit(0.1f) < mv::transition_veil_exit(0.3f)
-            && mv::transition_veil_exit(0.3f) < mv::transition_veil_exit(0.5f),
+    expect(mv::transition_veil_exit(0.1f) < mv::transition_veil_exit(0.5f)
+            && mv::transition_veil_exit(0.5f) < mv::transition_veil_exit(0.9f),
         "veil must be monotonic");
 }
 

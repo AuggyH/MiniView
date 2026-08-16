@@ -1875,9 +1875,9 @@ void Renderer::draw_fade_overlay(float t, bool forward) {
     // the grid underneath. Three transforms total — translation, scale,
     // background opacity — nothing else.
     const float s = std::clamp(t, 0.0f, 1.0f);
-    // Entry veil follows the fast-to-90%-then-settle geometry curve.
-    // Exit veil reveals the grid fully during the full-size hold phase.
-    const float et = forward ? transition_ease(s) : transition_veil_exit(s);
+    // Same FLIP ease-in-out curve for both directions; the exit is the
+    // exact time-mirror of the entry (background crossfade per recording).
+    const float et = transition_ease(s);
     const float alpha = forward ? et : (1.0f - et);
     if (alpha <= 0.0f) return;
     auto br = get_solid_brush(
@@ -1896,8 +1896,9 @@ void Renderer::draw_fullscreen_bitmap(ID2D1Bitmap1* bmp) {
         D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, nullptr);
 }
 
-// Shared transition geometry. Entry: fast to ~90% then quartic settle.
-// Exit: hold the fitted rect, then quartic collapse into the cell.
+// Shared FLIP transition geometry: uniform scale + center translation,
+// CSS ease-in-out cubic-bezier(0.42,0,0.58,1); exit replays the same
+// curve forward, which is the exact time-mirror of the entry.
 static D2D1_RECT_F transition_interpolated_rect(
     D2D1_RECT_F src, D2D1_RECT_F dst, float t, float& out_et,
     bool exit_curve = false) {

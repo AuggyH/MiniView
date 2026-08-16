@@ -188,13 +188,7 @@ void test_typography_tokens() {
 
 void test_motion_tokens() {
     expect_near(mv::dt::kDurationTransitionSec, 0.25f, 0.0f,
-        "kDurationTransitionSec == 0.25 (Quick Look 实测 233-267ms)");
-    expect_near(mv::dt::kTransitionEntryFastFraction, 0.32f, 0.0f,
-        "kTransitionEntryFastFraction == 0.32");
-    expect_near(mv::dt::kTransitionEntryFastReach, 0.90f, 0.0f,
-        "kTransitionEntryFastReach == 0.90");
-    expect_near(mv::dt::kTransitionExitHoldFraction, 0.60f, 0.0f,
-        "kTransitionExitHoldFraction == 0.60");
+        "kDurationTransitionSec == 0.25 (录屏拟合 249/251ms)");
     expect_near(mv::dt::kDurationFilmstripHandoffSec, 0.30f, 0.0f,
         "kDurationFilmstripHandoffSec == 0.30 (filmstrip keeps 300ms)");
     expect_near(mv::dt::kDurationFilmstripHideSec, 3.0f, 0.0f,

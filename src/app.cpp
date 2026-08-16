@@ -4348,11 +4348,12 @@ void App::reverse_transition() {
     m_window.invalidate();
 }
 
-// Draws the transition overlay for the current composition. Entry: reach
-// ~90% size fast, then settle to 100% (opaque, Quick Look rhythm). Exit:
-// keep the fitted rect fully opaque for the first 60% while the veil
-// reveals the grid, then collapse into the cell over the final 40%.
-// A reversed run rewinds the same composition via p.
+// Draws the transition overlay for the current composition. FLIP model
+// (per the recording's affine fit): a top-layer clone of the thumbnail
+// scales uniformly and translates its center from the cell to the fitted
+// image rect over 250ms, CSS ease-in-out; the content background
+// crossfades with the same curve. The image layer stays fully opaque and
+// the exit is the exact time-mirror of the entry.
 void App::draw_transition_overlay() {
     if (!m_animating) return;
     const float p = m_anim_reversed ? (1.0f - m_anim_t) : m_anim_t;
