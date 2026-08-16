@@ -99,12 +99,22 @@ inline GridLayout plan_grid_layout(const GridLayoutInput& input) {
             row.end_idx = std::min(index + cols, total);
             row.row_y = current_y;
             row.label_extra = label_height;
+            // 行级冻结: 本行只要有一个尺寸未知, 整行按 1:1 排; 全部就绪后
+            // 该行一次性换成真实比例。避免每张图尺寸到达都重排造成漂移。
+            bool row_ready = true;
+            for (int i = row.start_idx; i < row.end_idx; ++i) {
+                const auto dim = input.dims[static_cast<size_t>(i)];
+                if (dim.first == 0 || dim.second == 0) {
+                    row_ready = false;
+                    break;
+                }
+            }
             double width_at_base = 0.0;
             for (int i = row.start_idx; i < row.end_idx; ++i) {
                 const auto [raw_w, raw_h] =
                     input.dims[static_cast<size_t>(i)];
-                const uint32_t image_w = raw_w == 0 ? 1 : raw_w;
-                const uint32_t image_h = raw_h == 0 ? 1 : raw_h;
+                const uint32_t image_w = !row_ready || raw_w == 0 ? 1 : raw_w;
+                const uint32_t image_h = !row_ready || raw_h == 0 ? 1 : raw_h;
                 width_at_base += static_cast<double>(base_height)
                     * image_w / image_h;
             }
@@ -116,8 +126,8 @@ inline GridLayout plan_grid_layout(const GridLayoutInput& input) {
             for (int i = row.start_idx; i < row.end_idx; ++i) {
                 const auto [raw_w, raw_h] =
                     input.dims[static_cast<size_t>(i)];
-                const uint32_t image_w = raw_w == 0 ? 1 : raw_w;
-                const uint32_t image_h = raw_h == 0 ? 1 : raw_h;
+                const uint32_t image_w = !row_ready || raw_w == 0 ? 1 : raw_w;
+                const uint32_t image_h = !row_ready || raw_h == 0 ? 1 : raw_h;
                 const float display_width =
                     static_cast<float>(row.row_h) * image_w / image_h;
                 layout.item_x[static_cast<size_t>(i)] = x;

@@ -5257,17 +5257,6 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
 
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     int effective_cell = std::max(1, static_cast<int>(m_thumb_cell * m_thumb_zoom));
-    // 历史修复(5e93d5e)的方案: 首帧布局时对缺尺寸的项同步 probe 真实宽高,
-    // 让骨架屏从第一帧就按真实比例布局, 后续缩略图到达不再引起漂移。
-    // 后台维度预读作为加速仍然保留, 这里只补漏。
-    for (int i = 0; i < total; ++i) {
-        if (m_grid_dims[static_cast<size_t>(i)].first != 0) continue;
-        try {
-            if (auto info = m_decoder.probe(m_index.path_at(i))) {
-                m_grid_dims[static_cast<size_t>(i)] = {info->width, info->height};
-            }
-        } catch (...) {}
-    }
     GridLayoutInput input;
     input.item_count = total;
     input.area_width = grid_area_width;
