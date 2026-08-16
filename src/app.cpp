@@ -5470,16 +5470,22 @@ void App::render_frame() {
     if (m_comic_reader.enabled()) {
         render_comic_reader(content_top);
     } else if (m_has_image) {
-        m_renderer.draw_image();
-        const float filmstrip_h = filmstrip_visible()
-            ? layout::kFilmstripHeightDip
-                * (static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f)
-                * filmstrip_reveal_progress()
-            : 0.0f;
-        m_renderer.draw_overlay(filmstrip_h);
-        uint32_t image_w = 0, image_h = 0;
-        m_renderer.image_size(image_w, image_h);
-        draw_panel(m_current_path, m_renderer.image_bitmap(), image_w, image_h, content_top);
+        // During the entry transition the overlay (grid snapshot + veil +
+        // zooming image) covers the whole content area, so the static image
+        // and panel layers are skipped to keep every animation frame inside
+        // the display-refresh budget. Logic/geometry unchanged.
+        if (!m_animating) {
+            m_renderer.draw_image();
+            const float filmstrip_h = filmstrip_visible()
+                ? layout::kFilmstripHeightDip
+                    * (static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f)
+                    * filmstrip_reveal_progress()
+                : 0.0f;
+            m_renderer.draw_overlay(filmstrip_h);
+            uint32_t image_w = 0, image_h = 0;
+            m_renderer.image_size(image_w, image_h);
+            draw_panel(m_current_path, m_renderer.image_bitmap(), image_w, image_h, content_top);
+        }
     } else {
         m_renderer.draw_hint(m_index.directory().empty()
             ? L"\u62D6\u5165\u56FE\u7247\u6216\u53F3\u952E\u6253\u5F00\u6587\u4EF6"
