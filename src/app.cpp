@@ -544,7 +544,9 @@ static void ApplyMenuTheme(HMENU menu, HBRUSH br) {
 // ── App lifecycle ────────────────────────────────────────────
 
 App::App()
-    : m_delete_composition(make_windows_delete_composition(*this)) {}
+    : m_delete_composition(make_windows_delete_composition(*this)) {
+    m_thumb_pool = std::make_shared<ThumbPoolState>();
+}
 App::~App() {
     m_comic_loader.stop();
     stop_metadata_loader();
@@ -2095,7 +2097,7 @@ void App::open_directory(const std::wstring& path) {
     m_renderer.clear_placeholder();
     m_placeholder_idx = -1;
     if (m_comic_reader.enabled()) leave_comic_reader(false);
-    if (m_thumb_running) stop_thumb_loader();
+    if (thumb_loader_running()) stop_thumb_loader();
     finish_grid_scroll();
 
     // Remember the current collection's sort/recursive state, then cancel
@@ -2121,7 +2123,7 @@ void App::open_directory(const std::wstring& path) {
     m_grid_scroll_saved = 0;
     m_selected.clear();
     m_sel_anchor = -1;
-    m_thumbs.clear();
+    m_thumb_pool->thumbs.clear();
     m_thumb_d2d.clear();
     m_thumb_d2d_use.clear();
     m_panel_path.clear();
@@ -2309,7 +2311,7 @@ bool App::open_image(const std::wstring& path) {
         if (dir.empty()) dir = L".";
 
         if (indexed_position < 0) {
-            if (m_thumb_running) stop_thumb_loader();
+            if (thumb_loader_running()) stop_thumb_loader();
             m_nav_switch.invalidate();  // cancel any in-flight nav switch
             m_index.scan(dir, m_recursive);
             save_last_dir(dir);
@@ -2423,8 +2425,8 @@ void App::toggle_recursive() {
 
     // Reset grid thumbnails for new file list
     if (scan_action == RecursiveScanAction::RefreshGrid) {
-        m_thumbs.clear();
-        m_thumbs.resize(m_index.size());
+        m_thumb_pool->thumbs.clear();
+        m_thumb_pool->thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
         m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
@@ -2456,7 +2458,8 @@ void App::toggle_recursive() {
         m_grid_sel = -1;
         m_selected.clear();
         m_sel_anchor = -1;
-        m_thumbs.clear();
+        if (thumb_loader_running()) stop_thumb_loader();
+        m_thumb_pool->thumbs.clear();
         m_thumb_d2d.clear();
         m_thumb_d2d_use.clear();
         m_panel_path.clear();
@@ -2492,8 +2495,8 @@ void App::set_sort_mode(SortMode mode) {
 
     // Reset grid if in grid mode (thumbnails need reload)
     if (m_grid_mode) {
-        m_thumbs.clear();
-        m_thumbs.resize(m_index.size());
+        m_thumb_pool->thumbs.clear();
+        m_thumb_pool->thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
         m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
@@ -3352,7 +3355,7 @@ DeleteCompositionState App::capture_delete_state() const {
     state.grid_selection = m_grid_sel;
     state.selected = m_selected;
     state.selection_anchor = m_sel_anchor;
-    state.loader_running = m_thumb_running.load(std::memory_order_relaxed);
+    state.loader_running = thumb_loader_running();
     return state;
 }
 
@@ -3450,15 +3453,17 @@ void App::start_delete_loader() {
 }
 
 void App::rebuild_delete_thumbnails() {
-    m_thumbs.clear();
-    m_thumbs.resize(m_index.size());
+    if (thumb_loader_running()) stop_thumb_loader();
+    m_thumb_pool->thumbs.clear();
+    m_thumb_pool->thumbs.resize(m_index.size());
     m_thumb_d2d.clear();
     m_thumb_d2d_use.clear();
     m_grid_layout_dirty = true;
 }
 
 void App::clear_delete_thumbnails() {
-    m_thumbs.clear();
+    if (thumb_loader_running()) stop_thumb_loader();
+    m_thumb_pool->thumbs.clear();
     m_thumb_d2d.clear();
     m_thumb_d2d_use.clear();
     m_grid_layout_dirty = true;
@@ -3916,13 +3921,13 @@ void App::create_file_copies() {
         return;
     }
 
-    bool loader_was_running = m_thumb_running;
+    bool loader_was_running = thumb_loader_running();
     if (loader_was_running) stop_thumb_loader();
     std::wstring dir = m_index.directory();
     if (!dir.empty() && m_index.scan(dir, m_recursive) >= 0) {
         m_current_idx = m_current_path.empty() ? -1 : m_index.index_of(m_current_path);
-        m_thumbs.clear();
-        m_thumbs.resize(m_index.size());
+        m_thumb_pool->thumbs.clear();
+        m_thumb_pool->thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
         m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
@@ -3996,7 +4001,7 @@ bool App::capture_grid_transition_source(int index) {
             - nav_panel_width() - visible_panel_width()
             - scrollbar_zone - m_thumb_pad);
     const uint64_t dimension_generation =
-        m_thumb_dimension_generation.load(std::memory_order_relaxed);
+        m_thumb_pool->dimension_generation.load(std::memory_order_relaxed);
     const GridRebuildReason rebuild_reason = classify_grid_rebuild_reason(
         m_grid_layout_dirty, m_grid_layout_width != grid_area_width,
         m_grid_dims.size() != m_index.size(),
@@ -4068,10 +4073,10 @@ void App::start_transition(HWND /*hwnd*/, bool forward, int request_index) {
     }
 
     // Pre-store target image size from thumbnail metadata (avoids stale image_size())
-    if (forward && thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumbs.size())) {
-        std::lock_guard lock(m_thumb_mutex);
-        m_anim_iw = static_cast<float>(m_thumbs[thumb_idx].orig_w);
-        m_anim_ih = static_cast<float>(m_thumbs[thumb_idx].orig_h);
+    if (forward && thumb_idx >= 0 && thumb_idx < static_cast<int>(m_thumb_pool->thumbs.size())) {
+        std::lock_guard lock(m_thumb_pool->mutex);
+        m_anim_iw = static_cast<float>(m_thumb_pool->thumbs[thumb_idx].orig_w);
+        m_anim_ih = static_cast<float>(m_thumb_pool->thumbs[thumb_idx].orig_h);
         if (m_anim_iw < 1) m_anim_iw = 1;
         if (m_anim_ih < 1) m_anim_ih = 1;
     } else if (!forward) {
@@ -4283,56 +4288,68 @@ static void save_wic_as_jpeg(IWICBitmapSource* src, const std::wstring& path) {
 // 173 ms p50) and its warm-cache benefit (6-9 ms) is superseded by the app's
 // own JPEG thumb cache (2 ms). WIC decode is bounded and self-contained.
 
+static bool join_for(std::thread& thread, DWORD timeout_ms) {
+    if (!thread.joinable()) return true;
+    const DWORD wait = WaitForSingleObject(thread.native_handle(), timeout_ms);
+    if (wait == WAIT_OBJECT_0) {
+        thread.join();
+        return true;
+    }
+    return false;
+}
+
 static void thumb_loader_worker(
-    std::atomic<bool>& running,
-    std::mutex& mtx,
-    std::condition_variable& cv,
-    std::vector<int>& queue,
-    std::vector<App::ThumbEntry>& thumbs,
-    ImageIndex& index,
+    std::shared_ptr<ThumbPoolState> pool,
+    std::vector<std::wstring> paths,
     int thumb_size,
-    std::atomic<uint64_t>& dimension_generation,
-    std::atomic<uint64_t>& request_generation,
     HWND notify_window)
 {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     try {
         Decoder decoder;
-        while (running) {
+        while (pool->running.load(std::memory_order_relaxed)) {
             std::vector<int> batch;
             uint64_t batch_gen = 0;
             {
-                std::unique_lock lock(mtx);
-                cv.wait(lock, [&] { return !running || !queue.empty(); });
-                if (!running) break;
-                if (queue.empty()) continue;
+                std::unique_lock lock(pool->mutex);
+                pool->cv.wait(lock, [&] {
+                    return !pool->running.load(std::memory_order_relaxed)
+                        || !pool->queue.empty();
+                });
+                if (!pool->running.load(std::memory_order_relaxed)) break;
+                if (pool->queue.empty()) continue;
                 // Snapshot the whole queue (replaced each frame with the
                 // current window's requests, nearest-first). Processing a
                 // stale batch is abandoned as soon as a newer generation
                 // lands, so fast scrolling always serves the newest window.
-                batch.swap(queue);
-                batch_gen = request_generation.load(std::memory_order_relaxed);
+                batch.swap(pool->queue);
+                batch_gen = pool->request_generation.load(
+                    std::memory_order_relaxed);
             }
             for (int idx : batch) {
                 {
-                    std::lock_guard lock(mtx);
-                    if (!running) break;
-                    if (request_generation.load(std::memory_order_relaxed)
+                    std::lock_guard lock(pool->mutex);
+                    if (!pool->running.load(std::memory_order_relaxed)) break;
+                    if (pool->request_generation.load(std::memory_order_relaxed)
                         != batch_gen) break;  // newer window arrived
-                    if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
-                    if (thumbs[idx].loaded) continue;
+                    if (idx < 0 || idx >= static_cast<int>(pool->thumbs.size())) continue;
+                    if (pool->thumbs[static_cast<size_t>(idx)].loaded) continue;
                 }
 
             try {
-                auto path = index.path_at(idx);
+                // The worker uses only the path snapshot taken on the UI
+                // thread in start_thumb_loader(); it never dereferences
+                // m_index, which sort/scan/collection-swap mutate.
+                if (idx < 0 || idx >= static_cast<int>(paths.size())) continue;
+                const std::wstring path = paths[static_cast<size_t>(idx)];
 
                 // Probe dimensions early (before decode) for accurate layout.
                 // Skip probing when the directory preload already supplied them.
                 uint32_t orig_w = 0, orig_h = 0;
                 {
-                    std::lock_guard lock(mtx);
-                    orig_w = thumbs[idx].orig_w;
-                    orig_h = thumbs[idx].orig_h;
+                    std::lock_guard lock(pool->mutex);
+                    orig_w = pool->thumbs[static_cast<size_t>(idx)].orig_w;
+                    orig_h = pool->thumbs[static_cast<size_t>(idx)].orig_h;
                 }
                 if (orig_w == 0) {
                     if (auto info = decoder.probe(path)) {
@@ -4393,21 +4410,24 @@ static void thumb_loader_worker(
                     dom = decoder.extract_dominant(wic.Get());
                 }
 
-                std::lock_guard lock(mtx);
-                if (idx < 0 || idx >= static_cast<int>(thumbs.size())) continue;
-                bool dimensions_changed = thumbs[idx].orig_w != orig_w || thumbs[idx].orig_h != orig_h;
-                thumbs[idx].wic = wic;
-                thumbs[idx].loaded = true;
-                thumbs[idx].orig_w = orig_w;
-                thumbs[idx].orig_h = orig_h;
-                thumbs[idx].dominant_color = dom;
+                std::lock_guard lock(pool->mutex);
+                if (idx < 0 || idx >= static_cast<int>(pool->thumbs.size())) continue;
+                bool dimensions_changed =
+                    pool->thumbs[static_cast<size_t>(idx)].orig_w != orig_w
+                    || pool->thumbs[static_cast<size_t>(idx)].orig_h != orig_h;
+                pool->thumbs[static_cast<size_t>(idx)].wic = wic;
+                pool->thumbs[static_cast<size_t>(idx)].loaded = true;
+                pool->thumbs[static_cast<size_t>(idx)].orig_w = orig_w;
+                pool->thumbs[static_cast<size_t>(idx)].orig_h = orig_h;
+                pool->thumbs[static_cast<size_t>(idx)].dominant_color = dom;
                 if (dimensions_changed)
-                    dimension_generation.fetch_add(1, std::memory_order_relaxed);
+                    pool->dimension_generation.fetch_add(1,
+                        std::memory_order_relaxed);
                 PostMessageW(notify_window, WM_THUMB_READY, 0, 0);
             } catch (...) {
-                std::lock_guard lock(mtx);
-                if (idx >= 0 && idx < static_cast<int>(thumbs.size())) {
-                    thumbs[idx].loaded = true;
+                std::lock_guard lock(pool->mutex);
+                if (idx >= 0 && idx < static_cast<int>(pool->thumbs.size())) {
+                    pool->thumbs[static_cast<size_t>(idx)].loaded = true;
                     PostMessageW(notify_window, WM_THUMB_READY, 0, 0);
                 }
             }
@@ -4429,94 +4449,155 @@ void App::start_dim_preload() {
     for (size_t i = 0; i < m_index.size(); ++i)
         paths.push_back(m_index.path_at(i));
     const size_t total = paths.size();
-    m_dim_preload = std::thread([this, total, paths = std::move(paths)]() {
-        std::vector<std::pair<uint32_t, uint32_t>> dims(total, {0, 0});
-        try {
-            Decoder probe_decoder;
-            for (size_t i = 0; i < total; ++i) {
-                try {
-                    if (auto info = probe_decoder.probe(paths[i])) {
-                        dims[i] = {info->width, info->height};
+    const auto pool = m_thumb_pool;
+    const HWND notify_window = m_window.handle();
+    m_dim_preload = std::thread(
+        [pool, notify_window, total, paths = std::move(paths)]() {
+            std::vector<std::pair<uint32_t, uint32_t>> dims(total, {0, 0});
+            try {
+                Decoder probe_decoder;
+                for (size_t i = 0; i < total; ++i) {
+                    try {
+                        if (auto info = probe_decoder.probe(paths[i])) {
+                            dims[i] = {info->width, info->height};
+                        }
+                    } catch (...) {}
+                }
+            } catch (...) {}
+            bool any_changed = false;
+            {
+                std::lock_guard lock(pool->mutex);
+                const size_t count = dims.size() < pool->thumbs.size()
+                    ? dims.size() : pool->thumbs.size();
+                for (size_t i = 0; i < count; ++i) {
+                    if (dims[i].first == 0) continue;
+                    if (pool->thumbs[i].orig_w != dims[i].first
+                        || pool->thumbs[i].orig_h != dims[i].second) {
+                        pool->thumbs[i].orig_w = dims[i].first;
+                        pool->thumbs[i].orig_h = dims[i].second;
+                        any_changed = true;
                     }
-                } catch (...) {}
-            }
-        } catch (...) {}
-        bool any_changed = false;
-        {
-            std::lock_guard lock(m_thumb_mutex);
-            const size_t count = dims.size() < m_thumbs.size()
-                ? dims.size() : m_thumbs.size();
-            for (size_t i = 0; i < count; ++i) {
-                if (dims[i].first == 0) continue;
-                if (m_thumbs[i].orig_w != dims[i].first
-                    || m_thumbs[i].orig_h != dims[i].second) {
-                    m_thumbs[i].orig_w = dims[i].first;
-                    m_thumbs[i].orig_h = dims[i].second;
-                    any_changed = true;
                 }
             }
-        }
-        if (any_changed) {
-            m_thumb_dimension_generation.fetch_add(1,
-                std::memory_order_relaxed);
-            PostMessageW(m_window.handle(), WM_THUMB_READY, 0, 0);
-        }
-    });
+            if (any_changed) {
+                pool->dimension_generation.fetch_add(1,
+                    std::memory_order_relaxed);
+                PostMessageW(notify_window, WM_THUMB_READY, 0, 0);
+            }
+        });
+}
+
+bool App::thumb_loader_running() const noexcept {
+    return m_thumb_pool
+        && m_thumb_pool->running.load(std::memory_order_relaxed);
 }
 
 void App::start_thumb_loader() {
-    if (m_thumb_running) return;
-    m_thumb_running = true;
-    m_thumb_threads.clear();
-    int num_threads = 4;
-    for (int i = 0; i < num_threads; ++i) {
-        try {
-            m_thumb_threads.emplace_back(thumb_loader_worker,
-                std::ref(m_thumb_running),
-                std::ref(m_thumb_mutex),
-                std::ref(m_thumb_cv),
-                std::ref(m_thumb_queue),
-                std::ref(m_thumbs),
-                std::ref(m_index),
-                m_thumb_size,
-                std::ref(m_thumb_dimension_generation),
-                std::ref(m_thumb_request_gen),
-                m_window.handle());
-        } catch (...) {
-            m_thumb_running = false;
+    auto pool = m_thumb_pool;
+    if (!pool) {
+        pool = std::make_shared<ThumbPoolState>();
+        m_thumb_pool = pool;
+    }
+    if (pool->running.load(std::memory_order_relaxed)) return;
+
+    // Clean up any joinable leftovers from a partially failed previous
+    // start (normal stop leaves them joined or detached already).
+    bool has_joinable = false;
+    for (auto& thread : pool->threads) {
+        if (thread.joinable()) {
+            has_joinable = true;
             break;
         }
+    }
+    if (has_joinable) {
+        stop_thumb_loader();
+        pool = m_thumb_pool;
+    }
+
+    // Snapshot the index paths once on the UI thread. Workers get their own
+    // copy BY VALUE and never dereference m_index, which sort/scan/swap
+    // mutate on the UI thread — this removes the data race without joining
+    // the decode workers on every mutation.
+    std::vector<std::wstring> paths;
+    paths.reserve(m_index.size());
+    for (size_t i = 0; i < m_index.size(); ++i)
+        paths.push_back(m_index.path_at(i));
+
+    pool->running.store(true, std::memory_order_release);
+    const int num_threads = 4;
+    for (int i = 0; i < num_threads; ++i) {
+        try {
+            pool->threads.emplace_back(thumb_loader_worker, pool, paths,
+                m_thumb_size, m_window.handle());
+        } catch (...) {
+            pool->running.store(false, std::memory_order_release);
+            pool->cv.notify_all();
+            break;
+        }
+    }
+    if (pool->threads.empty()) {
+        pool->running.store(false, std::memory_order_release);
     }
 }
 
 void App::stop_thumb_loader() {
-    m_thumb_running = false;
-    m_thumb_cv.notify_all();
-    for (auto& t : m_thumb_threads) {
-        if (t.joinable()) t.join();
+    auto pool = m_thumb_pool;
+    if (!pool) return;
+
+    pool->running.store(false, std::memory_order_release);
+    pool->cv.notify_all();
+
+    // Request stop, wait briefly for the workers to finish their current
+    // decode, and detach any worker that is still busy. Detached workers
+    // hold `pool` (and its heap-shared state) by shared_ptr, so they finish
+    // safely without touching freed App members. MSVC has no std::thread
+    // join_for, so join_for() above uses the thread handle.
+    bool any_detached = false;
+    for (auto& thread : pool->threads) {
+        if (!thread.joinable()) continue;
+        if (any_detached) {
+            thread.detach();
+            continue;
+        }
+        if (join_for(thread, 150)) continue;  // joined within the wait
+        thread.detach();
+        any_detached = true;
     }
-    m_thumb_threads.clear();
-    {
-        std::lock_guard lock(m_thumb_mutex);
-        m_thumb_queue.clear();
+    pool->threads.clear();
+
+    if (any_detached) {
+        // Abandon the pool: copy the thumbnail cache into a fresh pool so
+        // the UI keeps its cache, while stale detached workers can never
+        // re-enter the new generation (they still own the old pool).
+        auto replacement = std::make_shared<ThumbPoolState>();
+        {
+            std::lock_guard lock(pool->mutex);
+            replacement->thumbs = pool->thumbs;
+        }
+        m_thumb_pool = std::move(replacement);
+    } else {
+        std::lock_guard lock(pool->mutex);
+        pool->queue.clear();
     }
 }
 
 void App::request_thumb(int idx) {
+    const auto pool = m_thumb_pool;
+    if (!pool) return;
     {
-        std::lock_guard lock(m_thumb_mutex);
-        if (idx < 0 || idx >= static_cast<int>(m_thumbs.size())) return;
-        if (m_thumbs[idx].loaded) return;
-        for (int q : m_thumb_queue) if (q == idx) return;
-        if (m_thumb_queue.size() >= 64) {
+        std::lock_guard lock(pool->mutex);
+        if (idx < 0 || idx >= static_cast<int>(pool->thumbs.size())) return;
+        if (pool->thumbs[static_cast<size_t>(idx)].loaded) return;
+        for (int q : pool->queue) if (q == idx) return;
+        if (pool->queue.size() >= 64) {
             // Drop the oldest/farthest pending request (FIFO back): the
             // front holds nearest-to-current items the worker should serve
             // first, so evict from the back instead.
-            m_thumb_queue.pop_back();
+            pool->queue.pop_back();
         }
-        m_thumb_queue.push_back(idx);
+        pool->queue.push_back(idx);
     }
-    m_thumb_cv.notify_one();
+    pool->cv.notify_one();
 }
 
 void App::trim_thumb_cache(int visible_start, int visible_end) {
@@ -4538,10 +4619,10 @@ void App::trim_thumb_cache(int visible_start, int visible_end) {
         int index = victim->first;
         m_thumb_d2d.erase(victim);
         m_thumb_d2d_use.erase(index);
-        std::lock_guard lock(m_thumb_mutex);
-        if (index >= 0 && index < static_cast<int>(m_thumbs.size())) {
-            m_thumbs[index].wic.Reset();
-            m_thumbs[index].loaded = false;
+        std::lock_guard lock(m_thumb_pool->mutex);
+        if (index >= 0 && index < static_cast<int>(m_thumb_pool->thumbs.size())) {
+            m_thumb_pool->thumbs[index].wic.Reset();
+            m_thumb_pool->thumbs[index].loaded = false;
         }
     }
 }
@@ -4733,10 +4814,11 @@ void App::toggle_grid() {
 
     if (m_grid_mode) {
         int n = static_cast<int>(m_index.size());
-        bool re_entry = (m_thumbs.size() == static_cast<size_t>(n));
+        bool re_entry = (m_thumb_pool->thumbs.size() == static_cast<size_t>(n));
         if (!re_entry) {
-            m_thumbs.clear();
-            m_thumbs.resize(n);
+            if (thumb_loader_running()) stop_thumb_loader();
+            m_thumb_pool->thumbs.clear();
+            m_thumb_pool->thumbs.resize(n);
             m_thumb_d2d.clear();
             m_thumb_d2d_use.clear();
             m_grid_layout_dirty = true;
@@ -4904,7 +4986,7 @@ void App::grid_ensure_visible() {
     int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     int grid_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
         - nav_panel_width() - visible_panel_width() - scrollbar_zone - m_thumb_pad);
-    uint64_t generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
+    uint64_t generation = m_thumb_pool->dimension_generation.load(std::memory_order_relaxed);
     if (m_grid_layout_dirty || m_grid_layout_width != grid_width
         || m_grid_dims.size() != m_index.size()
         || m_grid_layout_generation != generation) {
@@ -4987,10 +5069,10 @@ void App::render_filmstrip() {
 
     // The thumb array is owned by the grid/filmstrip shared cache; rebuild it
     // when the index changed under us (new directory, deletion, sort).
-    if (static_cast<int>(m_thumbs.size()) != total) {
+    if (static_cast<int>(m_thumb_pool->thumbs.size()) != total) {
         stop_thumb_loader();
-        m_thumbs.clear();
-        m_thumbs.resize(total);
+        m_thumb_pool->thumbs.clear();
+        m_thumb_pool->thumbs.resize(total);
         m_thumb_d2d.clear();
         m_thumb_d2d_use.clear();
         m_filmstrip_dimension_generation = 0;  // force aspect re-sync
@@ -5005,14 +5087,14 @@ void App::render_filmstrip() {
 
     // Sync aspect ratios when the background probe produced new dimensions.
     const uint64_t dim_gen =
-        m_thumb_dimension_generation.load(std::memory_order_relaxed);
+        m_thumb_pool->dimension_generation.load(std::memory_order_relaxed);
     if (dim_gen != m_filmstrip_dimension_generation) {
-        std::lock_guard lock(m_thumb_mutex);
-        for (int i = 0; i < total && i < static_cast<int>(m_thumbs.size()); ++i) {
-            if (m_thumbs[i].orig_w > 0 && m_thumbs[i].orig_h > 0) {
+        std::lock_guard lock(m_thumb_pool->mutex);
+        for (int i = 0; i < total && i < static_cast<int>(m_thumb_pool->thumbs.size()); ++i) {
+            if (m_thumb_pool->thumbs[i].orig_w > 0 && m_thumb_pool->thumbs[i].orig_h > 0) {
                 m_filmstrip.set_item_aspect(i,
-                    static_cast<float>(m_thumbs[i].orig_w)
-                        / static_cast<float>(m_thumbs[i].orig_h));
+                    static_cast<float>(m_thumb_pool->thumbs[i].orig_w)
+                        / static_cast<float>(m_thumb_pool->thumbs[i].orig_h));
             }
         }
         m_filmstrip_dimension_generation = dim_gen;
@@ -5037,11 +5119,11 @@ void App::render_filmstrip() {
     // about to process).
     std::vector<int> to_request;
     {
-        std::lock_guard lock(m_thumb_mutex);
-        m_thumb_queue.clear();
+        std::lock_guard lock(m_thumb_pool->mutex);
+        m_thumb_pool->queue.clear();
         for (int i = request_first; i < request_last; ++i) {
-            if (i >= 0 && i < static_cast<int>(m_thumbs.size())
-                && !m_thumbs[i].loaded) {
+            if (i >= 0 && i < static_cast<int>(m_thumb_pool->thumbs.size())
+                && !m_thumb_pool->thumbs[i].loaded) {
                 to_request.push_back(i);
             }
         }
@@ -5054,12 +5136,12 @@ void App::render_filmstrip() {
                 return da != db ? da < db : a < b;
             });
         {
-            std::lock_guard lock(m_thumb_mutex);
-            m_thumb_queue = to_request;
-            m_thumb_request_gen.fetch_add(1, std::memory_order_relaxed);
+            std::lock_guard lock(m_thumb_pool->mutex);
+            m_thumb_pool->queue = to_request;
+            m_thumb_pool->request_generation.fetch_add(1, std::memory_order_relaxed);
         }
-        m_thumb_cv.notify_all();  // wake workers for the new window
-        if (!m_thumb_running.load(std::memory_order_relaxed)) {
+        m_thumb_pool->cv.notify_all();  // wake workers for the new window
+        if (!thumb_loader_running()) {
             start_thumb_loader();
         }
     }
@@ -5067,11 +5149,11 @@ void App::render_filmstrip() {
     // Upload newly-decoded WIC bitmaps (bounded per frame, grid pattern).
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
     {
-        std::lock_guard lock(m_thumb_mutex);
+        std::lock_guard lock(m_thumb_pool->mutex);
         for (int i = first_visible; i < last_visible; ++i) {
-            if (i < 0 || i >= static_cast<int>(m_thumbs.size())) continue;
-            if (m_thumbs[i].loaded && !m_thumb_d2d.count(i) && m_thumbs[i].wic) {
-                ready.push_back({i, m_thumbs[i].wic});
+            if (i < 0 || i >= static_cast<int>(m_thumb_pool->thumbs.size())) continue;
+            if (m_thumb_pool->thumbs[i].loaded && !m_thumb_d2d.count(i) && m_thumb_pool->thumbs[i].wic) {
+                ready.push_back({i, m_thumb_pool->thumbs[i].wic});
             }
         }
     }
@@ -5085,9 +5167,9 @@ void App::render_filmstrip() {
             m_thumb_d2d[index] = bitmap;
             m_thumb_d2d_use[index] = ++m_thumb_use_clock;
             {
-                std::lock_guard lock(m_thumb_mutex);
-                if (index >= 0 && index < static_cast<int>(m_thumbs.size())) {
-                    m_thumbs[index].wic.Reset();
+                std::lock_guard lock(m_thumb_pool->mutex);
+                if (index >= 0 && index < static_cast<int>(m_thumb_pool->thumbs.size())) {
+                    m_thumb_pool->thumbs[index].wic.Reset();
                 }
             }
         }
@@ -5099,9 +5181,9 @@ void App::render_filmstrip() {
     // Collect draw items (visible window only).
     std::vector<FilmstripRenderItem> items;
     {
-        std::lock_guard lock(m_thumb_mutex);
+        std::lock_guard lock(m_thumb_pool->mutex);
         for (int i = first_visible; i < last_visible; ++i) {
-            if (i < 0 || i >= static_cast<int>(m_thumbs.size())) continue;
+            if (i < 0 || i >= static_cast<int>(m_thumb_pool->thumbs.size())) continue;
             const FilmstripItemRect rect = m_filmstrip.item_rect(i);
             FilmstripRenderItem item;
             item.index = i;
@@ -5111,7 +5193,7 @@ void App::render_filmstrip() {
             item.height = rect.height;
             item.current = (i == m_filmstrip.current());
             item.zoom = rect.zoom;
-            item.placeholder_color = m_thumbs[i].dominant_color;
+            item.placeholder_color = m_thumb_pool->thumbs[i].dominant_color;
             const auto it = m_thumb_d2d.find(i);
             if (it != m_thumb_d2d.end() && it->second) {
                 item.bitmap = it->second.Get();
@@ -5358,12 +5440,12 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
     m_grid_dims.assign(static_cast<size_t>(total), {0, 0});
     uint64_t applied_dimension_generation = 0;
     {
-        std::lock_guard lock(m_thumb_mutex);
-        int count = std::min(total, static_cast<int>(m_thumbs.size()));
+        std::lock_guard lock(m_thumb_pool->mutex);
+        int count = std::min(total, static_cast<int>(m_thumb_pool->thumbs.size()));
         for (int i = 0; i < count; ++i)
-            m_grid_dims[static_cast<size_t>(i)] = {m_thumbs[i].orig_w, m_thumbs[i].orig_h};
+            m_grid_dims[static_cast<size_t>(i)] = {m_thumb_pool->thumbs[i].orig_w, m_thumb_pool->thumbs[i].orig_h};
         applied_dimension_generation =
-            m_thumb_dimension_generation.load(std::memory_order_relaxed);
+            m_thumb_pool->dimension_generation.load(std::memory_order_relaxed);
     }
 
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
@@ -5438,7 +5520,7 @@ void App::grid_render() {
     int scrollbar_zone = static_cast<int>(layout::kScrollbarZoneDip * dpi_scale);
     int grid_area_width = std::max(1, static_cast<int>(m_renderer.target_size().width)
         - nav_panel_width() - visible_panel_width() - scrollbar_zone - m_thumb_pad);
-    uint64_t dimension_generation = m_thumb_dimension_generation.load(std::memory_order_relaxed);
+    uint64_t dimension_generation = m_thumb_pool->dimension_generation.load(std::memory_order_relaxed);
     const GridRebuildReason rebuild_reason = classify_grid_rebuild_reason(
         m_grid_layout_dirty, m_grid_layout_width != grid_area_width,
         m_grid_dims.size() != static_cast<size_t>(total),
@@ -5460,7 +5542,7 @@ void App::grid_render() {
         : static_cast<int>(bottom_it - rows.begin()) - 1;
 
     const bool loader_running =
-        m_thumb_running.load(std::memory_order_relaxed);
+        thumb_loader_running();
     for (int r = top_row; r <= bottom_row; ++r) {
         const auto& row = rows[static_cast<size_t>(r)];
         m_grid_scroll_pause.request_visible(
@@ -5471,14 +5553,14 @@ void App::grid_render() {
     std::vector<std::pair<int, ComPtr<IWICBitmapSource>>> ready;
     std::unordered_map<int, D2D1_COLOR_F> placeholder_colors;
     {
-        std::lock_guard lock(m_thumb_mutex);
+        std::lock_guard lock(m_thumb_pool->mutex);
         for (int r = top_row; r <= bottom_row; ++r) {
             const auto& row = rows[static_cast<size_t>(r)];
             for (int i = row.start_idx; i < row.end_idx; ++i) {
-                if (i >= static_cast<int>(m_thumbs.size())) continue;
-                placeholder_colors.emplace(i, m_thumbs[i].dominant_color);
-                if (m_thumbs[i].loaded && !m_thumb_d2d.count(i) && m_thumbs[i].wic)
-                    ready.push_back({i, m_thumbs[i].wic});
+                if (i >= static_cast<int>(m_thumb_pool->thumbs.size())) continue;
+                placeholder_colors.emplace(i, m_thumb_pool->thumbs[i].dominant_color);
+                if (m_thumb_pool->thumbs[i].loaded && !m_thumb_d2d.count(i) && m_thumb_pool->thumbs[i].wic)
+                    ready.push_back({i, m_thumb_pool->thumbs[i].wic});
             }
         }
     }
@@ -5492,9 +5574,9 @@ void App::grid_render() {
             m_thumb_d2d[index] = bitmap;
             m_thumb_d2d_use[index] = ++m_thumb_use_clock;
             {
-                std::lock_guard lock(m_thumb_mutex);
-                if (index >= 0 && index < static_cast<int>(m_thumbs.size()))
-                    m_thumbs[index].wic.Reset();
+                std::lock_guard lock(m_thumb_pool->mutex);
+                if (index >= 0 && index < static_cast<int>(m_thumb_pool->thumbs.size()))
+                    m_thumb_pool->thumbs[index].wic.Reset();
             }
             ++upload_count;
         }
@@ -5745,8 +5827,8 @@ bool App::synchronize_renderer_generation() {
     m_anim_thumb.Reset();
     for (auto& page : m_comic_pages) page.d2d.Reset();
     {
-        std::lock_guard lock(m_thumb_mutex);
-        for (auto& thumb : m_thumbs) {
+        std::lock_guard lock(m_thumb_pool->mutex);
+        for (auto& thumb : m_thumb_pool->thumbs) {
             if (!thumb.wic) thumb.loaded = false;
         }
     }
@@ -6309,7 +6391,7 @@ void App::request_collection_refresh() {
 
 void App::apply_collection_refresh(NavScanResult&& result) {
     const bool was_grid = m_grid_mode;
-    if (m_thumb_running) stop_thumb_loader();
+    if (thumb_loader_running()) stop_thumb_loader();
 
     // Snapshot the selection by path BEFORE swapping the index.
     std::vector<std::wstring> selected_before;
@@ -6335,8 +6417,8 @@ void App::apply_collection_refresh(NavScanResult&& result) {
     }
 
     if (was_grid) {
-        m_thumbs.clear();
-        m_thumbs.resize(m_index.size());
+        m_thumb_pool->thumbs.clear();
+        m_thumb_pool->thumbs.resize(m_index.size());
         m_thumb_d2d.clear();
         m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
@@ -6415,7 +6497,7 @@ void App::apply_nav_scan_result() {
         m_window.invalidate();
         return;
     }
-    if (m_thumb_running) stop_thumb_loader();
+    if (thumb_loader_running()) stop_thumb_loader();
     m_index = std::move(result.index);
     m_recursive = result.recursive;
     reset_collection_selection(m_current_idx, m_grid_sel, m_grid_saved_idx,
@@ -6430,8 +6512,8 @@ void App::apply_nav_scan_result() {
     m_panel_scroll_y = 0.0f;
     m_open_error.clear();
     if (result.album_name.empty()) save_last_dir(result.path);
-    m_thumbs.clear();
-    m_thumbs.resize(m_index.size());
+    m_thumb_pool->thumbs.clear();
+    m_thumb_pool->thumbs.resize(m_index.size());
     m_thumb_d2d.clear();
     m_thumb_d2d_use.clear();
     m_grid_layout_dirty = true;

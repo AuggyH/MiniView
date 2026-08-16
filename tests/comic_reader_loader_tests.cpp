@@ -290,55 +290,70 @@ void test_byte_budget_uses_lru_not_entry_count() {
         "the visible decoded page must remain resident within the 512 MiB contract");
 }
 
-void test_stop_joins_inflight_decode_and_clears_results() {
+void test_stop_returns_while_decode_blocked_and_discards_results() {
     auto gate = std::make_shared<DecodeGate>();
+    auto callback_finished = std::make_shared<std::atomic<bool>>(false);
     mv::ComicReaderLoader loader(
-        [gate](const mv::ComicLoadRequest& load) { return gate->decode(load); });
+        [gate, callback_finished](const mv::ComicLoadRequest& load) {
+            auto result = gate->decode(load);
+            callback_finished->store(true, std::memory_order_release);
+            return result;
+        });
     expect(loader.start(nullptr, 0), "loader must start");
     loader.replace_requests({request(1)});
     gate->wait_for_first();
 
     std::thread stopper([&loader] { loader.stop(); });
-    gate->release();
+    const DWORD wait = WaitForSingleObject(stopper.native_handle(), 2000);
+    expect(wait == WAIT_OBJECT_0,
+        "stop must return promptly while the decode is still blocked");
+    if (wait != WAIT_OBJECT_0) gate->release();
     stopper.join();
 
     expect(!loader.running(), "stop must clear the running state");
     expect(loader.take_ready().empty(),
         "stop must discard an in-flight result and release its cache reference");
+
+    gate->release();
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (!callback_finished->load(std::memory_order_acquire)
+           && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expect(callback_finished->load(std::memory_order_acquire),
+        "the detached worker must finish after the gate is released");
 }
 
-void test_destructor_joins_worker() {
+void test_destructor_returns_while_worker_blocked() {
     auto gate = std::make_shared<DecodeGate>();
-    std::atomic<bool> destroy_started{false};
-    std::atomic<bool> callback_finished{false};
-    std::atomic<bool> finished_before_destructor_returned{false};
+    auto callback_finished = std::make_shared<std::atomic<bool>>(false);
     auto loader = std::make_unique<mv::ComicReaderLoader>(
-        [gate, &callback_finished](const mv::ComicLoadRequest& load) {
+        [gate, callback_finished](const mv::ComicLoadRequest& load) {
             auto result = gate->decode(load);
-            callback_finished.store(true, std::memory_order_release);
+            callback_finished->store(true, std::memory_order_release);
             return result;
         });
     expect(loader->start(nullptr, 0), "loader must start");
     loader->replace_requests({request(1)});
     gate->wait_for_first();
 
-    std::thread destroyer(
-        [owned = std::move(loader), &destroy_started,
-         &callback_finished, &finished_before_destructor_returned]() mutable {
-            destroy_started.store(true, std::memory_order_release);
-            owned.reset();
-            finished_before_destructor_returned.store(
-                callback_finished.load(std::memory_order_acquire),
-                std::memory_order_release);
-        });
-    while (!destroy_started.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
-    }
-    gate->release();
+    std::thread destroyer([owned = std::move(loader)]() mutable {
+        owned.reset();  // must not block on the frozen decode
+    });
+    const DWORD wait = WaitForSingleObject(destroyer.native_handle(), 2000);
+    expect(wait == WAIT_OBJECT_0,
+        "the destructor must return promptly while the decode is still blocked");
+    if (wait != WAIT_OBJECT_0) gate->release();
     destroyer.join();
 
-    expect(finished_before_destructor_returned.load(std::memory_order_acquire),
-        "the destructor must join the worker before returning");
+    gate->release();
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (!callback_finished->load(std::memory_order_acquire)
+           && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    expect(callback_finished->load(std::memory_order_acquire),
+        "the detached worker must finish after the gate is released");
 }
 
 } // namespace
@@ -354,8 +369,8 @@ int main() {
         test_failure_result_preserves_identity();
         test_wic_scaled_decode_and_byte_measurement();
         test_byte_budget_uses_lru_not_entry_count();
-        test_stop_joins_inflight_decode_and_clears_results();
-        test_destructor_joins_worker();
+        test_stop_returns_while_decode_blocked_and_discards_results();
+        test_destructor_returns_while_worker_blocked();
         std::cout << "comic_reader_loader_tests: PASS\n";
         return 0;
     } catch (const std::exception& error) {

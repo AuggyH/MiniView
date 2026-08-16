@@ -16,6 +16,7 @@
 #include "layout.h"
 #include "grid_layout_model.h"
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>
@@ -75,6 +76,31 @@ struct NavTreeOutcome {
     std::wstring error;
 };
 
+// Thumb cache entry (background workers write these in the shared pool).
+struct ThumbEntry {
+    Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
+    bool loaded = false;
+    uint32_t orig_w = 0, orig_h = 0;
+    D2D1_COLOR_F dominant_color = {0.10f, 0.10f, 0.12f, 1.0f};
+};
+
+// Heap-shared thumbnail loader state. Each worker holds its own shared_ptr
+// copy, so a worker still busy decoding at shutdown (detached) keeps the
+// state alive instead of touching freed App members. stop_thumb_loader()
+// abandons a pool only after detaching busy workers; start_thumb_loader()
+// never reuses an abandoned pool, so stale workers cannot re-enter the
+// new generation.
+struct ThumbPoolState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<int> queue;
+    std::vector<std::thread> threads;
+    std::vector<ThumbEntry> thumbs;
+    std::atomic<bool> running{false};
+    std::atomic<std::uint64_t> request_generation{0};
+    std::atomic<std::uint64_t> dimension_generation{0};
+};
+
 class App : private DeleteCompositionHost {
 public:
     App();
@@ -84,14 +110,6 @@ public:
 
     // Recompute DPI-scaled layout members from nominal DIP constants.
     void apply_dpi_layout(float dpi);
-
-    // Thumb cache entry (public for background thread access)
-    struct ThumbEntry {
-        Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
-        bool loaded = false;
-        uint32_t orig_w = 0, orig_h = 0;
-        D2D1_COLOR_F dominant_color = {0.10f, 0.10f, 0.12f, 1.0f};
-    };
 
 private:
     friend class AppComicPort;
@@ -216,6 +234,7 @@ private:
     void    start_dim_preload();
     void    start_thumb_loader();
     void    stop_thumb_loader();
+    bool    thumb_loader_running() const noexcept;
     void    request_thumb(int idx);
     void    trim_thumb_cache(int visible_start, int visible_end);
 
@@ -563,8 +582,9 @@ private:
     std::vector<bool> m_selected;
     int  m_sel_anchor = -1;
 
-    // Thumb cache (WIC bitmaps — thread-safe, loaded by background thread)
-    std::vector<ThumbEntry> m_thumbs;
+    // Thumb cache (WIC bitmaps — thread-safe, loaded by background workers).
+    // Lives in the heap-shared pool so detached workers never touch App.
+    std::shared_ptr<ThumbPoolState> m_thumb_pool;
 
     // D2D bitmap cache (main-thread only, populated during render)
     std::unordered_map<int, Microsoft::WRL::ComPtr<ID2D1Bitmap1>> m_thumb_d2d;
@@ -572,18 +592,10 @@ private:
     uint64_t m_thumb_use_clock = 0;
     uint64_t m_renderer_generation = 0;
 
-    // Thumb loader threads
-    std::vector<std::thread> m_thumb_threads;
-    std::mutex  m_thumb_mutex;
-    std::condition_variable m_thumb_cv;
-    std::vector<int> m_thumb_queue;
-    std::atomic<bool> m_thumb_running{false};
     float m_last_thumb_req_scroll = -1.0f;  // for stale-request pruning
-    std::atomic<uint64_t> m_thumb_request_gen{0};  // worker batch versioning
     std::wstring m_debounce_path;   // rapid-paging deferred decode target
     int m_debounce_idx = -1;
     ULONGLONG m_last_open_tick = 0; // for rapid-paging detection
-    std::atomic<uint64_t> m_thumb_dimension_generation{0};
 
     // ── Left navigation panel (Issue #5 P2) ──
     int  m_nav_visible_width = 0;    // DPI-scaled nav panel width (240 DIP)

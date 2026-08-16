@@ -47,40 +47,61 @@ ComicReaderLoader::~ComicReaderLoader() {
 bool ComicReaderLoader::start(HWND owner, UINT ready_message) {
     if (running()) return true;
     if (m_thread.joinable()) m_thread.join();
-    {
-        std::lock_guard lock(m_mutex);
-        m_owner = owner;
-        m_ready_message = ready_message;
-        m_queue.clear();
-        m_requested.clear();
-        m_ready.clear();
-        m_has_inflight = false;
-        m_latest_generation = 0;
-    }
-    m_running.store(true, std::memory_order_release);
+
+    // Always start a fresh generation of heap-shared state. A worker that
+    // was detached by stop() still owns the previous state and respects its
+    // stop flag; it can never re-enter the new generation.
+    auto state = std::make_shared<SharedState>();
+    state->owner = owner;
+    state->ready_message = ready_message;
+    state->decode = m_decode;
+    state->running.store(true, std::memory_order_release);
+    m_state = state;
     try {
-        m_thread = std::thread([this] { worker(); });
+        m_thread = std::thread([state] { worker(state); });
         return true;
     } catch (...) {
-        m_running.store(false, std::memory_order_release);
+        state->running.store(false, std::memory_order_release);
+        m_state.reset();
         return false;
     }
 }
 
 void ComicReaderLoader::stop() {
-    m_running.store(false, std::memory_order_release);
-    {
-        std::lock_guard lock(m_mutex);
-        m_queue.clear();
-        m_requested.clear();
+    auto state = m_state;
+    if (state) {
+        state->running.store(false, std::memory_order_release);
+        {
+            std::lock_guard lock(state->mutex);
+            state->queue.clear();
+            state->requested.clear();
+        }
+        state->cv.notify_all();
     }
-    m_cv.notify_all();
-    if (m_thread.joinable()) m_thread.join();
-    std::lock_guard lock(m_mutex);
-    m_ready.clear();
-    m_has_inflight = false;
-    m_owner = nullptr;
-    m_ready_message = 0;
+
+    // Request stop, then wait briefly. MSVC has no std::thread::join_for,
+    // so wait on the thread handle; a worker still busy decoding is detached
+    // with its own shared_ptr copy of the state and finishes safely without
+    // touching freed ComicReaderLoader members.
+    if (m_thread.joinable()) {
+        const DWORD wait = WaitForSingleObject(m_thread.native_handle(), 150);
+        if (wait == WAIT_OBJECT_0) {
+            m_thread.join();
+        } else {
+            m_thread.detach();
+            // Drop our state reference: the detached worker keeps it alive,
+            // and the next start() gets a fresh state.
+            m_state.reset();
+        }
+    }
+
+    if (state) {
+        std::lock_guard lock(state->mutex);
+        state->ready.clear();
+        state->has_inflight = false;
+        state->owner = nullptr;
+        state->ready_message = 0;
+    }
 }
 
 bool ComicReaderLoader::same_request(
@@ -92,19 +113,21 @@ bool ComicReaderLoader::same_request(
 }
 
 bool ComicReaderLoader::requested_locked(
-    const ComicLoadRequest& request) const {
+    const std::vector<ComicLoadRequest>& requested,
+    const ComicLoadRequest& request) {
     return std::any_of(
-        m_requested.begin(), m_requested.end(),
-        [&request](const ComicLoadRequest& requested) {
-            return same_request(request, requested);
+        requested.begin(), requested.end(),
+        [&request](const ComicLoadRequest& item) {
+            return same_request(request, item);
         });
 }
 
 void ComicReaderLoader::replace_requests(
     std::vector<ComicLoadRequest> requests) {
-    if (!running()) return;
-    std::lock_guard lock(m_mutex);
-    if (!running()) return;
+    auto state = m_state;
+    if (!state || !state->running.load(std::memory_order_relaxed)) return;
+    std::lock_guard lock(state->mutex);
+    if (!state->running.load(std::memory_order_relaxed)) return;
 
     requests.erase(
         std::remove_if(
@@ -117,53 +140,58 @@ void ComicReaderLoader::replace_requests(
     for (const auto& request : requests) {
         generation = std::max(generation, request.generation);
     }
-    if (!requests.empty() && generation < m_latest_generation) return;
-    if (!requests.empty()) m_latest_generation = generation;
+    if (!requests.empty() && generation < state->latest_generation) return;
+    if (!requests.empty()) state->latest_generation = generation;
 
-    m_requested.clear();
+    state->requested.clear();
     for (auto& request : requests) {
         if (request.generation != generation) continue;
         const auto duplicate = std::find_if(
-            m_requested.begin(), m_requested.end(),
+            state->requested.begin(), state->requested.end(),
             [&request](const ComicLoadRequest& requested) {
                 return same_request(request, requested);
             });
-        if (duplicate == m_requested.end()) {
-            m_requested.push_back(std::move(request));
+        if (duplicate == state->requested.end()) {
+            state->requested.push_back(std::move(request));
         }
     }
 
-    m_ready.erase(
+    state->ready.erase(
         std::remove_if(
-            m_ready.begin(), m_ready.end(), [this](const ComicLoadResult& result) {
+            state->ready.begin(), state->ready.end(),
+            [&](const ComicLoadResult& result) {
                 return !std::any_of(
-                    m_requested.begin(), m_requested.end(),
+                    state->requested.begin(), state->requested.end(),
                     [&result](const ComicLoadRequest& request) {
                         return request.index == result.index
                             && request.generation == result.generation
                             && request.path == result.path;
                     });
             }),
-        m_ready.end());
+        state->ready.end());
 
-    m_queue.clear();
-    for (const auto& request : m_requested) {
-        if (m_has_inflight && same_request(request, m_inflight)) continue;
+    state->queue.clear();
+    for (const auto& request : state->requested) {
+        if (state->has_inflight
+            && same_request(request, state->inflight)) continue;
         const bool ready = std::any_of(
-            m_ready.begin(), m_ready.end(), [&request](const ComicLoadResult& result) {
+            state->ready.begin(), state->ready.end(),
+            [&request](const ComicLoadResult& result) {
                 return request.index == result.index
                     && request.generation == result.generation
                     && request.path == result.path;
             });
-        if (!ready) m_queue.push_back(request);
+        if (!ready) state->queue.push_back(request);
     }
-    m_cv.notify_one();
+    state->cv.notify_one();
 }
 
 std::vector<ComicLoadResult> ComicReaderLoader::take_ready() {
-    std::lock_guard lock(m_mutex);
+    auto state = m_state;
+    if (!state) return {};
+    std::lock_guard lock(state->mutex);
     std::vector<ComicLoadResult> result;
-    result.swap(m_ready);
+    result.swap(state->ready);
     return result;
 }
 
@@ -178,27 +206,30 @@ std::size_t ComicReaderLoader::estimated_cache_bytes(
     return pixels * kCachedBytesPerPixel;
 }
 
-void ComicReaderLoader::worker() {
+void ComicReaderLoader::worker(std::shared_ptr<SharedState> state) {
     const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     try {
         std::unique_ptr<Decoder> decoder;
-        if (!m_decode) decoder = std::make_unique<Decoder>();
-        while (running()) {
+        if (!state->decode) decoder = std::make_unique<Decoder>();
+        while (state->running.load(std::memory_order_relaxed)) {
             ComicLoadRequest request;
             {
-                std::unique_lock lock(m_mutex);
-                m_cv.wait(lock, [this] { return !running() || !m_queue.empty(); });
-                if (!running()) break;
-                request = std::move(m_queue.front());
-                m_queue.pop_front();
-                m_inflight = request;
-                m_has_inflight = true;
+                std::unique_lock lock(state->mutex);
+                state->cv.wait(lock, [&] {
+                    return !state->running.load(std::memory_order_relaxed)
+                        || !state->queue.empty();
+                });
+                if (!state->running.load(std::memory_order_relaxed)) break;
+                request = std::move(state->queue.front());
+                state->queue.pop_front();
+                state->inflight = request;
+                state->has_inflight = true;
             }
 
             ComicLoadResult result;
             try {
-                if (m_decode) {
-                    result = m_decode(request);
+                if (state->decode) {
+                    result = state->decode(request);
                 } else {
                     const auto info = decoder->probe(request.path);
                     if (info) {
@@ -237,23 +268,24 @@ void ComicReaderLoader::worker() {
 
             bool publish = false;
             {
-                std::lock_guard lock(m_mutex);
-                m_has_inflight = false;
-                if (running() && requested_locked(request)) {
-                    m_ready.push_back(std::move(result));
+                std::lock_guard lock(state->mutex);
+                state->has_inflight = false;
+                if (state->running.load(std::memory_order_relaxed)
+                    && requested_locked(state->requested, request)) {
+                    state->ready.push_back(std::move(result));
                     publish = true;
                 }
             }
-            if (publish && m_owner && m_ready_message != 0) {
-                PostMessageW(m_owner, m_ready_message, 0, 0);
+            if (publish && state->owner && state->ready_message != 0) {
+                PostMessageW(state->owner, state->ready_message, 0, 0);
             }
         }
     } catch (...) {
-        m_running.store(false, std::memory_order_release);
+        state->running.store(false, std::memory_order_release);
     }
     {
-        std::lock_guard lock(m_mutex);
-        m_has_inflight = false;
+        std::lock_guard lock(state->mutex);
+        state->has_inflight = false;
     }
     if (SUCCEEDED(com_result)) CoUninitialize();
 }

@@ -55,28 +55,41 @@ public:
     static std::size_t estimated_cache_bytes(
         std::uint32_t width, std::uint32_t height) noexcept;
     bool running() const noexcept {
-        return m_running.load(std::memory_order_acquire);
+        return m_state && m_state->running.load(std::memory_order_acquire);
     }
 
 private:
+    // Heap-shared worker state. stop() requests stop and waits briefly
+    // (join_for, implemented in the .cpp via the thread handle); a worker
+    // still busy decoding is detached with its own shared_ptr copy of this
+    // state, so it finishes safely without touching freed ComicReaderLoader
+    // members. start() always creates a fresh state, so a detached worker
+    // can never re-enter a newer generation.
+    struct SharedState {
+        HWND owner = nullptr;
+        UINT ready_message = 0;
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::deque<ComicLoadRequest> queue;
+        std::vector<ComicLoadRequest> requested;
+        std::vector<ComicLoadResult> ready;
+        ComicLoadRequest inflight;
+        bool has_inflight = false;
+        std::uint64_t latest_generation = 0;
+        DecodeFunction decode;
+        std::atomic<bool> running{false};
+    };
+
     static bool same_request(
         const ComicLoadRequest& left, const ComicLoadRequest& right) noexcept;
-    bool requested_locked(const ComicLoadRequest& request) const;
-    void worker();
+    static bool requested_locked(
+        const std::vector<ComicLoadRequest>& requested,
+        const ComicLoadRequest& request);
+    static void worker(std::shared_ptr<SharedState> state);
 
-    HWND m_owner = nullptr;
-    UINT m_ready_message = 0;
     std::thread m_thread;
-    std::mutex m_mutex;
-    std::condition_variable m_cv;
-    std::deque<ComicLoadRequest> m_queue;
-    std::vector<ComicLoadRequest> m_requested;
-    std::vector<ComicLoadResult> m_ready;
-    ComicLoadRequest m_inflight;
-    bool m_has_inflight = false;
-    std::uint64_t m_latest_generation = 0;
+    std::shared_ptr<SharedState> m_state;
     DecodeFunction m_decode;
-    std::atomic<bool> m_running{false};
 };
 
 } // namespace mv

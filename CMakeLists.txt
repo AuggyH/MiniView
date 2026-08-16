@@ -218,6 +218,13 @@ if(BUILD_TESTING)
     )
     add_test(NAME title_bar_model.unit COMMAND title_bar_model_tests)
 
+    mv_add_unit_test(dirwatch_tests
+        tests/dirwatch_tests.cpp
+        src/dirwatch.cpp
+    )
+    target_link_libraries(dirwatch_tests PRIVATE user32)
+    add_test(NAME dirwatch.unit COMMAND dirwatch_tests)
+
     mv_add_unit_test(album_sampler_tests
         tests/album_sampler_tests.cpp
     )

@@ -37,6 +37,18 @@ void DirWatcher::stop() {
     }
 }
 
+std::uint64_t DirWatcher::dropped_directories() const noexcept {
+    return m_dropped_directories.load(std::memory_order_relaxed);
+}
+
+std::uint64_t DirWatcher::arm_failures() const noexcept {
+    return m_arm_failures.load(std::memory_order_relaxed);
+}
+
+DWORD DirWatcher::last_watch_error() const noexcept {
+    return m_last_watch_error.load(std::memory_order_relaxed);
+}
+
 void DirWatcher::watch(HWND notify_window, UINT notify_message,
                        std::vector<WatchRoot> roots) {
     stop();
@@ -97,7 +109,12 @@ void DirWatcher::worker_main(HWND notify_window, UINT notify_message,
             static_cast<DWORD>(entry.buffer.size()), FALSE, kNotifyFilter,
             &bytes, &entry.overlapped, nullptr);
     };
-    for (auto& entry : handles) (void)arm(entry);
+    for (auto& entry : handles) {
+        if (!arm(entry)) {
+            m_arm_failures.fetch_add(1, std::memory_order_relaxed);
+            m_last_watch_error.store(GetLastError(), std::memory_order_relaxed);
+        }
+    }
 
     ULONGLONG last_notify = 0;
     bool dirty = false;
@@ -140,7 +157,12 @@ void DirWatcher::worker_main(HWND notify_window, UINT notify_message,
                         dirty = true;
                         (void)arm(entry);
                     } else {
-                        // Directory gone or handle broken: drop it.
+                        // Directory gone or handle broken: drop it. Keep the
+                        // drop silent, but make it observable via counters.
+                        m_dropped_directories.fetch_add(1,
+                            std::memory_order_relaxed);
+                        m_last_watch_error.store(error,
+                            std::memory_order_relaxed);
                         CloseHandle(entry.event);
                         CloseHandle(entry.dir);
                         handles.erase(handles.begin()
