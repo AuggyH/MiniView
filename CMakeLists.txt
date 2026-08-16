@@ -44,6 +44,10 @@ set(HEADERS
     src/file_operation.h
     src/indexer.h
     src/metadata.h
+    src/grid_layout_model.h
+    src/selection_remap.h
+    src/title_bar_model.h
+    src/album_sampler.h
 )
 
 # Windows libraries (all part of Windows SDK, no external deps)
@@ -178,6 +182,27 @@ if(BUILD_TESTING)
         ole32
     )
     add_test(NAME file_operation.unit COMMAND file_operation_tests)
+
+    mv_add_unit_test(grid_layout_model_tests
+        tests/grid_layout_model_tests.cpp
+    )
+    add_test(NAME grid_layout_model.unit COMMAND grid_layout_model_tests)
+
+    mv_add_unit_test(selection_remap_tests
+        tests/selection_remap_tests.cpp
+        src/indexer.cpp
+    )
+    add_test(NAME selection_remap.unit COMMAND selection_remap_tests)
+
+    mv_add_unit_test(title_bar_model_tests
+        tests/title_bar_model_tests.cpp
+    )
+    add_test(NAME title_bar_model.unit COMMAND title_bar_model_tests)
+
+    mv_add_unit_test(album_sampler_tests
+        tests/album_sampler_tests.cpp
+    )
+    add_test(NAME album_sampler.unit COMMAND album_sampler_tests)
 
 endif()
 

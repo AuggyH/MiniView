@@ -14,6 +14,7 @@
 #include "navstate.h"
 #include "filmstrip_model.h"
 #include "layout.h"
+#include "grid_layout_model.h"
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -533,14 +534,7 @@ private:
     int   m_scrollbar_drag_y = 0;        // mouse y when drag started
     int   m_scrollbar_drag_pos = 0;      // scroll position when drag started
     int   m_grid_total_h = 0;            // cached total grid content height
-    struct GridRow {
-        int start_idx = 0;
-        int end_idx = 0;
-        int row_h = 0;
-        int row_y = 0;
-        int label_extra = 0;
-    };
-    std::vector<GridRow> m_grid_rows;
+    std::vector<GridLayoutRow> m_grid_rows;
     std::vector<std::pair<uint32_t, uint32_t>> m_grid_dims;
     std::vector<float> m_grid_item_x;
     std::vector<float> m_grid_item_w;

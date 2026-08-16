@@ -1,8 +1,11 @@
 #include "app.h"
 #include "app_state.h"
+#include "album_sampler.h"
 #include "design_tokens.h"
 #include "file_operation.h"
 #include "renderer_state.h"
+#include "selection_remap.h"
+#include "title_bar_model.h"
 #include <stdexcept>
 #include <Windows.h>
 #include <filesystem>
@@ -666,22 +669,22 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ? static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f : 1.0f;
         int th = static_cast<int>(m_title_h * dpi_s);
         if (toolbar_visible() && pt.y >= 0 && pt.y < th) {
-            float tw = static_cast<float>(m_renderer.target_size().width);
-            float btn_w = layout::kTitleBarButtonWidthDip * dpi_s;
-            float cx = tw - btn_w;
+            const float tw = static_cast<float>(m_renderer.target_size().width);
+            const TitleBarLayout title{0.0f, tw, static_cast<float>(th), dpi_s};
             // Window buttons → HTCLIENT (handled by WM_LBUTTONDOWN)
-            if (pt.x >= cx)                return HTCLIENT;
-            if (pt.x >= cx - btn_w)        return HTCLIENT;
-            if (pt.x >= cx - btn_w * 2)    return HTCLIENT;
+            if (title_bar_window_button_at(title,
+                    static_cast<float>(pt.x)) >= 0) {
+                return HTCLIENT;
+            }
             // Menu items → HTCLIENT (handled by WM_LBUTTONDOWN)
-            float mx = layout::kTitleBarPadDip * dpi_s
-                + layout::kTitleBarTitleWidthDip * dpi_s
-                + layout::kTitleBarTitleGapDip * dpi_s;
-            float fsize = layout::kTitleBarMenuFontSizeDip * dpi_s;
-            for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + layout::kTitleBarMenuPadDip * dpi_s;
-                if (pt.x >= mx && pt.x < mx + iw) return HTCLIENT;
-                mx += iw;
+            std::vector<float> menu_widths;
+            menu_widths.reserve(m_toolbar_items.size());
+            const float fsize = title_bar_menu_font_size(title);
+            for (const auto& item : m_toolbar_items)
+                menu_widths.push_back(m_renderer.measure_text(item, fsize));
+            if (title_bar_menu_item_at(title,
+                    static_cast<float>(pt.x), menu_widths) >= 0) {
+                return HTCLIENT;
             }
             return HTCAPTION;  // rest → drag
         }
@@ -1321,30 +1324,38 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (toolbar_visible() && ty2 < th) {
                 int tx2 = GET_X_LPARAM(lp);
                 float tw2 = static_cast<float>(m_renderer.target_size().width);
-                float bw = layout::kTitleBarButtonWidthDip * ts;
+                const TitleBarLayout title{0.0f, tw2, static_cast<float>(th), ts};
 
                 // Window buttons
-                if (tx2 >= tw2 - bw)      { m_title_btn_press = 2; m_window.invalidate(); return 0; }
-                if (tx2 >= tw2 - bw * 2)  { m_title_btn_press = 1; m_window.invalidate(); return 0; }
-                if (tx2 >= tw2 - bw * 3)  { m_title_btn_press = 0; m_window.invalidate(); return 0; }
+                const int btn = title_bar_window_button_at(title,
+                    static_cast<float>(tx2));
+                if (btn >= 0) {
+                    m_title_btn_press = btn;
+                    m_window.invalidate();
+                    return 0;
+                }
 
                 // Menu items (after "MinView" title)
-                float mx = layout::kTitleBarPadDip * ts
-                    + layout::kTitleBarTitleWidthDip * ts
-                    + layout::kTitleBarTitleGapDip * ts;
-                float fsize = layout::kTitleBarMenuFontSizeDip * ts;
+                std::vector<float> menu_widths;
+                menu_widths.reserve(m_toolbar_items.size());
+                const float fsize = title_bar_menu_font_size(title);
+                for (const auto& item : m_toolbar_items)
+                    menu_widths.push_back(m_renderer.measure_text(item, fsize));
+                const std::vector<TitleBarMenuBound> menu_bounds =
+                    title_bar_menu_bounds(title, menu_widths);
                 m_toolbar_active = -1;
-                for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                    float iw = m_renderer.measure_text(m_toolbar_items[i], fsize) + layout::kTitleBarMenuPadDip * ts;
-                    if (tx2 >= static_cast<int>(mx) && tx2 < static_cast<int>(mx + iw)) {
+                for (int i = 0; i < static_cast<int>(menu_bounds.size()); ++i) {
+                    if (tx2 >= static_cast<int>(menu_bounds[static_cast<size_t>(i)].left)
+                        && tx2 < static_cast<int>(menu_bounds[static_cast<size_t>(i)].right)) {
                         m_toolbar_active = i;
-                        POINT pt = {static_cast<int>(mx), th};
+                        POINT pt = {
+                            static_cast<int>(menu_bounds[static_cast<size_t>(i)].left),
+                            th};
                         ClientToScreen(hwnd, &pt);
                         show_toolbar_menu(hwnd, i, pt.x, pt.y);
                         m_window.invalidate();
                         return 0;
                     }
-                    mx += iw;
                 }
                 return 0;  // title bar drag area
             }
@@ -1618,17 +1629,25 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (toolbar_visible() && ty >= 0 && ty < m_toolbar_h) {
                 float dpi_m = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
                 int tx = GET_X_LPARAM(lp);
-                // Menu items start after "MinView" title
-                float x = layout::kTitleBarPadDip * dpi_m
-                    + layout::kTitleBarTitleWidthDip * dpi_m
-                    + layout::kTitleBarTitleGapDip * dpi_m;  // pad + title_w + gap
-                float fs = layout::kTitleBarMenuFontSizeDip * dpi_m;
-                for (int i = 0; i < static_cast<int>(m_toolbar_items.size()); ++i) {
-                    float iw = m_renderer.measure_text(m_toolbar_items[i], fs) + layout::kTitleBarMenuPadDip * dpi_m;
-                    if (tx >= static_cast<int>(x) && tx < static_cast<int>(x + iw)) {
-                        m_toolbar_active = i; break;
+                const TitleBarLayout title{
+                    0.0f,
+                    static_cast<float>(m_renderer.target_size().width),
+                    static_cast<float>(m_toolbar_h),
+                    dpi_m};
+                std::vector<float> menu_widths;
+                menu_widths.reserve(m_toolbar_items.size());
+                const float fs = title_bar_menu_font_size(title);
+                for (const auto& item : m_toolbar_items)
+                    menu_widths.push_back(m_renderer.measure_text(item, fs));
+                const std::vector<TitleBarMenuBound> menu_bounds =
+                    title_bar_menu_bounds(title, menu_widths);
+                for (int i = 0; i < static_cast<int>(menu_bounds.size()); ++i) {
+                    const auto& bound = menu_bounds[static_cast<size_t>(i)];
+                    if (tx >= static_cast<int>(bound.left)
+                        && tx < static_cast<int>(bound.right)) {
+                        m_toolbar_active = i;
+                        break;
                     }
-                    x += iw;
                 }
             }
             if (m_toolbar_active != prev) m_window.invalidate();
@@ -1664,10 +1683,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (toolbar_visible() && ty3 >= 0 && ty3 < th2) {
                 int tx3 = GET_X_LPARAM(lp);
                 float tw3 = static_cast<float>(m_renderer.target_size().width);
-                float bw2 = layout::kTitleBarButtonWidthDip * ts2;
-                if (tx3 >= tw3 - bw2)          m_title_btn_hover = 2;
-                else if (tx3 >= tw3 - bw2 * 2)  m_title_btn_hover = 1;
-                else if (tx3 >= tw3 - bw2 * 3)  m_title_btn_hover = 0;
+                const TitleBarLayout title{
+                    0.0f, tw3, static_cast<float>(th2), ts2};
+                m_title_btn_hover = title_bar_window_button_at(
+                    title, static_cast<float>(tx3));
             }
             if (m_title_btn_hover != prev_btn) m_window.invalidate();
         }
@@ -2410,13 +2429,13 @@ void App::toggle_recursive() {
         m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
         m_last_cached_sel = -1;
-        m_grid_sel = selected_path.empty() ? -1 : m_index.index_of(selected_path);
+        const SelectionRemap selection =
+            plan_selection_remap(m_index, selected_before, selected_path);
+        m_grid_sel = selection.grid_sel;
         m_selected.assign(m_index.size(), false);
-        for (const auto& path : selected_before) {
-            int index = m_index.index_of(path);
-            if (index >= 0) m_selected[static_cast<size_t>(index)] = true;
-        }
-        m_sel_anchor = m_grid_sel;
+        for (int index : selection.selected)
+            m_selected[static_cast<size_t>(index)] = true;
+        m_sel_anchor = selection.anchor;
         start_thumb_loader();
         if (m_grid_sel >= 0) grid_ensure_visible();
     } else if (scan_action == RecursiveScanAction::EnterUnselectedGrid) {
@@ -2479,13 +2498,13 @@ void App::set_sort_mode(SortMode mode) {
         m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
         m_last_cached_sel = -1;
-        m_grid_sel = selected_path.empty() ? -1 : m_index.index_of(selected_path);
+        const SelectionRemap selection =
+            plan_selection_remap(m_index, selected_before, selected_path);
+        m_grid_sel = selection.grid_sel;
         m_selected.assign(m_index.size(), false);
-        for (const auto& path : selected_before) {
-            int index = m_index.index_of(path);
-            if (index >= 0) m_selected[static_cast<size_t>(index)] = true;
-        }
-        m_sel_anchor = m_grid_sel;
+        for (int index : selection.selected)
+            m_selected[static_cast<size_t>(index)] = true;
+        m_sel_anchor = selection.anchor;
         start_thumb_loader();
         if (m_grid_sel >= 0) grid_ensure_visible();
     }
@@ -3557,17 +3576,18 @@ void App::show_context_menu(HWND hwnd, int x, int y) {
 void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     // Precompute menu item bounds (after "MinView" title, matching draw_title_bar)
     float dpi_s_tb = static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-    float fsize = layout::kTitleBarMenuFontSizeDip * dpi_s_tb;
-    float item_x = layout::kTitleBarPadDip * dpi_s_tb
-        + layout::kTitleBarTitleWidthDip * dpi_s_tb
-        + layout::kTitleBarTitleGapDip * dpi_s_tb;
-    struct TbItem { float left, right; };
-    std::vector<TbItem> tb_bounds;
-    for (auto& item : m_toolbar_items) {
-        float iw = m_renderer.measure_text(item, fsize) + layout::kTitleBarMenuPadDip * dpi_s_tb;
-        tb_bounds.push_back({item_x, item_x + iw});
-        item_x += iw;
-    }
+    const TitleBarLayout title{
+        0.0f,
+        static_cast<float>(m_renderer.target_size().width),
+        static_cast<float>(m_toolbar_h),
+        dpi_s_tb};
+    const float fsize = title_bar_menu_font_size(title);
+    std::vector<float> menu_widths;
+    menu_widths.reserve(m_toolbar_items.size());
+    for (auto& item : m_toolbar_items)
+        menu_widths.push_back(m_renderer.measure_text(item, fsize));
+    std::vector<TitleBarMenuBound> tb_bounds =
+        title_bar_menu_bounds(title, menu_widths);
 
     HMENU popup = CreatePopupMenu();
     switch (idx) {
@@ -3648,7 +3668,7 @@ void App::show_toolbar_menu(HWND hwnd, int idx, int x, int y) {
     static HWND  s_menu_hwnd = nullptr;
     static int   s_active_idx = -1;
     static int   s_switch_to = -1;
-    static std::vector<TbItem> s_tb_bounds;
+    static std::vector<TitleBarMenuBound> s_tb_bounds;
     static int   s_toolbar_h = 0;
     s_menu_hwnd   = hwnd;
     s_active_idx  = idx;
@@ -3908,12 +3928,10 @@ void App::create_file_copies() {
         m_grid_layout_dirty = true;
         m_selected.assign(m_index.size(), false);
         m_grid_sel = -1;
-        for (const auto& path : created) {
-            int idx = m_index.index_of(path);
-            if (idx >= 0) {
-                if (m_grid_sel < 0) m_grid_sel = idx;
-                m_selected[static_cast<size_t>(idx)] = true;
-            }
+        for (int idx : remap_paths_to_indices(m_index, created)) {
+            if (idx < 0) continue;
+            if (m_grid_sel < 0) m_grid_sel = idx;
+            m_selected[static_cast<size_t>(idx)] = true;
         }
         m_sel_anchor = m_grid_sel;
         m_panel_path.clear();
@@ -3937,7 +3955,7 @@ std::optional<GridTransitionRect> App::grid_transition_source_rect(int index) co
     }
 
     const auto row = std::find_if(m_grid_rows.begin(), m_grid_rows.end(),
-        [index](const GridRow& candidate) {
+        [index](const GridLayoutRow& candidate) {
             return index >= candidate.start_idx && index < candidate.end_idx;
         });
     if (row == m_grid_rows.end()) return std::nullopt;
@@ -4780,7 +4798,7 @@ int App::grid_hit_test(int x, int y) const {
 
     int content_y = y - m_grid_top + m_grid_scroll_y;
     auto row_it = std::lower_bound(m_grid_rows.begin(), m_grid_rows.end(), content_y,
-        [](const GridRow& row, int value) {
+        [](const GridLayoutRow& row, int value) {
             return row.row_y + row.row_h + row.label_extra < value;
         });
     if (row_it == m_grid_rows.end() || content_y < row_it->row_y
@@ -5350,73 +5368,26 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
 
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     int effective_cell = std::max(1, static_cast<int>(m_thumb_cell * m_thumb_zoom));
-    int cols = std::max(1, (grid_area_width + m_thumb_gap_h)
-        / (effective_cell + m_thumb_gap_h));
-    int label_height = m_show_labels ? static_cast<int>(layout::kGridLabelHeightDip * dpi_scale) : 0;
-    m_grid_cols = cols;
-    m_grid_rows.clear();
-    m_grid_rows.reserve(static_cast<size_t>((total + cols - 1) / cols));
-    m_grid_item_x.assign(static_cast<size_t>(total), 0.0f);
-    m_grid_item_w.assign(static_cast<size_t>(total), 0.0f);
+    GridLayoutInput input;
+    input.item_count = total;
+    input.area_width = grid_area_width;
+    input.cell = effective_cell;
+    input.gap_h = m_thumb_gap_h;
+    input.gap_v = m_thumb_gap_v;
+    input.pad = m_thumb_pad;
+    input.square = m_thumb_square;
+    input.show_labels = m_show_labels;
+    input.dpi_scale = dpi_scale;
+    input.dims = m_grid_dims;
+    GridLayout planned = plan_grid_layout(input);
 
-    int current_y = m_thumb_pad;
-    if (m_thumb_square) {
-        int cell_width = std::max(effective_cell,
-            (grid_area_width - (cols - 1) * m_thumb_gap_h) / cols);
-        int x0 = std::max(0,
-            (grid_area_width - cols * cell_width - (cols - 1) * m_thumb_gap_h) / 2);
-        for (int index = 0; index < total; index += cols) {
-            GridRow row;
-            row.start_idx = index;
-            row.end_idx = std::min(index + cols, total);
-            row.row_h = cell_width;
-            row.row_y = current_y;
-            row.label_extra = label_height;
-            float x = static_cast<float>(x0);
-            for (int i = row.start_idx; i < row.end_idx; ++i) {
-                m_grid_item_x[static_cast<size_t>(i)] = x;
-                m_grid_item_w[static_cast<size_t>(i)] = static_cast<float>(cell_width);
-                x += cell_width + m_thumb_gap_h;
-            }
-            m_grid_rows.push_back(row);
-            current_y += row.row_h + m_thumb_gap_v + row.label_extra;
-        }
-    } else {
-        int usable_width = std::max(1, grid_area_width - (cols - 1) * m_thumb_gap_h);
-        constexpr float base_height = 120.0f;
-        for (int index = 0; index < total; index += cols) {
-            GridRow row;
-            row.start_idx = index;
-            row.end_idx = std::min(index + cols, total);
-            row.row_y = current_y;
-            row.label_extra = label_height;
-            double width_at_base = 0.0;
-            for (int i = row.start_idx; i < row.end_idx; ++i) {
-                auto [raw_w, raw_h] = m_grid_dims[static_cast<size_t>(i)];
-                uint32_t image_w = raw_w == 0 ? 1 : raw_w;
-                uint32_t image_h = raw_h == 0 ? 1 : raw_h;
-                width_at_base += static_cast<double>(base_height) * image_w / image_h;
-            }
-            float scale = width_at_base > 0.0
-                ? static_cast<float>(usable_width / width_at_base) : 1.0f;
-            row.row_h = std::max(40, static_cast<int>(base_height * scale));
-            float x = 0.0f;
-            for (int i = row.start_idx; i < row.end_idx; ++i) {
-                auto [raw_w, raw_h] = m_grid_dims[static_cast<size_t>(i)];
-                uint32_t image_w = raw_w == 0 ? 1 : raw_w;
-                uint32_t image_h = raw_h == 0 ? 1 : raw_h;
-                float display_width = static_cast<float>(row.row_h) * image_w / image_h;
-                m_grid_item_x[static_cast<size_t>(i)] = x;
-                m_grid_item_w[static_cast<size_t>(i)] = display_width;
-                x += display_width + m_thumb_gap_h;
-            }
-            m_grid_rows.push_back(row);
-            current_y += row.row_h + m_thumb_gap_v + row.label_extra;
-        }
-    }
+    m_grid_cols = planned.cols;
+    m_grid_rows = std::move(planned.rows);
+    m_grid_item_x = std::move(planned.item_x);
+    m_grid_item_w = std::move(planned.item_w);
 
     m_grid_total_rows = static_cast<int>(m_grid_rows.size());
-    m_grid_total_h = current_y;
+    m_grid_total_h = planned.total_height;
     const int visible_height = static_cast<int>(m_renderer.target_size().height) - m_grid_top;
     const int selected_row = m_grid_sel >= 0 && m_grid_cols > 0
         ? m_grid_sel / m_grid_cols : -1;
@@ -5479,11 +5450,11 @@ void App::grid_render() {
     int visible_height = static_cast<int>(m_renderer.target_size().height) - m_grid_top;
     int top_pixel = m_grid_scroll_y;
     auto top_it = std::lower_bound(rows.begin(), rows.end(), top_pixel,
-        [](const GridRow& row, int value) {
+        [](const GridLayoutRow& row, int value) {
             return row.row_y + row.row_h + row.label_extra < value;
         });
     auto bottom_it = std::upper_bound(top_it, rows.end(), top_pixel + visible_height,
-        [](int value, const GridRow& row) { return value < row.row_y; });
+        [](int value, const GridLayoutRow& row) { return value < row.row_y; });
     int top_row = static_cast<int>(top_it - rows.begin());
     int bottom_row = bottom_it == rows.begin() ? -1
         : static_cast<int>(bottom_it - rows.begin()) - 1;
@@ -6158,58 +6129,26 @@ void App::show_album_row_menu(HWND hwnd, int x, int y) {
 
 // ── Folder-icon grid (Issue #5 P3c) ─────────────────────────────
 
-static bool path_under_folder(const std::wstring& path,
-    const std::wstring& folder) {
-    size_t len = folder.size();
-    while (len > 0
-        && (folder[len - 1] == L'\\' || folder[len - 1] == L'/'))
-        --len;
-    if (len == 0 || path.size() < len) return false;
-    if (_wcsnicmp(path.c_str(), folder.c_str(), len) != 0) return false;
-    if (path.size() == len) return true;
-    const wchar_t c = path[len];
-    return c == L'\\' || c == L'/';
-}
-
 void App::rebuild_folder_samples() {
     if (m_fav_selected || m_album_sel < 0
         || m_album_sel >= static_cast<int>(m_album_store.albums.size()))
         return;
     const auto& album =
         m_album_store.albums[static_cast<size_t>(m_album_sel)];
-    std::vector<std::vector<std::wstring>> per_folder(album.folders.size());
-    const size_t n = m_index.size();
-    for (size_t i = 0; i < n; ++i) {
-        const std::wstring& path = m_index.path_at(i);
-        for (size_t f = 0; f < album.folders.size(); ++f) {
-            if (path_under_folder(path, album.folders[f].path)) {
-                per_folder[f].push_back(path);
-                break;  // first matching folder wins
-            }
-        }
-    }
+    std::vector<std::wstring> paths;
+    paths.reserve(m_index.size());
+    for (size_t i = 0; i < m_index.size(); ++i)
+        paths.push_back(m_index.path_at(i));
+    std::vector<std::wstring> folders;
+    folders.reserve(album.folders.size());
+    for (const auto& folder : album.folders)
+        folders.push_back(folder.path);
+
+    std::vector<std::vector<std::wstring>> samples =
+        sample_paths_per_folder(paths, folders);
     m_folder_samples.clear();
-    for (size_t f = 0; f < album.folders.size(); ++f) {
-        const auto& list = per_folder[f];
-        std::vector<std::wstring> samples;
-        const size_t k = list.size();
-        if (k == 1) {
-            samples.push_back(list[0]);
-        } else if (k == 2) {
-            samples.push_back(list[0]);
-            samples.push_back(list[1]);
-        } else if (k == 3) {
-            samples.push_back(list[0]);
-            samples.push_back(list[1]);
-            samples.push_back(list[2]);
-        } else if (k >= 4) {
-            samples.push_back(list[0]);
-            samples.push_back(list[k / 4]);
-            samples.push_back(list[k / 2]);
-            samples.push_back(list[3 * k / 4]);
-        }
-        m_folder_samples[album.folders[f].path] = std::move(samples);
-    }
+    for (size_t f = 0; f < album.folders.size(); ++f)
+        m_folder_samples[album.folders[f].path] = std::move(samples[f]);
     m_folder_icon_cache.clear();
 }
 
@@ -6402,13 +6341,13 @@ void App::apply_collection_refresh(NavScanResult&& result) {
         m_thumb_d2d_use.clear();
         m_grid_layout_dirty = true;
         m_last_cached_sel = -1;
-        m_grid_sel = sel_path.empty() ? -1 : m_index.index_of(sel_path);
+        const SelectionRemap selection =
+            plan_selection_remap(m_index, selected_before, sel_path);
+        m_grid_sel = selection.grid_sel;
         m_selected.assign(m_index.size(), false);
-        for (const auto& path : selected_before) {
-            const int idx = m_index.index_of(path);
-            if (idx >= 0) m_selected[static_cast<size_t>(idx)] = true;
-        }
-        m_sel_anchor = m_grid_sel;
+        for (int idx : selection.selected)
+            m_selected[static_cast<size_t>(idx)] = true;
+        m_sel_anchor = selection.anchor;
         start_dim_preload();
         start_thumb_loader();
         clamp_grid_scroll();
