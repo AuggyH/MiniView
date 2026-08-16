@@ -26,6 +26,7 @@ set(SOURCES
     src/dirwatch.cpp
     src/albumstate.cpp
     src/metadata.cpp
+    src/thumb_engine.cpp
     src/MinView.rc
 )
 
@@ -48,6 +49,7 @@ set(HEADERS
     src/selection_remap.h
     src/title_bar_model.h
     src/album_sampler.h
+    src/thumb_engine.h
 )
 
 # Windows libraries (all part of Windows SDK, no external deps)
@@ -245,6 +247,14 @@ if(BUILD_TESTING)
         tests/album_sampler_tests.cpp
     )
     add_test(NAME album_sampler.unit COMMAND album_sampler_tests)
+
+    mv_add_unit_test(thumb_engine_tests
+        tests/thumb_engine_tests.cpp
+        src/thumb_engine.cpp
+        src/decoder.cpp
+    )
+    target_link_libraries(thumb_engine_tests PRIVATE windowscodecs ole32)
+    add_test(NAME thumb_engine.unit COMMAND thumb_engine_tests)
 
 endif()
 

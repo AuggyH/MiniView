@@ -15,6 +15,7 @@
 #include "filmstrip_model.h"
 #include "layout.h"
 #include "grid_layout_model.h"
+#include "thumb_engine.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -74,31 +75,6 @@ struct NavTreeOutcome {
     int image_count = 0;
     bool ok = false;
     std::wstring error;
-};
-
-// Thumb cache entry (background workers write these in the shared pool).
-struct ThumbEntry {
-    Microsoft::WRL::ComPtr<IWICBitmapSource> wic;
-    bool loaded = false;
-    uint32_t orig_w = 0, orig_h = 0;
-    D2D1_COLOR_F dominant_color = {0.10f, 0.10f, 0.12f, 1.0f};
-};
-
-// Heap-shared thumbnail loader state. Each worker holds its own shared_ptr
-// copy, so a worker still busy decoding at shutdown (detached) keeps the
-// state alive instead of touching freed App members. stop_thumb_loader()
-// abandons a pool only after detaching busy workers; start_thumb_loader()
-// never reuses an abandoned pool, so stale workers cannot re-enter the
-// new generation.
-struct ThumbPoolState {
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::vector<int> queue;
-    std::vector<std::thread> threads;
-    std::vector<ThumbEntry> thumbs;
-    std::atomic<bool> running{false};
-    std::atomic<std::uint64_t> request_generation{0};
-    std::atomic<std::uint64_t> dimension_generation{0};
 };
 
 class App : private DeleteCompositionHost {
@@ -305,8 +281,6 @@ private:
     std::vector<std::wstring> m_drag_paths;
     int   m_drag_deferred_select = -1;
 
-    // Background dimension prober (skeleton-size pre-read, Issue #5-P1).
-    std::thread m_dim_preload;
     // Real-time collection refresh (Issue #5 P3): watches the active
     // collection's roots and rescans in place on changes.
     DirWatcher m_dir_watcher;
@@ -591,9 +565,12 @@ private:
     std::vector<bool> m_selected;
     int  m_sel_anchor = -1;
 
-    // Thumb cache (WIC bitmaps — thread-safe, loaded by background workers).
-    // Lives in the heap-shared pool so detached workers never touch App.
-    std::shared_ptr<ThumbPoolState> m_thumb_pool;
+    // Thumbnail engine: owns the WIC thumb pool/workers/JPEG cache/dimension
+    // preload. App keeps only the D2D bitmap cache and GPU uploads; all WIC
+    // cache reads go through m_thumb_engine.pool() under the same mutex as
+    // the previous m_thumb_pool (engine-owned so stop() can abandon a pool
+    // with detached workers and hand App a fresh one).
+    ThumbEngine m_thumb_engine;
 
     // D2D bitmap cache (main-thread only, populated during render)
     std::unordered_map<int, Microsoft::WRL::ComPtr<ID2D1Bitmap1>> m_thumb_d2d;
