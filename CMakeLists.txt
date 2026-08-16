@@ -18,7 +18,6 @@ set(SOURCES
     src/window.cpp
     src/renderer.cpp
     src/decoder.cpp
-    src/viewer.cpp
     src/app.cpp
     src/comic_reader_loader.cpp
     src/file_operation.cpp
@@ -36,7 +35,6 @@ set(HEADERS
     src/renderer_state.h
     src/open_error.h
     src/decoder.h
-    src/viewer.h
     src/app.h
     src/app_state.h
     src/layout.h
