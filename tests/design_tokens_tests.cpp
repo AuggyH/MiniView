@@ -185,6 +185,22 @@ void test_typography_tokens() {
         "kFontWeightBold == DWRITE_FONT_WEIGHT_BOLD");
 }
 
+void test_motion_tokens() {
+    expect_near(mv::dt::kDurationTransitionSec, 0.20f, 0.0f,
+        "kDurationTransitionSec == 0.20 (200ms)");
+    expect_near(mv::dt::kDurationFilmstripHandoffSec, 0.30f, 0.0f,
+        "kDurationFilmstripHandoffSec == 0.30 (filmstrip keeps 300ms)");
+    expect(mv::dt::kDurationToastMs == 1000, "kDurationToastMs == 1000");
+    expect(mv::dt::kDurationSelectionHighlightMs == 1000,
+        "kDurationSelectionHighlightMs == 1000");
+    expect(mv::dt::kDurationImageDebounceMs == 250,
+        "kDurationImageDebounceMs == 250");
+    expect(mv::dt::kDurationScrollPauseMs == 80, "kDurationScrollPauseMs == 80");
+    expect(mv::dt::kDurationRenderRetryMs == 120,
+        "kDurationRenderRetryMs == 120");
+    expect(mv::dt::kAnimationFrameMs == 16, "kAnimationFrameMs == 16");
+}
+
 } // namespace
 
 int main() {
@@ -199,6 +215,7 @@ int main() {
         {"dip", test_dip},
         {"spacing_tokens", test_spacing_tokens},
         {"typography_tokens", test_typography_tokens},
+        {"motion_tokens", test_motion_tokens},
     };
 
     int failures = 0;

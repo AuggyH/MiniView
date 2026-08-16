@@ -594,7 +594,7 @@ void test_app_raw_delete_forwarding_contract(const fs::path& source_root) {
             != std::string::npos,
         "App must forward the raw context-menu ID to the shared delete seam");
     expect(app_source.find(
-            "returnstatic_cast<std::uintptr_t>(SetTimer(hwnd,1,80,nullptr));")
+            "returnstatic_cast<std::uintptr_t>(SetTimer(hwnd,1,dt::kDurationScrollPauseMs,nullptr));")
             != std::string::npos
             && app_source.find("m_grid_scroll_pause.begin(") != std::string::npos,
         "App wheel routing must use the injectable scroll lifecycle around SetTimer");

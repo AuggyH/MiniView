@@ -642,7 +642,7 @@ void App::begin_grid_scroll(HWND hwnd) {
         },
         [hwnd] {
             return static_cast<std::uintptr_t>(
-                SetTimer(hwnd, 1, 80, nullptr));
+                SetTimer(hwnd, 1, dt::kDurationScrollPauseMs, nullptr));
         });
 }
 
@@ -947,7 +947,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / 0.20f;  // 200ms
+            m_anim_t = elapsed / dt::kDurationTransitionSec;  // 200ms
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
@@ -1074,7 +1074,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // forever and the window stays black).
         if (!m_render_retry_timer) {
             m_render_retry_timer =
-                SetTimer(hwnd, kRenderRetryTimerId, 120, nullptr);
+                SetTimer(hwnd, kRenderRetryTimerId, dt::kDurationRenderRetryMs, nullptr);
         }
         return 0;
 
@@ -1428,7 +1428,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 {
                     m_panel_sel = i;
                     if (m_sel_timer) KillTimer(hwnd, m_sel_timer);
-                    m_sel_timer = SetTimer(hwnd, 2, 1000, nullptr);
+                    m_sel_timer = SetTimer(hwnd, 2, dt::kDurationSelectionHighlightMs, nullptr);
                     // Copy to clipboard
                     if (OpenClipboard(hwnd)) {
                         EmptyClipboard();
@@ -1444,7 +1444,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     // Toast: "已复制" + label
                     m_panel_copied = L"\u5df2\u590d\u5236" + pc.label;  // 已复制
                     if (m_toast_timer) KillTimer(hwnd, m_toast_timer);
-                    m_toast_timer = SetTimer(hwnd, 3, 1000, nullptr);
+                    m_toast_timer = SetTimer(hwnd, 3, dt::kDurationToastMs, nullptr);
                     m_window.invalidate();
                     return 0;
                 }
@@ -2217,7 +2217,7 @@ bool App::open_image(const std::wstring& path) {
             m_pending_image.Reset();
             m_pending_path.clear();
             show_placeholder_thumb(indexed_position);
-            SetTimer(m_window.handle(), kImageDebounceTimerId, 250, nullptr);
+            SetTimer(m_window.handle(), kImageDebounceTimerId, dt::kDurationImageDebounceMs, nullptr);
             m_window.invalidate();
             return true;
         }
@@ -4093,7 +4093,7 @@ void App::begin_animation(HWND hwnd) {
     m_animating = true;
     m_anim_t = 0.0f;
     if (m_anim_timer) KillTimer(hwnd, m_anim_timer);
-    m_anim_timer = SetTimer(hwnd, 4, 16, nullptr);
+    m_anim_timer = SetTimer(hwnd, 4, dt::kAnimationFrameMs, nullptr);
 }
 
 bool App::enter_grid_image(HWND hwnd, const GridEntryRequest& request) {
@@ -4558,7 +4558,7 @@ void App::advance_transition_animation() {
     QueryPerformanceFrequency(&freq);
     const float elapsed =
         static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-    m_anim_t = elapsed / 0.20f;  // 200ms
+    m_anim_t = elapsed / dt::kDurationTransitionSec;  // 200ms
     if (m_anim_t >= 1.0f) {
         m_anim_t = 1.0f;
         m_animating = false;
@@ -4629,7 +4629,7 @@ void App::reverse_transition() {
     QueryPerformanceCounter(&now);
     QueryPerformanceFrequency(&freq);
     m_anim_start = now.QuadPart - static_cast<LONGLONG>(
-        m_anim_t * 0.20f * static_cast<double>(freq.QuadPart));
+        m_anim_t * dt::kDurationTransitionSec * static_cast<double>(freq.QuadPart));
     m_window.invalidate();
 }
 

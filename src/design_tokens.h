@@ -197,4 +197,22 @@ MV_DT_GDI_COLOR(kColorFallbackTextGdi,     128, 128, 128);
 
 #undef MV_DT_GDI_COLOR
 
+// ── Motion / durations ───────────────────────────────────
+// Visual-timing tokens only. Behavioral timing (async watchdog, dirwatch
+// debounce, cache budgets) deliberately stays where the behavior lives.
+#define MV_DT_VALUE(name, value)                                   \
+    inline constexpr auto name = (value);                          \
+    static_assert(name == (value), "design token value changed: " #name)
+
+MV_DT_VALUE(kDurationTransitionSec, 0.20f);        // grid <-> image transition
+MV_DT_VALUE(kDurationFilmstripHandoffSec, 0.30f);  // filmstrip slot handoff
+MV_DT_VALUE(kDurationToastMs, 1000);
+MV_DT_VALUE(kDurationSelectionHighlightMs, 1000);
+MV_DT_VALUE(kDurationImageDebounceMs, 250);
+MV_DT_VALUE(kDurationScrollPauseMs, 80);
+MV_DT_VALUE(kDurationRenderRetryMs, 120);
+MV_DT_VALUE(kAnimationFrameMs, 16);                // WM_TIMER safety net
+
+#undef MV_DT_VALUE
+
 } // namespace mv::dt

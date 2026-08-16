@@ -13,6 +13,7 @@
 //   - overflow flags (edge gradient + arrows)
 //   - hit testing (with the 1.25x current-item magnification)
 
+#include "design_tokens.h"
 #include "layout.h"
 
 #include <algorithm>
@@ -166,7 +167,7 @@ public:
     // big-image transitions, regardless of render frame rate.
     bool advance_animation(float dt) {
         bool animating = false;
-        constexpr float kDur = 0.30f;
+        constexpr float kDur = mv::dt::kDurationFilmstripHandoffSec;
         if (m_anim_time < 1.0f) {
             animating = true;
             m_anim_time = std::min(1.0f, m_anim_time + dt / kDur);
