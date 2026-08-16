@@ -4918,18 +4918,20 @@ void App::render_filmstrip() {
         m_filmstrip.set_current(m_current_idx);
     }
 
-    // Sync aspect ratios when the background probe produced new dimensions.
-    const uint64_t dim_gen = m_thumb_engine.dimension_generation();
-    if (dim_gen != m_filmstrip_dimension_generation) {
+    // 同步宽高比: 每次都应用已知尺寸。set_item_aspect 对相同值是无操作,
+    // 因此无需依赖维度 generation(快速尺寸解析不 bump generation, 曾导致
+    // 胶片条一直停留在默认 1:1 方形)。
+    {
         std::lock_guard lock(m_thumb_engine.pool()->mutex);
-        for (int i = 0; i < total && i < static_cast<int>(m_thumb_engine.pool()->thumbs.size()); ++i) {
-            if (m_thumb_engine.pool()->thumbs[i].orig_w > 0 && m_thumb_engine.pool()->thumbs[i].orig_h > 0) {
+        for (int i = 0; i < total
+            && i < static_cast<int>(m_thumb_engine.pool()->thumbs.size()); ++i) {
+            const auto& thumb = m_thumb_engine.pool()->thumbs[static_cast<size_t>(i)];
+            if (thumb.orig_w > 0 && thumb.orig_h > 0) {
                 m_filmstrip.set_item_aspect(i,
-                    static_cast<float>(m_thumb_engine.pool()->thumbs[i].orig_w)
-                        / static_cast<float>(m_thumb_engine.pool()->thumbs[i].orig_h));
+                    static_cast<float>(thumb.orig_w)
+                        / static_cast<float>(thumb.orig_h));
             }
         }
-        m_filmstrip_dimension_generation = dim_gen;
     }
 
     const auto [first_visible, last_visible] = m_filmstrip.visible_range();
