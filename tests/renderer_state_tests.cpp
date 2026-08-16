@@ -77,6 +77,28 @@ void test_device_loss_detection() {
         "recreate-target must recreate");
 }
 
+void test_transition_ease_exit() {
+    expect_near(mv::transition_ease_exit(0.0f), 0.0f, "exit ease(0) must be 0");
+    expect_near(mv::transition_ease_exit(1.0f), 1.0f, "exit ease(1) must be 1");
+    expect_near(mv::transition_ease_exit(0.5f), 0.5f,
+        "exit ease must be 0.5 at midpoint");
+    expect_near(mv::transition_ease_exit(0.25f), 0.15625f,
+        "exit ease must be 15.625% at 25% (visible shrink)");
+    expect_near(mv::transition_ease_exit(-0.5f), 0.0f,
+        "exit ease must clamp below 0");
+    expect_near(mv::transition_ease_exit(1.5f), 1.0f,
+        "exit ease must clamp above 1");
+    expect(mv::transition_ease_exit(0.2f) < mv::transition_ease_exit(0.4f)
+            && mv::transition_ease_exit(0.4f) < mv::transition_ease_exit(0.6f)
+            && mv::transition_ease_exit(0.6f) < mv::transition_ease_exit(0.8f),
+        "exit ease must be monotonic on [0, 1]");
+    for (const float s : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 0.37f}) {
+        expect_near(mv::transition_ease_exit(s),
+            1.0f - mv::transition_ease_exit(1.0f - s),
+            "exit ease must satisfy E(s)=1-E(1-s)");
+    }
+}
+
 std::vector<mv::ComicPageRenderInput> make_render_inputs(
     const std::vector<mv::ComicPageGeometry>& geometries,
     mv::ComicPageVisual visual = mv::ComicPageVisual::Bitmap) {
@@ -791,6 +813,7 @@ int main() {
         "toast geometry must remain inside an offset panel viewport");
     test_dpi_metrics();
     test_transition_ease();
+    test_transition_ease_exit();
     test_device_loss_detection();
     test_narrow_viewport_and_error_card();
     test_wide_viewport_and_seamless_gap();

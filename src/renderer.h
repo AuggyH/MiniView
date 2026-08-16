@@ -90,10 +90,9 @@ public:
     // it grows with the thumbnail so the final state needs no pop.
     void draw_anim_image(ID2D1Bitmap1* image, D2D1_RECT_F src, D2D1_RECT_F dst, float t);
     void draw_anim_thumb(ID2D1Bitmap1* bmp, D2D1_RECT_F src, D2D1_RECT_F dst, float t);
-    // Same zoom path with an explicit layer opacity (Quick Look close:
-    // full-size fade-out, then the rect collapses in the final phase).
+    // Same zoom path with explicit layer opacity and optional exit curve.
     void draw_anim_thumb_faded(ID2D1Bitmap1* bmp, D2D1_RECT_F src,
-        D2D1_RECT_F dst, float t, float alpha);
+        D2D1_RECT_F dst, float t, float alpha, bool exit_curve = false);
     void push_clip_below(float y);
     void push_clip_rect(const D2D1_RECT_F& rc);
     void pop_clip();
