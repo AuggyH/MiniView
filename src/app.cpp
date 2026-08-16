@@ -5282,9 +5282,11 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
         ? m_grid_sel / m_grid_cols : -1;
     const bool has_selected_row =
         selected_row >= 0 && selected_row < static_cast<int>(m_grid_rows.size());
-    // Dimension-driven rebuild without a selection: keep the anchored row
-    // pinned so the viewport does not drift while thumbnails stream in.
-    if (reason == GridRebuildReason::BackgroundDimensions && !has_selected_row
+    // Dimension-driven rebuild: keep the anchored first-visible row pinned so
+    // the viewport does not drift while thumbnails stream in. This must hold
+    // regardless of selection — the user is looking at the pinned content,
+    // and the selected-row reconciliation below only clamps the scroll.
+    if (reason == GridRebuildReason::BackgroundDimensions
         && anchor_item >= 0 && anchor_item < total && m_grid_cols > 0) {
         const int anchor_row = anchor_item / m_grid_cols;
         if (anchor_row >= 0

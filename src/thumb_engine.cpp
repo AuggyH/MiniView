@@ -412,12 +412,22 @@ void ThumbEngine::start_dim_preload(std::vector<std::wstring> paths) {
     m_dim_preload = std::thread(
         [pool, notify, total, paths = std::move(paths)]() {
             std::vector<std::pair<uint32_t, uint32_t>> dims(total, {0, 0});
+            std::vector<D2D1_COLOR_F> colors(
+                total, D2D1_COLOR_F{0.10f, 0.10f, 0.12f, 1.0f});
+            bool color_updated = false;
             try {
                 Decoder probe_decoder;
                 for (size_t i = 0; i < total; ++i) {
                     try {
                         if (auto info = probe_decoder.probe(paths[i])) {
                             dims[i] = {info->width, info->height};
+                        }
+                        // 骨架屏主题色: 用极小尺寸解码提取主色, 让占位块
+                        // 在缩略图排队期间就显示图片主色调(不依赖完整缩略图)。
+                        auto tiny = probe_decoder.decode_scaled(paths[i], 64);
+                        if (tiny) {
+                            colors[i] = probe_decoder.extract_dominant(tiny.Get());
+                            color_updated = true;
                         }
                     } catch (...) {}
                 }
@@ -429,6 +439,7 @@ void ThumbEngine::start_dim_preload(std::vector<std::wstring> paths) {
                     ? dims.size() : pool->thumbs.size();
                 for (size_t i = 0; i < count; ++i) {
                     if (dims[i].first == 0) continue;
+                    pool->thumbs[i].dominant_color = colors[i];
                     if (pool->thumbs[i].orig_w != dims[i].first
                         || pool->thumbs[i].orig_h != dims[i].second) {
                         pool->thumbs[i].orig_w = dims[i].first;
@@ -440,6 +451,8 @@ void ThumbEngine::start_dim_preload(std::vector<std::wstring> paths) {
             if (any_changed) {
                 pool->dimension_generation.fetch_add(1,
                     std::memory_order_relaxed);
+            }
+            if (any_changed || color_updated) {
                 if (notify) notify();
             }
         });
