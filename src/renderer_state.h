@@ -139,7 +139,7 @@ inline PanelToastLayout calculate_panel_toast_layout(
     result.maximum_text_height = std::max(0.0f,
         available_height - vertical_padding * 2.0f);
     result.corner_radius = std::min({
-        4.0f * scale, width * 0.5f, height * 0.5f});
+        dt::kSpaceXsDip * scale, width * 0.5f, height * 0.5f});
     result.single_line = input.line_count == 1;
     return result;
 }
@@ -157,7 +157,7 @@ struct ComicRenderViewport {
 struct ComicRenderMetrics {
     float dpi_scale = 1.0f;
     float page_gap = dt::kSpaceMdDip;
-    float corner_radius = 4.0f;
+    float corner_radius = dt::kSpaceXsDip;
     float card_border_width = 1.0f;
     float card_padding = dt::kSpaceLgDip;
     float error_font_size = dt::kFontSizeXlDip;
@@ -327,7 +327,7 @@ inline ComicRenderMetrics comic_render_metrics(
     return ComicRenderMetrics{
         scale,
         seamless ? 0.0f : dt::kSpaceMdDip * scale,
-        seamless ? 0.0f : 4.0f * scale,
+        seamless ? 0.0f : dt::kSpaceXsDip * scale,
         1.0f * scale,
         dt::kSpaceLgDip * scale,
         dt::kFontSizeXlDip * scale};

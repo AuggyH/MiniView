@@ -8,67 +8,78 @@
 // value changes with this table — it only names constants that were
 // duplicated as magic numbers across app.cpp / renderer.cpp.
 
+#include "design_tokens.h"
+
 namespace mv {
 namespace layout {
 
-inline constexpr float kBaseDpi = 96.0f;
+inline constexpr auto kBaseDpi = dt::kBaseDpi;
 
 // ── Title bar (custom-drawn, replaces system caption) ──
-inline constexpr int   kTitleBarHeightDip      = 40;    // title bar height
-inline constexpr float kTitleBarPadDip         = 12.0f; // left padding
-inline constexpr float kTitleBarTitleWidthDip  = 68.0f; // "MinView" title block width
-inline constexpr float kTitleBarTitleGapDip    = 4.0f;  // title → first menu gap
-inline constexpr float kTitleBarMenuFontSizeDip = 12.0f;
-inline constexpr float kTitleBarMenuPadDip     = 16.0f; // horizontal padding per menu item
-inline constexpr float kTitleBarButtonWidthDip = 46.0f; // min/max/close button width
+inline constexpr auto kTitleBarHeightDip      = static_cast<int>(dt::kSpace40Dip);    // title bar height
+inline constexpr auto kTitleBarPadDip         = dt::kSpaceMdDip; // left padding
+inline constexpr auto kTitleBarTitleWidthDip  = dt::kTitleBarTitleWidthDip; // "MinView" title block width
+inline constexpr auto kTitleBarTitleGapDip    = dt::kSpaceXsDip;  // title → first menu gap
+inline constexpr auto kTitleBarMenuFontSizeDip = dt::kFontSizeMdDip;
+inline constexpr auto kTitleBarMenuPadDip     = dt::kSpaceLgDip; // horizontal padding per menu item
+inline constexpr auto kTitleBarButtonWidthDip = dt::kTitleBarButtonWidthDip; // min/max/close button width
 
 // ── Thumbnail grid ──
-inline constexpr int   kThumbCellDip          = 200;   // display cell → column calc
-inline constexpr int   kThumbSizeDip          = 400;   // decode resolution (2x supersampling)
-inline constexpr int   kThumbGapHDip          = 8;     // horizontal gap
-inline constexpr int   kThumbGapVDip          = 16;    // vertical gap
-inline constexpr int   kThumbPadDip           = 8;     // uniform padding
-inline constexpr int   kGridLabelHeightDip    = 42;    // filename label block height
-inline constexpr float kThumbCornerRadiusDip  = 4.0f;  // thumbnail corner radius
+inline constexpr auto kThumbCellDip          = dt::kThumbCellDip;   // display cell → column calc
+inline constexpr auto kThumbSizeDip          = dt::kThumbSizeDip;   // decode resolution (2x supersampling)
+inline constexpr auto kThumbGapHDip          = static_cast<int>(dt::kSpaceSmDip); // horizontal gap
+inline constexpr auto kThumbGapVDip          = static_cast<int>(dt::kSpaceLgDip); // vertical gap
+inline constexpr auto kThumbPadDip           = static_cast<int>(dt::kSpaceSmDip); // uniform padding
+inline constexpr auto kGridLabelHeightDip    = dt::kGridLabelHeightDip; // filename label block height
+inline constexpr auto kThumbCornerRadiusDip  = dt::kSpaceXsDip;  // thumbnail corner radius
 
 // ── Right side panel ──
-inline constexpr int   kPanelWidthDip             = 280;
-inline constexpr float kPanelLabelColumnWidthDip  = 70.0f; // label column width
+inline constexpr auto kPanelWidthDip             = dt::kPanelWidthDip;
+inline constexpr auto kPanelLabelColumnWidthDip  = dt::kPanelLabelColumnWidthDip; // label column width
 
 // ── Left navigation panel (Issue #5 P2) ──
-inline constexpr int   kNavPanelWidthDip          = 240;   // fixed width (D-9)
-inline constexpr float kNavBreadcrumbBarHeightDip = 36.0f; // breadcrumb strip height (panel top + grid content top)
-inline constexpr float kNavTabHeightDip           = 28.0f; // 「目录」「收藏」tab row height
-inline constexpr float kNavRowHeightDip           = 28.0f; // directory tree row height
-inline constexpr float kNavIndentDip              = 16.0f; // tree depth indent per level
-inline constexpr float kNavArrowWidthDip          = 20.0f; // expand/collapse arrow hit zone
-inline constexpr float kNavStatsHeightDip         = 24.0f; // bottom collection stats row height
-inline constexpr float kNavScrollbarWidthDip      = 6.0f;  // tree scrollbar thumb width
-inline constexpr float kNavToggleButtonWidthDip   = 44.0f; // album view-mode toggle
-inline constexpr float kNavFontSizeDip            = 12.0f; // tree/tab/breadcrumb font size
-inline constexpr float kNavSmallFontSizeDip       = 10.0f; // counts/stats font size
-inline constexpr float kNavPadDip                 = 8.0f;  // panel inner padding
-inline constexpr float kNavBreadcrumbGapDip       = 4.0f;  // breadcrumb segment gap
+inline constexpr auto kNavPanelWidthDip          = static_cast<int>(dt::kSize240Dip); // fixed width (D-9)
+inline constexpr auto kNavBreadcrumbBarHeightDip = dt::kSize36Dip; // breadcrumb strip height (panel top + grid content top)
+inline constexpr auto kNavTabHeightDip           = dt::kSize28Dip; // 「目录」「收藏」tab row height
+inline constexpr auto kNavRowHeightDip           = dt::kSize28Dip; // directory tree row height
+inline constexpr auto kNavIndentDip              = dt::kSpaceLgDip; // tree depth indent per level
+inline constexpr auto kNavArrowWidthDip          = dt::kSpace20Dip; // expand/collapse arrow hit zone
+inline constexpr auto kNavStatsHeightDip         = dt::kSpaceXlDip; // bottom collection stats row height
+inline constexpr auto kNavScrollbarWidthDip      = dt::kSpace6Dip;  // tree scrollbar thumb width
+inline constexpr auto kNavToggleButtonWidthDip   = dt::kSize44Dip; // album view-mode toggle
+inline constexpr auto kNavFontSizeDip            = dt::kFontSizeMdDip; // tree/tab/breadcrumb font size
+inline constexpr auto kNavSmallFontSizeDip       = dt::kFontSizeXsDip; // counts/stats font size
+inline constexpr auto kNavPadDip                 = dt::kSpaceSmDip;  // panel inner padding
+inline constexpr auto kNavBreadcrumbGapDip       = dt::kSpaceXsDip;  // breadcrumb segment gap
 
 // ── Scrollbar ──
-inline constexpr int kScrollbarZoneDip = 20; // grid scrollbar hit zone width
+inline constexpr auto kScrollbarZoneDip = static_cast<int>(dt::kSpace20Dip); // grid scrollbar hit zone width
 
 // ── Filmstrip (large-image bottom strip, Issue #5 P1) ──
-inline constexpr float kFilmstripHeightDip      = 80.0f;  // strip height (8px grid: 64+8+8)
-inline constexpr float kFilmstripPadVDip        = 8.0f;   // top/bottom padding
-inline constexpr float kFilmstripThumbHeightDip = 64.0f;  // max thumb height (8px grid)
-inline constexpr float kFilmstripGapDip         = 8.0f;   // horizontal gap
-inline constexpr float kFilmstripCurrentScale   = 1.25f;  // current item zoom
-inline constexpr float kFilmstripBorderDip      = 2.0f;   // current border
-inline constexpr float kFilmstripIndicatorDip   = 4.0f;   // current indicator
-inline constexpr float kFilmstripArrowZoneDip   = 24.0f;  // edge arrow zone
-inline constexpr float kFilmstripHoverZoneDip   = 24.0f;  // fullscreen hover band
-inline constexpr float kFilmstripHideDelaySeconds = 1.5f; // fullscreen auto-hide
-inline constexpr float kFilmstripMaxAspect      = 10.0f;  // clamp w/h ratio
+inline constexpr auto kFilmstripHeightDip      = dt::kFilmstripHeightDip;  // strip height (8px grid: 64+8+8)
+inline constexpr auto kFilmstripPadVDip        = dt::kSpaceSmDip;   // top/bottom padding
+inline constexpr auto kFilmstripThumbHeightDip = dt::kSize64Dip;  // max thumb height (8px grid)
+inline constexpr auto kFilmstripGapDip         = dt::kSpaceSmDip;   // horizontal gap
+inline constexpr auto kFilmstripCurrentScale   = dt::kFilmstripCurrentScale;  // current item zoom
+inline constexpr auto kFilmstripBorderDip      = dt::kFilmstripBorderDip;   // current border
+inline constexpr auto kFilmstripIndicatorDip   = dt::kSpaceXsDip;   // current indicator
+inline constexpr auto kFilmstripArrowZoneDip   = dt::kSpaceXlDip;  // edge arrow zone
+inline constexpr auto kFilmstripHoverZoneDip   = dt::kSpaceXlDip;  // fullscreen hover band
+inline constexpr auto kFilmstripHideDelaySeconds = dt::kDurationFilmstripHideSec; // fullscreen auto-hide
+inline constexpr auto kFilmstripMaxAspect      = dt::kFilmstripMaxAspect;  // clamp w/h ratio
 
 // ── Window ──
-inline constexpr int kDefaultWindowWidthDip  = 1400;
-inline constexpr int kDefaultWindowHeightDip = 900;
+inline constexpr auto kDefaultWindowWidthDip  = dt::kDefaultWindowWidthDip;
+inline constexpr auto kDefaultWindowHeightDip = dt::kDefaultWindowHeightDip;
+
+// Compile-time guard: int layout constants that reuse float dt tokens must
+// stay value-identical after the type-preserving cast.
+static_assert(kTitleBarHeightDip == dt::kSpace40Dip, "layout token drifted: kTitleBarHeightDip");
+static_assert(kThumbGapHDip == dt::kSpaceSmDip, "layout token drifted: kThumbGapHDip");
+static_assert(kThumbGapVDip == dt::kSpaceLgDip, "layout token drifted: kThumbGapVDip");
+static_assert(kThumbPadDip == dt::kSpaceSmDip, "layout token drifted: kThumbPadDip");
+static_assert(kNavPanelWidthDip == dt::kSize240Dip, "layout token drifted: kNavPanelWidthDip");
+static_assert(kScrollbarZoneDip == dt::kSpace20Dip, "layout token drifted: kScrollbarZoneDip");
 
 // DPI scale factor (dpi / 96). dpi is always a positive physical value
 // (GetDpiForWindow / GetDpiForSystem / renderer dpi state).

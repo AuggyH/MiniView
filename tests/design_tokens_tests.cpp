@@ -2,6 +2,7 @@
 // Run via CTest (design_tokens.unit).
 
 #include "design_tokens.h"
+#include "layout.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -190,6 +191,8 @@ void test_motion_tokens() {
         "kDurationTransitionSec == 0.20 (200ms)");
     expect_near(mv::dt::kDurationFilmstripHandoffSec, 0.30f, 0.0f,
         "kDurationFilmstripHandoffSec == 0.30 (filmstrip keeps 300ms)");
+    expect_near(mv::dt::kDurationFilmstripHideSec, 1.5f, 0.0f,
+        "kDurationFilmstripHideSec == 1.5");
     expect(mv::dt::kDurationToastMs == 1000, "kDurationToastMs == 1000");
     expect(mv::dt::kDurationSelectionHighlightMs == 1000,
         "kDurationSelectionHighlightMs == 1000");
@@ -199,6 +202,114 @@ void test_motion_tokens() {
     expect(mv::dt::kDurationRenderRetryMs == 120,
         "kDurationRenderRetryMs == 120");
     expect(mv::dt::kAnimationFrameMs == 16, "kAnimationFrameMs == 16");
+}
+
+void test_layout_aliases() {
+    using namespace mv;
+
+    // layout.h constants must be value-identical to their design tokens.
+    expect(layout::kBaseDpi == dt::kBaseDpi, "kBaseDpi alias == dt::kBaseDpi");
+
+    expect(static_cast<float>(layout::kTitleBarHeightDip) == dt::kSpace40Dip,
+        "kTitleBarHeightDip alias == dt::kSpace40Dip");
+    expect(layout::kTitleBarPadDip == dt::kSpaceMdDip,
+        "kTitleBarPadDip alias == dt::kSpaceMdDip");
+    expect(layout::kTitleBarTitleWidthDip == dt::kTitleBarTitleWidthDip,
+        "kTitleBarTitleWidthDip alias == dt::kTitleBarTitleWidthDip");
+    expect(layout::kTitleBarTitleGapDip == dt::kSpaceXsDip,
+        "kTitleBarTitleGapDip alias == dt::kSpaceXsDip");
+    expect(layout::kTitleBarMenuFontSizeDip == dt::kFontSizeMdDip,
+        "kTitleBarMenuFontSizeDip alias == dt::kFontSizeMdDip");
+    expect(layout::kTitleBarMenuPadDip == dt::kSpaceLgDip,
+        "kTitleBarMenuPadDip alias == dt::kSpaceLgDip");
+    expect(layout::kTitleBarButtonWidthDip == dt::kTitleBarButtonWidthDip,
+        "kTitleBarButtonWidthDip alias == dt::kTitleBarButtonWidthDip");
+
+    expect(layout::kThumbCellDip == dt::kThumbCellDip,
+        "kThumbCellDip alias == dt::kThumbCellDip");
+    expect(layout::kThumbSizeDip == dt::kThumbSizeDip,
+        "kThumbSizeDip alias == dt::kThumbSizeDip");
+    expect(static_cast<float>(layout::kThumbGapHDip) == dt::kSpaceSmDip,
+        "kThumbGapHDip alias == dt::kSpaceSmDip");
+    expect(static_cast<float>(layout::kThumbGapVDip) == dt::kSpaceLgDip,
+        "kThumbGapVDip alias == dt::kSpaceLgDip");
+    expect(static_cast<float>(layout::kThumbPadDip) == dt::kSpaceSmDip,
+        "kThumbPadDip alias == dt::kSpaceSmDip");
+    expect(layout::kGridLabelHeightDip == dt::kGridLabelHeightDip,
+        "kGridLabelHeightDip alias == dt::kGridLabelHeightDip");
+    expect(layout::kThumbCornerRadiusDip == dt::kSpaceXsDip,
+        "kThumbCornerRadiusDip alias == dt::kSpaceXsDip");
+
+    expect(layout::kPanelWidthDip == dt::kPanelWidthDip,
+        "kPanelWidthDip alias == dt::kPanelWidthDip");
+    expect(layout::kPanelLabelColumnWidthDip == dt::kPanelLabelColumnWidthDip,
+        "kPanelLabelColumnWidthDip alias == dt::kPanelLabelColumnWidthDip");
+
+    expect(static_cast<float>(layout::kNavPanelWidthDip) == dt::kSize240Dip,
+        "kNavPanelWidthDip alias == dt::kSize240Dip");
+    expect(layout::kNavBreadcrumbBarHeightDip == dt::kSize36Dip,
+        "kNavBreadcrumbBarHeightDip alias == dt::kSize36Dip");
+    expect(layout::kNavTabHeightDip == dt::kSize28Dip,
+        "kNavTabHeightDip alias == dt::kSize28Dip");
+    expect(layout::kNavRowHeightDip == dt::kSize28Dip,
+        "kNavRowHeightDip alias == dt::kSize28Dip");
+    expect(layout::kNavIndentDip == dt::kSpaceLgDip,
+        "kNavIndentDip alias == dt::kSpaceLgDip");
+    expect(layout::kNavArrowWidthDip == dt::kSpace20Dip,
+        "kNavArrowWidthDip alias == dt::kSpace20Dip");
+    expect(layout::kNavStatsHeightDip == dt::kSpaceXlDip,
+        "kNavStatsHeightDip alias == dt::kSpaceXlDip");
+    expect(layout::kNavScrollbarWidthDip == dt::kSpace6Dip,
+        "kNavScrollbarWidthDip alias == dt::kSpace6Dip");
+    expect(layout::kNavToggleButtonWidthDip == dt::kSize44Dip,
+        "kNavToggleButtonWidthDip alias == dt::kSize44Dip");
+    expect(layout::kNavFontSizeDip == dt::kFontSizeMdDip,
+        "kNavFontSizeDip alias == dt::kFontSizeMdDip");
+    expect(layout::kNavSmallFontSizeDip == dt::kFontSizeXsDip,
+        "kNavSmallFontSizeDip alias == dt::kFontSizeXsDip");
+    expect(layout::kNavPadDip == dt::kSpaceSmDip,
+        "kNavPadDip alias == dt::kSpaceSmDip");
+    expect(layout::kNavBreadcrumbGapDip == dt::kSpaceXsDip,
+        "kNavBreadcrumbGapDip alias == dt::kSpaceXsDip");
+
+    expect(static_cast<float>(layout::kScrollbarZoneDip) == dt::kSpace20Dip,
+        "kScrollbarZoneDip alias == dt::kSpace20Dip");
+
+    expect(layout::kFilmstripHeightDip == dt::kFilmstripHeightDip,
+        "kFilmstripHeightDip alias == dt::kFilmstripHeightDip");
+    expect(layout::kFilmstripPadVDip == dt::kSpaceSmDip,
+        "kFilmstripPadVDip alias == dt::kSpaceSmDip");
+    expect(layout::kFilmstripThumbHeightDip == dt::kSize64Dip,
+        "kFilmstripThumbHeightDip alias == dt::kSize64Dip");
+    expect(layout::kFilmstripGapDip == dt::kSpaceSmDip,
+        "kFilmstripGapDip alias == dt::kSpaceSmDip");
+    expect(layout::kFilmstripCurrentScale == dt::kFilmstripCurrentScale,
+        "kFilmstripCurrentScale alias == dt::kFilmstripCurrentScale");
+    expect(layout::kFilmstripBorderDip == dt::kFilmstripBorderDip,
+        "kFilmstripBorderDip alias == dt::kFilmstripBorderDip");
+    expect(layout::kFilmstripIndicatorDip == dt::kSpaceXsDip,
+        "kFilmstripIndicatorDip alias == dt::kSpaceXsDip");
+    expect(layout::kFilmstripArrowZoneDip == dt::kSpaceXlDip,
+        "kFilmstripArrowZoneDip alias == dt::kSpaceXlDip");
+    expect(layout::kFilmstripHoverZoneDip == dt::kSpaceXlDip,
+        "kFilmstripHoverZoneDip alias == dt::kSpaceXlDip");
+    expect(layout::kFilmstripHideDelaySeconds == dt::kDurationFilmstripHideSec,
+        "kFilmstripHideDelaySeconds alias == dt::kDurationFilmstripHideSec");
+    expect(layout::kFilmstripMaxAspect == dt::kFilmstripMaxAspect,
+        "kFilmstripMaxAspect alias == dt::kFilmstripMaxAspect");
+
+    expect(layout::kDefaultWindowWidthDip == dt::kDefaultWindowWidthDip,
+        "kDefaultWindowWidthDip alias == dt::kDefaultWindowWidthDip");
+    expect(layout::kDefaultWindowHeightDip == dt::kDefaultWindowHeightDip,
+        "kDefaultWindowHeightDip alias == dt::kDefaultWindowHeightDip");
+
+    // layout::dpi_scale keeps its original (no <=0 guard) semantics.
+    expect_near(layout::dpi_scale(96.0f), 1.0f, 0.0f,
+        "layout::dpi_scale(96) == 1");
+    expect_near(layout::dpi_scale(192.0f), 2.0f, 0.0f,
+        "layout::dpi_scale(192) == 2");
+    expect_near(layout::dpi_scale(0.0f), 0.0f, 0.0f,
+        "layout::dpi_scale(0) == 0");
 }
 
 } // namespace
@@ -216,6 +327,7 @@ int main() {
         {"spacing_tokens", test_spacing_tokens},
         {"typography_tokens", test_typography_tokens},
         {"motion_tokens", test_motion_tokens},
+        {"layout_aliases", test_layout_aliases},
     };
 
     int failures = 0;

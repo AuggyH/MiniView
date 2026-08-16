@@ -32,8 +32,11 @@ constexpr Color with_alpha(Color c, float alpha) noexcept {
 // All DIP tokens are nominal values at 96 DPI. Pass a real DPI (e.g.
 // GetDpiForWindow or renderer dpi state) to dip(); invalid dpi (<= 0)
 // falls back to 1.0x so callers never divide by zero.
+inline constexpr float kBaseDpi = 96.0f;
+static_assert(kBaseDpi == 96.0f, "design token value changed: kBaseDpi");
+
 inline constexpr float scale(float dpi) noexcept {
-    return dpi > 0.0f ? dpi / 96.0f : 1.0f;
+    return dpi > 0.0f ? dpi / kBaseDpi : 1.0f;
 }
 
 inline constexpr float dip(float valueDip, float dpi) noexcept {
@@ -70,6 +73,31 @@ MV_DT_DIP(kSize240Dip, 240.0f);
 MV_DT_DIP(kSize480Dip, 480.0f);
 
 #undef MV_DT_DIP
+
+// ── Phase 4: layout geometry tokens (merged from layout.h) ──
+// Values that already exist as Phase 2 kSpace/kSize/font tokens are reused
+// directly by layout.h (e.g. 40 -> kSpace40Dip, 240 -> kSize240Dip). Only
+// geometry values with no Phase 2 token are added here, with the same type
+// as their layout.h originals so layout.h can alias them with `auto`.
+#define MV_DT_LAYOUT_TOKEN(name, value)                             \
+    inline constexpr auto name = (value);                           \
+    static_assert(name == (value), "design token value changed: " #name)
+
+MV_DT_LAYOUT_TOKEN(kTitleBarTitleWidthDip, 68.0f);
+MV_DT_LAYOUT_TOKEN(kTitleBarButtonWidthDip, 46.0f);
+MV_DT_LAYOUT_TOKEN(kThumbCellDip, 200);
+MV_DT_LAYOUT_TOKEN(kThumbSizeDip, 400);
+MV_DT_LAYOUT_TOKEN(kGridLabelHeightDip, 42);
+MV_DT_LAYOUT_TOKEN(kPanelWidthDip, 280);
+MV_DT_LAYOUT_TOKEN(kPanelLabelColumnWidthDip, 70.0f);
+MV_DT_LAYOUT_TOKEN(kFilmstripHeightDip, 80.0f);
+MV_DT_LAYOUT_TOKEN(kFilmstripCurrentScale, 1.25f);
+MV_DT_LAYOUT_TOKEN(kFilmstripBorderDip, 2.0f);
+MV_DT_LAYOUT_TOKEN(kFilmstripMaxAspect, 10.0f);
+MV_DT_LAYOUT_TOKEN(kDefaultWindowWidthDip, 1400);
+MV_DT_LAYOUT_TOKEN(kDefaultWindowHeightDip, 900);
+
+#undef MV_DT_LAYOUT_TOKEN
 
 // ── Typography tokens ─────────────────────────────────────────
 // Font sizes are logical pt; DWrite call sites DPI-scale them.
@@ -206,6 +234,7 @@ MV_DT_GDI_COLOR(kColorFallbackTextGdi,     128, 128, 128);
 
 MV_DT_VALUE(kDurationTransitionSec, 0.20f);        // grid <-> image transition
 MV_DT_VALUE(kDurationFilmstripHandoffSec, 0.30f);  // filmstrip slot handoff
+MV_DT_VALUE(kDurationFilmstripHideSec, 1.5f);      // fullscreen filmstrip auto-hide
 MV_DT_VALUE(kDurationToastMs, 1000);
 MV_DT_VALUE(kDurationSelectionHighlightMs, 1000);
 MV_DT_VALUE(kDurationImageDebounceMs, 250);
