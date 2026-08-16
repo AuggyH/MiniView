@@ -171,6 +171,15 @@ void Renderer::discard_device_resources() {
     m_image_bitmap.Reset();
     m_image_scaled.Reset();
     m_image_scaled_scale = -1.0f;
+    // Device-scoped resources beyond the image itself: after a device
+    // recreation these would otherwise keep pointing at the old device
+    // and fail (or draw garbage) on the next frame.
+    m_placeholder_bitmap.Reset();
+    m_filmstrip_bg_gradient.Reset();
+    m_filmstrip_mask_gradient.Reset();
+    m_filmstrip_mask_dpi = 0.0f;
+    m_filmstrip_mask_width = -1.0f;
+    m_filmstrip_mask_layer.Reset();
     m_d2d_context.Reset();
     m_d2d_device.Reset();
     m_d2d_factory.Reset();
@@ -1840,8 +1849,9 @@ void Renderer::draw_fade_overlay(float t, bool forward) {
     // the grid underneath. Three transforms total — translation, scale,
     // background opacity — nothing else.
     const float s = std::clamp(t, 0.0f, 1.0f);
-    // Ease-out quartic, matching the motion curve.
-    const float et = 1.0f - (1.0f - s) * (1.0f - s) * (1.0f - s) * (1.0f - s);
+    // Symmetric ease-in-out: E(s) = 1 - E(1 - s), so a forward exit run
+    // fades exactly like entry fades in (time-mirrored).
+    const float et = transition_ease(s);
     const float alpha = forward ? et : (1.0f - et);
     if (alpha <= 0.0f) return;
     ComPtr<ID2D1SolidColorBrush> br;
@@ -1861,12 +1871,13 @@ void Renderer::draw_fullscreen_bitmap(ID2D1Bitmap1* bmp) {
         D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, nullptr);
 }
 
-// Shared transition geometry: ease-out quartic (fast start, soft
-// landing) — the same interpolator as the filmstrip handoff.
+// Shared transition geometry: symmetric ease-in-out (smoothstep) so the
+// entry and exit runs are exact time-mirrors. (The filmstrip handoff keeps
+// its own quartic ease-out curve.)
 static D2D1_RECT_F transition_interpolated_rect(
     D2D1_RECT_F src, D2D1_RECT_F dst, float t, float& out_et) {
     const float s = std::clamp(t, 0.0f, 1.0f);
-    const float et = 1.0f - (1.0f - s) * (1.0f - s) * (1.0f - s) * (1.0f - s);
+    const float et = transition_ease(s);
     out_et = et;
     const float dst_w = dst.right - dst.left, dst_h = dst.bottom - dst.top;
     const float aspect = dst_w / dst_h;

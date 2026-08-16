@@ -1,7 +1,36 @@
 #include "decoder.h"
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
+#include <windows.h>
 
 namespace mv {
+
+namespace {
+std::string utf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int length = WideCharToMultiByte(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+        nullptr, 0, nullptr, nullptr);
+    std::string result(static_cast<size_t>(length), '\0');
+    if (length > 0) {
+        WideCharToMultiByte(
+            CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+            result.data(), length, nullptr, nullptr);
+    }
+    return result;
+}
+
+// Decode failures carry the path and HRESULT so callers/logs can tell
+// "missing / unsupported / corrupted / no permission" apart.
+std::string decode_error(const std::wstring& path, const char* stage, HRESULT hr) {
+    std::ostringstream message;
+    message << stage << " (path=" << utf8(path) << ", HRESULT=0x"
+            << std::hex << std::uppercase << std::setw(8) << std::setfill('0')
+            << static_cast<uint32_t>(static_cast<long>(hr)) << ")";
+    return message.str();
+}
+} // namespace
 
 Decoder::Decoder() {
     HRESULT hr = CoCreateInstance(
@@ -18,7 +47,8 @@ ComPtr<IWICBitmapDecoder> Decoder::create_decoder(const std::wstring& path) {
         WICDecodeMetadataCacheOnDemand,
         &decoder);
     if (FAILED(hr))
-        throw std::runtime_error("Failed to create decoder for image");
+        throw std::runtime_error(
+            decode_error(path, "Failed to create decoder for image", hr));
     return decoder;
 }
 
@@ -50,7 +80,7 @@ ComPtr<IWICBitmapSource> Decoder::decode(const std::wstring& path) {
     ComPtr<IWICBitmapFrameDecode> frame;
     HRESULT hr = decoder->GetFrame(0, &frame);
     if (FAILED(hr))
-        throw std::runtime_error("Failed to get image frame");
+        throw std::runtime_error(decode_error(path, "Failed to get image frame", hr));
 
     // Convert to GPU-friendly format at FULL resolution — no downscaling
     return convert_to_pbgra(frame.Get());
@@ -82,7 +112,7 @@ ComPtr<IWICBitmapSource> Decoder::decode_scaled(const std::wstring& path, uint32
     ComPtr<IWICBitmapFrameDecode> frame;
     HRESULT hr = decoder->GetFrame(0, &frame);
     if (FAILED(hr))
-        throw std::runtime_error("Failed to get image frame");
+        throw std::runtime_error(decode_error(path, "Failed to get image frame", hr));
 
     // Scale down if needed
     uint32_t fw, fh;

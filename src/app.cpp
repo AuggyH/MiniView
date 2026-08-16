@@ -939,7 +939,7 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             QueryPerformanceCounter(&now);
             QueryPerformanceFrequency(&freq);
             float elapsed = static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-            m_anim_t = elapsed / 0.20f;  // 200ms
+            m_anim_t = elapsed / 0.30f;  // 300ms (PRODUCT_SPEC)
             if (m_anim_t >= 1.0f) {
                 m_anim_t = 1.0f;
                 m_animating = false;
@@ -1013,11 +1013,17 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // paged again) are dropped.
         const ULONGLONG gen = static_cast<ULONGLONG>(wp);
         ComPtr<IWICBitmapSource> decoded;
+        std::wstring prev_path;
+        int prev_idx = -1;
         {
             std::lock_guard lock(m_async->mutex);
             if (gen != m_async->gen) return 0;  // stale page flip — drop
+            prev_path = m_async->current_prev_path;
+            prev_idx = m_async->current_prev_idx;
             if (!m_async->wic) {                // decode failed — keep previous
                 m_async_busy = false;
+                m_current_path = prev_path;     // roll identity back with the bitmap
+                m_current_idx = prev_idx;
                 return 0;
             }
             decoded = m_async->wic;
@@ -1032,7 +1038,13 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 m_pending_path = m_current_path;
                 return 0;
             }
-            if (!m_renderer.upload_image(decoded.Get())) return 0;
+            if (!m_renderer.upload_image(decoded.Get())) {
+                // Upload failed (typically device loss): keep the previous
+                // bitmap and restore its identity.
+                m_current_path = prev_path;
+                m_current_idx = prev_idx;
+                return 0;
+            }
             m_current_wic = decoded;
             m_has_image = true;
             m_renderer.clear_placeholder();
@@ -2205,7 +2217,8 @@ bool App::open_image(const std::wstring& path) {
                 if (!m_async->queue.empty() && m_async->queue.front().current)
                     m_async->queue.pop_front();
                 ++m_async->gen;
-                m_async->queue.push_front(AsyncJob{path, m_async->gen, true});
+                m_async->queue.push_front(AsyncJob{path, m_async->gen, true,
+                    m_current_path, m_current_idx});
                 m_async_busy = true;
                 m_async_started_ms = GetTickCount64();
             }
@@ -2567,6 +2580,8 @@ void App::start_async_worker(int slot_index) {
                         if (job.current) {
                             if (!pool->stop && job.gen == pool->gen) {
                                 pool->wic = mat;
+                                pool->current_prev_path = job.prev_path;
+                                pool->current_prev_idx = job.prev_idx;
                             }
                         } else if (mat) {
                             std::lock_guard plock(pool->preload_mutex);
@@ -4384,14 +4399,20 @@ static void thumb_loader_worker(
 void App::start_dim_preload() {
     if (m_dim_preload.joinable()) m_dim_preload.join();
     if (m_index.empty()) return;
-    const size_t total = m_index.size();
-    m_dim_preload = std::thread([this, total]() {
+    // Snapshot the paths on the UI thread: the worker must never touch
+    // m_index, which sort/scan/collection-swap mutate on the UI thread.
+    std::vector<std::wstring> paths;
+    paths.reserve(m_index.size());
+    for (size_t i = 0; i < m_index.size(); ++i)
+        paths.push_back(m_index.path_at(i));
+    const size_t total = paths.size();
+    m_dim_preload = std::thread([this, total, paths = std::move(paths)]() {
         std::vector<std::pair<uint32_t, uint32_t>> dims(total, {0, 0});
         try {
             Decoder probe_decoder;
             for (size_t i = 0; i < total; ++i) {
                 try {
-                    if (auto info = probe_decoder.probe(m_index.path_at(i))) {
+                    if (auto info = probe_decoder.probe(paths[i])) {
                         dims[i] = {info->width, info->height};
                     }
                 } catch (...) {}
@@ -4514,7 +4535,7 @@ void App::advance_transition_animation() {
     QueryPerformanceFrequency(&freq);
     const float elapsed =
         static_cast<float>(now.QuadPart - m_anim_start) / freq.QuadPart;
-    m_anim_t = elapsed / 0.20f;  // 200ms
+    m_anim_t = elapsed / 0.30f;  // 300ms (PRODUCT_SPEC)
     if (m_anim_t >= 1.0f) {
         m_anim_t = 1.0f;
         m_animating = false;
@@ -4585,7 +4606,7 @@ void App::reverse_transition() {
     QueryPerformanceCounter(&now);
     QueryPerformanceFrequency(&freq);
     m_anim_start = now.QuadPart - static_cast<LONGLONG>(
-        m_anim_t * 0.20f * static_cast<double>(freq.QuadPart));
+        m_anim_t * 0.30f * static_cast<double>(freq.QuadPart));
     m_window.invalidate();
 }
 
@@ -4593,8 +4614,10 @@ void App::reverse_transition() {
 // (forward) layers a grid snapshot, the solid background veil fading in,
 // the full image growing inside the interpolated rect, and the zooming
 // thumbnail; the exit is its mirror (veil fading out, image shrinking to
-// the cell). A reversed run rewinds the same composition via p, so both
-// render paths (image and grid) must share this exact geometry.
+// the cell). The shared curve is symmetric ease-in-out, so the forward
+// exit run is the exact time-mirror of entry. A reversed run rewinds the
+// same composition via p, so both render paths (image and grid) must share
+// this exact geometry.
 void App::draw_transition_overlay() {
     if (!m_animating) return;
     const float p = m_anim_reversed ? (1.0f - m_anim_t) : m_anim_t;

@@ -558,34 +558,40 @@ ImageMeta parse_webui(const std::string& text) {
         m.positive_prompt = utf8_to_wstring(text);
     }
 
-    // Extract parameters with regex
+    // Extract parameters with regex. Any malformed numeric value (overflow,
+    // invalid digits) fails the whole metadata record closed instead of
+    // surfacing a partially parsed prompt.
     std::regex re;
     std::smatch match;
     std::string s(text);
 
-    re = R"(Steps:\s*(\d+))";
-    if (std::regex_search(s, match, re)) m.steps = std::stoi(match[1]);
+    try {
+        re = R"(Steps:\s*(\d+))";
+        if (std::regex_search(s, match, re)) m.steps = std::stoi(match[1]);
 
-    re = R"(Sampler:\s*([^,]+))";
-    if (std::regex_search(s, match, re)) m.sampler = utf8_to_wstring(match[1]);
+        re = R"(Sampler:\s*([^,]+))";
+        if (std::regex_search(s, match, re)) m.sampler = utf8_to_wstring(match[1]);
 
-    re = R"(CFG scale:\s*([\d.]+))";
-    if (std::regex_search(s, match, re)) m.cfg = std::stof(match[1]);
+        re = R"(CFG scale:\s*([\d.]+))";
+        if (std::regex_search(s, match, re)) m.cfg = std::stof(match[1]);
 
-    re = R"(Seed:\s*(\d+))";
-    if (std::regex_search(s, match, re)) m.seed = std::stoi(match[1]);
+        re = R"(Seed:\s*(\d+))";
+        if (std::regex_search(s, match, re)) m.seed = std::stoi(match[1]);
 
-    re = R"(Size:\s*(\d+)x(\d+))";
-    if (std::regex_search(s, match, re)) {
-        m.width = std::stoi(match[1]);
-        m.height = std::stoi(match[2]);
+        re = R"(Size:\s*(\d+)x(\d+))";
+        if (std::regex_search(s, match, re)) {
+            m.width = std::stoi(match[1]);
+            m.height = std::stoi(match[2]);
+        }
+
+        re = R"(Model:\s*([^,]+))";
+        if (std::regex_search(s, match, re)) m.model = utf8_to_wstring(match[1]);
+
+        re = R"(VAE:\s*([^,]+))";
+        if (std::regex_search(s, match, re)) m.vae = utf8_to_wstring(match[1]);
+    } catch (...) {
+        return {};
     }
-
-    re = R"(Model:\s*([^,]+))";
-    if (std::regex_search(s, match, re)) m.model = utf8_to_wstring(match[1]);
-
-    re = R"(VAE:\s*([^,]+))";
-    if (std::regex_search(s, match, re)) m.vae = utf8_to_wstring(match[1]);
 
     m.valid = true;
     return m;
@@ -672,39 +678,75 @@ std::string read_jpeg_comment(const std::wstring& path) {
             f.read(data.data(), seg_len - 2);
             if (f.gcount() != seg_len - 2) break;
 
-            // Check "Exif\0\0" header
-            if (seg_len < 8 || memcmp(data.data(), "Exif\0\0", 6) != 0) continue;
+            // Check "Exif\0\0" header. A minimal TIFF header needs
+            // 6 (Exif) + 2 (byte order) + 2 (magic) + 4 (IFD offset) bytes.
+            if (seg_len < 8 || data.size() < 14 || memcmp(data.data(), "Exif\0\0", 6) != 0) continue;
+
+            // All TIFF integers must be assembled from unsigned bytes:
+            // char-to-int promotion sign-extends 0x86/0x92 etc. and corrupts
+            // every tag with the high bit set (0x9286 -> 0xFF86).
+            const auto byte_at = [&data](size_t index) {
+                return static_cast<uint8_t>(data[index]);
+            };
 
             // TIFF header: byte order + magic
             size_t off = 6;
-            bool big_endian = (data[off] == 'M');
+            bool big_endian = (byte_at(off) == 'M');
             off += 2; // byte order mark
-            uint16_t magic = big_endian ? ((data[off]<<8)|data[off+1]) : (data[off]|(data[off+1]<<8));
+            uint16_t magic = big_endian
+                ? static_cast<uint16_t>((byte_at(off) << 8) | byte_at(off + 1))
+                : static_cast<uint16_t>(byte_at(off) | (byte_at(off + 1) << 8));
             if (magic != 0x002A) continue;
             off += 2;
 
-            // First IFD offset
+            // First IFD offset (relative to the TIFF header at data[6])
             uint32_t ifd_off = big_endian
-                ? ((uint32_t)data[off]<<24)|(data[off+1]<<16)|(data[off+2]<<8)|data[off+3]
-                : (data[off]|(data[off+1]<<8)|(data[off+2]<<16)|(data[off+3]<<24));
-            off = ifd_off;
+                ? (static_cast<uint32_t>(byte_at(off)) << 24)
+                    | (static_cast<uint32_t>(byte_at(off + 1)) << 16)
+                    | (static_cast<uint32_t>(byte_at(off + 2)) << 8)
+                    | byte_at(off + 3)
+                : byte_at(off)
+                    | (static_cast<uint32_t>(byte_at(off + 1)) << 8)
+                    | (static_cast<uint32_t>(byte_at(off + 2)) << 16)
+                    | (static_cast<uint32_t>(byte_at(off + 3)) << 24);
+            if (ifd_off > data.size() || data.size() - ifd_off < 8)
+                break;  // IFD offset beyond the segment — fail closed
+            off = 6 + ifd_off;
 
             // Read IFD entry count
-            uint16_t count = big_endian ? ((data[off]<<8)|data[off+1]) : (data[off]|(data[off+1]<<8));
+            uint16_t count = big_endian
+                ? static_cast<uint16_t>((byte_at(off) << 8) | byte_at(off + 1))
+                : static_cast<uint16_t>(byte_at(off) | (byte_at(off + 1) << 8));
             off += 2;
+            if (static_cast<size_t>(count) * 12 > data.size() - off)
+                break;  // entry table overruns the segment — fail closed
 
             for (uint16_t i = 0; i < count; ++i) {
-                uint16_t tag = big_endian ? ((data[off]<<8)|data[off+1]) : (data[off]|(data[off+1]<<8));
+                uint16_t tag = big_endian
+                    ? static_cast<uint16_t>((byte_at(off) << 8) | byte_at(off + 1))
+                    : static_cast<uint16_t>(byte_at(off) | (byte_at(off + 1) << 8));
                 uint32_t val_or_off = big_endian
-                    ? ((uint32_t)data[off+8]<<24)|(data[off+9]<<16)|(data[off+10]<<8)|data[off+11]
-                    : (data[off+8]|(data[off+9]<<8)|(data[off+10]<<16)|(data[off+11]<<24));
+                    ? (static_cast<uint32_t>(byte_at(off + 8)) << 24)
+                        | (static_cast<uint32_t>(byte_at(off + 9)) << 16)
+                        | (static_cast<uint32_t>(byte_at(off + 10)) << 8)
+                        | byte_at(off + 11)
+                    : byte_at(off + 8)
+                        | (static_cast<uint32_t>(byte_at(off + 9)) << 8)
+                        | (static_cast<uint32_t>(byte_at(off + 10)) << 16)
+                        | (static_cast<uint32_t>(byte_at(off + 11)) << 24);
 
                 if (tag == 0x9286) { // UserComment
                     // type 7 = undefined, type 2 = ASCII
                     // First 8 bytes of the pointer area = character code ("UNICODE\0" or "ASCII\0\0\0\0\0")
                     uint32_t count2 = big_endian
-                        ? ((uint32_t)data[off+4]<<24)|(data[off+5]<<16)|(data[off+6]<<8)|data[off+7]
-                        : (data[off+4]|(data[off+5]<<8)|(data[off+6]<<16)|(data[off+7]<<24));
+                        ? (static_cast<uint32_t>(byte_at(off + 4)) << 24)
+                            | (static_cast<uint32_t>(byte_at(off + 5)) << 16)
+                            | (static_cast<uint32_t>(byte_at(off + 6)) << 8)
+                            | byte_at(off + 7)
+                        : byte_at(off + 4)
+                            | (static_cast<uint32_t>(byte_at(off + 5)) << 8)
+                            | (static_cast<uint32_t>(byte_at(off + 6)) << 16)
+                            | (static_cast<uint32_t>(byte_at(off + 7)) << 24);
                     if (count2 > 8 && val_or_off + count2 <= data.size()) {
                         const char* p = &data[val_or_off + 8]; // skip charset prefix
                         return std::string(p, count2 - 8);

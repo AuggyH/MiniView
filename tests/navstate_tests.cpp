@@ -144,6 +144,18 @@ void test_collection_memory() {
     memory.forget(L"D:\\AIGC");
     expect(memory.memory_for(L"D:\\AIGC").sort == mv::SortMode::Name,
            "forgotten collection falls back to default");
+
+    // Trailing separators must not split the identity: remember(L"D:\\AIGC\\")
+    // and memory_for(L"D:\\AIGC") are the same collection (documented
+    // identity rule).
+    memory.remember(L"D:\\AIGC\\", {mv::SortMode::Size, false});
+    expect(memory.size() == 1, "trailing separator on write must not duplicate");
+    expect(memory.memory_for(L"D:\\AIGC").sort == mv::SortMode::Size,
+        "memory written with a trailing slash must be found without one");
+    expect(memory.memory_for(L"d:/aigc\\").sort == mv::SortMode::Size,
+        "memory lookup must normalize case, separators and trailing slash");
+    memory.forget(L"D:\\AIGC\\");
+    expect(memory.size() == 0, "forget with a trailing slash must erase the same key");
 }
 
 // ── Path segments / breadcrumb ──────────────────────────────

@@ -166,14 +166,15 @@ struct CollectionMemory {
 class CollectionSortMemory {
 public:
     CollectionMemory memory_for(const std::wstring& id) const {
-        const auto it = m_memory.find(normalize_collection_key(id));
+        const auto it = m_memory.find(
+            trim_trailing_separators(normalize_collection_key(id)));
         return it == m_memory.end() ? CollectionMemory{} : it->second;
     }
     void remember(const std::wstring& id, const CollectionMemory& memory) {
-        m_memory[normalize_collection_key(id)] = memory;
+        m_memory[trim_trailing_separators(normalize_collection_key(id))] = memory;
     }
     void forget(const std::wstring& id) {
-        m_memory.erase(normalize_collection_key(id));
+        m_memory.erase(trim_trailing_separators(normalize_collection_key(id)));
     }
     std::size_t size() const noexcept { return m_memory.size(); }
 

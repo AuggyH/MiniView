@@ -43,6 +43,43 @@ void expect_near(float actual, float expected, const char* message) {
     }
 }
 
+void test_transition_ease() {
+    expect_near(mv::transition_ease(0.0f), 0.0f, "ease(0) must be 0");
+    expect_near(mv::transition_ease(1.0f), 1.0f, "ease(1) must be 1");
+    expect_near(mv::transition_ease(0.5f), 0.5f, "symmetric ease must be 0.5 at midpoint");
+    expect_near(mv::transition_ease(0.25f), 0.15625f,
+        "ease(0.25) must be 15.625% (visible middle, not ease-out 68%)");
+    expect_near(mv::transition_ease(-0.5f), 0.0f, "ease must clamp below 0");
+    expect_near(mv::transition_ease(1.5f), 1.0f, "ease must clamp above 1");
+    expect(mv::transition_ease(0.2f) < mv::transition_ease(0.4f)
+            && mv::transition_ease(0.4f) < mv::transition_ease(0.6f)
+            && mv::transition_ease(0.6f) < mv::transition_ease(0.8f),
+        "ease must be monotonic on [0, 1]");
+    // Mirror property: entry and exit progress must be exact time-mirrors.
+    for (const float s : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f, 0.37f}) {
+        expect_near(mv::transition_ease(s),
+            1.0f - mv::transition_ease(1.0f - s),
+            "ease(s) must equal 1 - ease(1 - s)");
+    }
+}
+
+void test_device_loss_detection() {
+    expect(!mv::should_recreate_render_device(S_OK),
+        "success must not recreate the render device");
+    expect(!mv::should_recreate_render_device(E_ACCESSDENIED),
+        "an ordinary HRESULT failure must not tear down the device");
+    expect(!mv::should_recreate_render_device(E_FAIL),
+        "E_FAIL must not tear down the device");
+    expect(mv::should_recreate_render_device(DXGI_ERROR_DEVICE_REMOVED),
+        "device removed must recreate");
+    expect(mv::should_recreate_render_device(DXGI_ERROR_DEVICE_RESET),
+        "device reset must recreate");
+    expect(mv::should_recreate_render_device(DXGI_ERROR_DEVICE_HUNG),
+        "device hung must recreate");
+    expect(mv::should_recreate_render_device(D2DERR_RECREATE_TARGET),
+        "recreate-target must recreate");
+}
+
 std::vector<mv::ComicPageRenderInput> make_render_inputs(
     const std::vector<mv::ComicPageGeometry>& geometries,
     mv::ComicPageVisual visual = mv::ComicPageVisual::Bitmap) {
@@ -686,8 +723,8 @@ int main() {
         "DXGI device removal must recreate the renderer");
     expect(mv::should_recreate_render_device(DXGI_ERROR_DEVICE_RESET),
         "DXGI device reset must recreate the renderer");
-    expect(mv::should_recreate_render_device(E_FAIL),
-        "unclassified failed Present or Resize results must fail closed");
+    expect(!mv::should_recreate_render_device(E_FAIL),
+        "unclassified Present/Resize business failures must keep the current device");
 
     expect(mv::renderer_generation_changed(1, 2),
         "App caches must be invalidated after renderer recreation");
@@ -756,6 +793,8 @@ int main() {
             && narrow_path.bounds.bottom <= 220.0f,
         "toast geometry must remain inside an offset panel viewport");
     test_dpi_metrics();
+    test_transition_ease();
+    test_device_loss_detection();
     test_narrow_viewport_and_error_card();
     test_wide_viewport_and_seamless_gap();
     test_clip_boundaries();

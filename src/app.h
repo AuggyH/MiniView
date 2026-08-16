@@ -403,6 +403,11 @@ private:
         std::wstring path;
         ULONGLONG    gen     = 0;
         bool         current = false;  // current-image decode vs preload
+        // Identity snapshot from when the current decode was queued: if the
+        // decode fails, WM_IMAGE_READY rolls back to these so delete/copy
+        // never act on an image that is not actually displayed.
+        std::wstring prev_path;
+        int          prev_idx = -1;
     };
     struct AsyncSlot {
         std::thread thread;
@@ -424,6 +429,9 @@ private:
         bool        stop = false;
         ULONGLONG   gen  = 0;   // newest current-image generation
         ComPtr<IWICBitmapSource> wic;  // newest decode result
+        // Rollback identity of the newest current-image attempt (see AsyncJob).
+        std::wstring current_prev_path;
+        int          current_prev_idx = -1;
         // Materialized-neighbor cache: workers do the full decode, so a
         // cache hit needs only a GPU upload. Item cap matches the 3+3
         // preload window; the byte budget keeps the 512MiB soft cap intact.

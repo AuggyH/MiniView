@@ -77,157 +77,93 @@ target_compile_definitions(MinView PRIVATE NOMINMAX)
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(indexer_tests
+    function(mv_add_unit_test name)
+        add_executable(${name} ${ARGN})
+        target_include_directories(${name} PRIVATE src)
+        target_compile_options(${name} PRIVATE /W4 /utf-8)
+        if(MINVIEW_WARNINGS_AS_ERRORS)
+            target_compile_options(${name} PRIVATE /WX)
+        endif()
+        target_compile_definitions(${name} PRIVATE NOMINMAX)
+        set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE)
+        target_link_options(${name} PRIVATE /SUBSYSTEM:CONSOLE)
+    endfunction()
+
+    mv_add_unit_test(indexer_tests
         tests/indexer_tests.cpp
         src/indexer.cpp
     )
-    target_include_directories(indexer_tests PRIVATE src)
-    target_compile_options(indexer_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(indexer_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(indexer_tests PRIVATE NOMINMAX)
-    set_target_properties(indexer_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(indexer_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME indexer.unit COMMAND indexer_tests)
 
-    add_executable(app_state_tests
+    mv_add_unit_test(app_state_tests
         tests/app_state_tests.cpp
         src/decoder.cpp
     )
-    target_include_directories(app_state_tests PRIVATE src)
-    target_compile_options(app_state_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(app_state_tests PRIVATE /WX)
-    endif()
     target_compile_definitions(app_state_tests PRIVATE
-        NOMINMAX
         MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(app_state_tests PRIVATE windowscodecs ole32 user32)
-    set_target_properties(app_state_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(app_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME app_state.unit COMMAND app_state_tests)
 
-    add_executable(navstate_tests
+    mv_add_unit_test(navstate_tests
         tests/navstate_tests.cpp
         src/indexer.cpp
     )
-    target_include_directories(navstate_tests PRIVATE src)
-    target_compile_options(navstate_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(navstate_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(navstate_tests PRIVATE NOMINMAX)
-    set_target_properties(navstate_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(navstate_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME navstate.unit COMMAND navstate_tests)
 
-    add_executable(albumstate_tests
+    mv_add_unit_test(albumstate_tests
         tests/albumstate_tests.cpp
         src/albumstate.cpp
     )
-    target_include_directories(albumstate_tests PRIVATE src)
-    target_compile_options(albumstate_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(albumstate_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(albumstate_tests PRIVATE NOMINMAX)
-    set_target_properties(albumstate_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(albumstate_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME albumstate.unit COMMAND albumstate_tests)
 
-    add_executable(comic_reader_model_tests
+    mv_add_unit_test(comic_reader_model_tests
         tests/comic_reader_model_tests.cpp
     )
-    target_include_directories(comic_reader_model_tests PRIVATE src)
-    target_compile_options(comic_reader_model_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(comic_reader_model_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(comic_reader_model_tests PRIVATE NOMINMAX)
-    target_compile_definitions(comic_reader_model_tests PRIVATE
-        MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
-    )
-    set_target_properties(comic_reader_model_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(comic_reader_model_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME comic_reader_model.unit COMMAND comic_reader_model_tests)
 
-    add_executable(comic_reader_loader_tests
+    mv_add_unit_test(comic_reader_loader_tests
         tests/comic_reader_loader_tests.cpp
         src/comic_reader_loader.cpp
         src/decoder.cpp
     )
-    target_include_directories(comic_reader_loader_tests PRIVATE src)
-    target_compile_options(comic_reader_loader_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(comic_reader_loader_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(comic_reader_loader_tests PRIVATE NOMINMAX)
-    target_link_libraries(comic_reader_loader_tests PRIVATE
-        windowscodecs
-        ole32
-    )
-    set_target_properties(comic_reader_loader_tests PROPERTIES
-        WIN32_EXECUTABLE FALSE
-    )
-    target_link_options(comic_reader_loader_tests PRIVATE /SUBSYSTEM:CONSOLE)
+    target_link_libraries(comic_reader_loader_tests PRIVATE windowscodecs ole32)
     add_test(NAME comic_reader_loader.unit COMMAND comic_reader_loader_tests)
 
-    add_executable(metadata_tests
+    mv_add_unit_test(decoder_tests
+        tests/decoder_tests.cpp
+        src/decoder.cpp
+    )
+    target_compile_definitions(decoder_tests PRIVATE
+        MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(decoder_tests PRIVATE windowscodecs ole32)
+    add_test(NAME decoder.unit COMMAND decoder_tests)
+
+    mv_add_unit_test(metadata_tests
         tests/metadata_tests.cpp
         src/metadata.cpp
     )
-    target_include_directories(metadata_tests PRIVATE src)
-    target_compile_options(metadata_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(metadata_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(metadata_tests PRIVATE NOMINMAX)
     target_link_libraries(metadata_tests PRIVATE shlwapi)
-    set_target_properties(metadata_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(metadata_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME metadata.unit COMMAND metadata_tests)
 
-    add_executable(filmstrip_model_tests
+    mv_add_unit_test(filmstrip_model_tests
         tests/filmstrip_model_tests.cpp
     )
-    target_include_directories(filmstrip_model_tests PRIVATE src)
-    target_compile_options(filmstrip_model_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(filmstrip_model_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(filmstrip_model_tests PRIVATE NOMINMAX)
-    set_target_properties(filmstrip_model_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(filmstrip_model_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME filmstrip_model.unit COMMAND filmstrip_model_tests)
 
-    add_executable(renderer_state_tests
+    mv_add_unit_test(renderer_state_tests
         tests/renderer_state_tests.cpp
     )
-    target_include_directories(renderer_state_tests PRIVATE src)
-    target_compile_options(renderer_state_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(renderer_state_tests PRIVATE /WX)
-    endif()
-    target_compile_definitions(renderer_state_tests PRIVATE NOMINMAX)
-    set_target_properties(renderer_state_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(renderer_state_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME renderer_state.unit COMMAND renderer_state_tests)
 
-    add_executable(file_operation_tests
+    mv_add_unit_test(file_operation_tests
         tests/file_operation_tests.cpp
         src/file_operation.cpp
         src/file_operation_windows.cpp
         src/decoder.cpp
     )
-    target_include_directories(file_operation_tests PRIVATE src)
-    target_compile_options(file_operation_tests PRIVATE /W4 /utf-8)
-    if(MINVIEW_WARNINGS_AS_ERRORS)
-        target_compile_options(file_operation_tests PRIVATE /WX)
-    endif()
     target_compile_definitions(file_operation_tests PRIVATE
-        NOMINMAX
         MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
     )
     target_link_libraries(file_operation_tests PRIVATE
@@ -235,8 +171,6 @@ if(BUILD_TESTING)
         windowscodecs
         ole32
     )
-    set_target_properties(file_operation_tests PROPERTIES WIN32_EXECUTABLE FALSE)
-    target_link_options(file_operation_tests PRIVATE /SUBSYSTEM:CONSOLE)
     add_test(NAME file_operation.unit COMMAND file_operation_tests)
 
 endif()

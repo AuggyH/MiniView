@@ -5,6 +5,8 @@
 #include "navstate.h"
 
 #include <d2d1.h>
+#include <d2derr.h>
+#include <dxgi.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -20,11 +22,26 @@ namespace mv {
 constexpr std::size_t kComicOverlayMaxTextCharacters = 32768;
 
 inline bool should_recreate_render_device(HRESULT result) {
-    return FAILED(result);
+    if (SUCCEEDED(result)) return false;
+    // Recreate only on genuine device loss. Business errors (for example
+    // EndDraw returning D2DERR_WRONG_STATE) must not tear the device down.
+    return result == DXGI_ERROR_DEVICE_REMOVED
+        || result == DXGI_ERROR_DEVICE_RESET
+        || result == DXGI_ERROR_DEVICE_HUNG
+        || result == D2DERR_RECREATE_TARGET;
 }
 
 inline bool renderer_generation_changed(uint64_t cached, uint64_t current) {
     return cached != current;
+}
+
+// Symmetric ease-in-out (smoothstep): E(s) = s^2 * (3 - 2s), with
+// E(s) = 1 - E(1 - s). The grid<->image transition uses this so an exit
+// played with the same forward curve is the exact time-mirror of entry —
+// the motion stays visible through the middle of both directions.
+inline float transition_ease(float t) {
+    const float s = std::clamp(t, 0.0f, 1.0f);
+    return s * s * (3.0f - 2.0f * s);
 }
 
 struct ComicRenderRect {
