@@ -6,14 +6,18 @@ Windows 图片浏览器。
 
 ## 下载
 
-[MiniView v0.1.0（Windows x64）](https://github.com/AuggyH/MiniView/releases/download/v0.1.0/MiniView-v0.1.0-win64.zip)
+[MiniView v0.6.0（Windows x64）](https://github.com/AuggyH/MiniView/releases/download/v0.6.0/MiniView-v0.6.0-win64.zip)
 
 ## 功能
 
 - 漫画阅读：纵向连续阅读、阅读宽度可调、巡航、中键自动滚动
 - AIGC 元数据：展示 ComfyUI PNG 内嵌提示词与工作流
-- 拖拽导出
 - 网格浏览：缩略图、信息面板、递归浏览
+- 相册与收藏
+- 左侧导航面板
+- 大图底部胶片条
+- 打开和关闭图片有过渡动画
+- 拖拽导出
 - 全屏
 - 暗色主题（#1A1A1A）
 
@@ -34,6 +38,7 @@ Windows 图片浏览器。
 | `A` | 方形缩略图切换 | — |
 | `N` / `D` / `S` / `R` | 排序切换 | — |
 | `Ctrl+R` | 递归浏览子文件夹 | — |
+| `Del` | 删除 | 删除 |
 
 **漫画模式（大图内）：**
 
@@ -43,6 +48,10 @@ Windows 图片浏览器。
 | `P` | 巡航开/关 |
 | `[` `]` | 巡航速度 |
 | 中键拖拽 | 自动滚动 |
+
+## 更新日志
+
+[CHANGELOG](CHANGELOG.md)
 
 ## License
 
