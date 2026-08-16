@@ -2180,10 +2180,13 @@ void App::open_directory(const std::wstring& path) {
 
 bool App::open_image(const std::wstring& path) {
     if (m_comic_reader.enabled()) leave_comic_reader(false);
-    // 大图模式仅展示大图本身 + 胶片条: 收起信息面板, 避免转场中面板
-    // 刷新重置叠加在动画上, 也避免布局在转场前后变化。记住网格状态,
-    // 返回网格时原样恢复。
-    m_panel_expanded_in_grid = m_panel_expanded;
+    // 只有"从网格/目录进入大图"才执行一次性的进入动作: 收起信息面板并
+    // 记住网格面板状态、重置胶片条为隐藏。大图内的翻页导航会再次走到
+    // open_image, 但绝不能重置胶片条(否则滑动翻页 = 瞬间收起 + 再升起)。
+    const bool entering_from_grid = m_grid_mode;
+    if (entering_from_grid) {
+        m_panel_expanded_in_grid = m_panel_expanded;
+    }
     m_panel_expanded = false;
     m_panel_clickable.clear();
     namespace fs = std::filesystem;
@@ -2333,7 +2336,9 @@ bool App::open_image(const std::wstring& path) {
         sync_nav_collection();
         commit_current_image_identity(path, indexed_position,
             m_current_path, m_current_idx, m_has_image);
-        reset_filmstrip_reveal();  // large-image mode starts with the strip hidden
+        if (entering_from_grid) {
+            reset_filmstrip_reveal();  // 仅进入大图时隐藏, 等转场完成后升起
+        }
         m_from_grid = m_current_idx >= 0;
         m_open_error.clear();
 
