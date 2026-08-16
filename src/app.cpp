@@ -2167,6 +2167,10 @@ void App::open_directory(const std::wstring& path) {
 
 bool App::open_image(const std::wstring& path) {
     if (m_comic_reader.enabled()) leave_comic_reader(false);
+    // 大图模式仅展示大图本身 + 胶片条: 收起信息面板, 避免转场中面板
+    // 刷新重置叠加在动画上, 也避免布局在转场前后变化。
+    m_panel_expanded = false;
+    m_panel_clickable.clear();
     namespace fs = std::filesystem;
     SetLastError(ERROR_SUCCESS);
     DWORD attributes = GetFileAttributesW(path.c_str());
@@ -4520,6 +4524,9 @@ void App::toggle_grid() {
         m_grid_scroll_saved = m_grid_scroll_y;
         m_grid_saved_idx = m_grid_sel;
         finish_grid_scroll();
+        // 大图模式仅大图 + 胶片条: 收起信息面板, 转场几何以无面板布局计算。
+        m_panel_expanded = false;
+        m_panel_clickable.clear();
         // Don't stop thumb loader or clear cache — reuse on re-entry
         reset_filmstrip_reveal();  // strip stays hidden until mouse moves
         update_title();
