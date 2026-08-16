@@ -268,6 +268,11 @@ private:
     void    render_filmstrip();
     void    schedule_filmstrip_hide();
     void    cancel_filmstrip_hide();
+    float   filmstrip_reveal_progress() const;
+    void    reveal_filmstrip();
+    void    hide_filmstrip_animated();
+    void    reset_filmstrip_reveal();
+    void    update_filmstrip_reveal();
 
     int m_thumb_size = layout::kThumbSizeDip;  // decode resolution (WIC)
     int m_thumb_cell  = layout::kThumbCellDip;  // display cell size for column calc
@@ -538,8 +543,12 @@ private:
 
     // Filmstrip state (Issue #5 P1)
     FilmstripModel m_filmstrip;
-    bool    m_filmstrip_revealed = false;  // fullscreen auto-hide state
-    UINT_PTR m_filmstrip_timer = 0;        // fullscreen hide delay (id 5)
+    bool    m_filmstrip_revealed = false;  // large-image mode: hidden by default
+    bool    m_filmstrip_reveal_animating = false;
+    bool    m_filmstrip_reveal_forward = false;
+    float   m_filmstrip_reveal_raw = 0.0f;  // raw time 0 hidden -> 1 shown
+    LARGE_INTEGER m_filmstrip_reveal_start = {};
+    UINT_PTR m_filmstrip_timer = 0;        // hide delay (id 8)
     uint64_t m_filmstrip_dimension_generation = 0;
 
     int   m_panel_width = layout::kPanelWidthDip;

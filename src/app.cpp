@@ -966,8 +966,8 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 KillTimer(hwnd, kFilmstripHideTimerId);
                 m_filmstrip_timer = 0;
             }
-            if (m_filmstrip_revealed) {
-                m_filmstrip_revealed = false;
+            if (m_filmstrip_revealed || m_filmstrip_reveal_animating) {
+                hide_filmstrip_animated();
                 m_window.invalidate();
             }
         }
@@ -1527,26 +1527,14 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 update_content_viewport(false);
                 m_window.invalidate();
             }
-            // Filmstrip: bottom 24 DIP band reveals it; leaving the strip
-            // schedules a 1.5s auto-hide (symmetric with the top toolbar).
+            // Filmstrip: any mouse movement in large-image mode raises the
+            // strip from the bottom (animated); 3s of stillness auto-hides it.
             if (filmstrip_showable()) {
-                const float dpi_s =
-                    static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
-                const float strip_h = layout::kFilmstripHeightDip * dpi_s;
-                const float hover_h = layout::kFilmstripHoverZoneDip * dpi_s;
-                const int win_h =
-                    static_cast<int>(m_renderer.target_size().height);
-                const bool in_hover_zone =
-                    mouse_y >= win_h - static_cast<int>(hover_h);
-                const bool inside_strip =
-                    mouse_y >= win_h - static_cast<int>(strip_h);
-                if (!m_filmstrip_revealed && in_hover_zone) {
-                    m_filmstrip_revealed = true;
-                    cancel_filmstrip_hide();
+                if (!m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
+                    reveal_filmstrip();
                     m_window.invalidate();
-                } else if (m_filmstrip_revealed && inside_strip) {
+                } else if (m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
                     cancel_filmstrip_hide();
-                } else if (m_filmstrip_revealed) {
                     schedule_filmstrip_hide();
                 }
             }
@@ -2320,6 +2308,7 @@ bool App::open_image(const std::wstring& path) {
         sync_nav_collection();
         commit_current_image_identity(path, indexed_position,
             m_current_path, m_current_idx, m_has_image);
+        reset_filmstrip_reveal();  // large-image mode starts with the strip hidden
         m_from_grid = m_current_idx >= 0;
         m_open_error.clear();
 
@@ -4126,8 +4115,7 @@ bool App::enter_grid_image(HWND hwnd, const GridEntryRequest& request) {
 void App::toggle_fullscreen(HWND hwnd) {
     m_fullscreen = !m_fullscreen;
     m_toolbar_revealed = false;
-    m_filmstrip_revealed = false;
-    cancel_filmstrip_hide();
+    reset_filmstrip_reveal();
 
     if (m_fullscreen) {
         GetWindowPlacement(hwnd, &m_saved_placement);
@@ -4877,6 +4865,7 @@ void App::toggle_grid() {
         m_grid_saved_idx = m_grid_sel;
         finish_grid_scroll();
         // Don't stop thumb loader or clear cache — reuse on re-entry
+        reset_filmstrip_reveal();  // strip stays hidden until mouse moves
         update_title();
     }
     m_window.invalidate();
@@ -5026,19 +5015,84 @@ bool App::filmstrip_showable() const {
 bool App::filmstrip_visible() const {
     if (m_animating) return false;
     if (!filmstrip_showable()) return false;
-    if (m_fullscreen) return m_filmstrip_revealed;
-    return true;  // windowed large-image mode: always on
+    // Large-image mode: hidden by default; visible while revealed or while
+    // the rise/hide animation is running.
+    return m_filmstrip_revealed || m_filmstrip_reveal_animating;
+}
+
+float App::filmstrip_reveal_progress() const {
+    // Eased vertical progress: 0 = fully below the window edge, 1 = docked.
+    const float raw = std::clamp(m_filmstrip_reveal_raw, 0.0f, 1.0f);
+    return m_filmstrip_reveal_forward
+        ? transition_ease_exit(raw)
+        : 1.0f - transition_ease_exit(raw);
+}
+
+void App::update_filmstrip_reveal() {
+    if (!m_filmstrip_reveal_animating) return;
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    const float elapsed = static_cast<float>(
+        now.QuadPart - m_filmstrip_reveal_start.QuadPart) / freq.QuadPart;
+    m_filmstrip_reveal_raw = std::clamp(
+        elapsed / dt::kDurationFilmstripRevealSec, 0.0f, 1.0f);
+    if (m_filmstrip_reveal_raw >= 1.0f) {
+        m_filmstrip_reveal_animating = false;
+        m_filmstrip_revealed = m_filmstrip_reveal_forward;
+        // A completed rise arms the 3s stillness auto-hide.
+        if (m_filmstrip_revealed) schedule_filmstrip_hide();
+    }
+    m_window.invalidate();
+}
+
+void App::reveal_filmstrip() {
+    if (!filmstrip_showable()) return;
+    cancel_filmstrip_hide();
+    m_filmstrip_reveal_forward = true;
+    // Flip the raw clock so the current visual position continues smoothly.
+    m_filmstrip_reveal_raw = m_filmstrip_reveal_animating
+        ? 1.0f - m_filmstrip_reveal_raw
+        : 0.0f;
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    m_filmstrip_reveal_start.QuadPart = now.QuadPart - static_cast<LONGLONG>(
+        m_filmstrip_reveal_raw * dt::kDurationFilmstripRevealSec * freq.QuadPart);
+    m_filmstrip_reveal_animating = true;
+}
+
+void App::hide_filmstrip_animated() {
+    cancel_filmstrip_hide();
+    m_filmstrip_reveal_forward = false;
+    m_filmstrip_reveal_raw = m_filmstrip_reveal_animating
+        ? 1.0f - m_filmstrip_reveal_raw
+        : 1.0f;
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    m_filmstrip_reveal_start.QuadPart = now.QuadPart - static_cast<LONGLONG>(
+        m_filmstrip_reveal_raw * dt::kDurationFilmstripRevealSec * freq.QuadPart);
+    m_filmstrip_reveal_animating = true;
+}
+
+void App::reset_filmstrip_reveal() {
+    cancel_filmstrip_hide();
+    m_filmstrip_revealed = false;
+    m_filmstrip_reveal_animating = false;
+    m_filmstrip_reveal_raw = 0.0f;
 }
 
 D2D1_RECT_F App::filmstrip_rect() const {
     const float dpi_s =
         static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     const float strip_h = layout::kFilmstripHeightDip * dpi_s;
+    const float slide_down = strip_h * (1.0f - filmstrip_reveal_progress());
     const D2D1_SIZE_U ts = m_renderer.target_size();
     const float width = static_cast<float>(ts.width)
         - static_cast<float>(visible_panel_width());
-    return {0.0f, static_cast<float>(ts.height) - strip_h,
-        width, static_cast<float>(ts.height)};
+    return {0.0f, static_cast<float>(ts.height) - strip_h + slide_down,
+        width, static_cast<float>(ts.height) + slide_down};
 }
 
 // Returns -2 outside the strip, -1 inside the strip but between items,
@@ -5703,6 +5757,7 @@ void App::grid_render() {
 
 void App::render_frame() {
     advance_transition_animation();
+    update_filmstrip_reveal();
     check_async_timeout();
     if (m_comic_reader.auto_scroll_owner()
         != mv::ComicAutoScrollOwner::None) {
@@ -5796,6 +5851,7 @@ void App::render_frame() {
         const float filmstrip_h = filmstrip_visible()
             ? layout::kFilmstripHeightDip
                 * (static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f)
+                * filmstrip_reveal_progress()
             : 0.0f;
         m_renderer.draw_overlay(filmstrip_h);
         uint32_t image_w = 0, image_h = 0;

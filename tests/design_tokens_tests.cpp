@@ -191,8 +191,10 @@ void test_motion_tokens() {
         "kDurationTransitionSec == 0.25 (Quick Look 实测 233-267ms)");
     expect_near(mv::dt::kDurationFilmstripHandoffSec, 0.30f, 0.0f,
         "kDurationFilmstripHandoffSec == 0.30 (filmstrip keeps 300ms)");
-    expect_near(mv::dt::kDurationFilmstripHideSec, 1.5f, 0.0f,
-        "kDurationFilmstripHideSec == 1.5");
+    expect_near(mv::dt::kDurationFilmstripHideSec, 3.0f, 0.0f,
+        "kDurationFilmstripHideSec == 3.0 (静止 3s 收起)");
+    expect_near(mv::dt::kDurationFilmstripRevealSec, 0.25f, 0.0f,
+        "kDurationFilmstripRevealSec == 0.25 (升起/收起动画)");
     expect(mv::dt::kDurationToastMs == 1000, "kDurationToastMs == 1000");
     expect(mv::dt::kDurationSelectionHighlightMs == 1000,
         "kDurationSelectionHighlightMs == 1000");

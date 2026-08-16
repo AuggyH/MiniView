@@ -264,7 +264,8 @@ MV_DT_GDI_COLOR(kColorFallbackTextGdi,     128, 128, 128);
 
 MV_DT_VALUE(kDurationTransitionSec, 0.25f);        // grid <-> image transition (Quick Look 实测 233-267ms)
 MV_DT_VALUE(kDurationFilmstripHandoffSec, 0.30f);  // filmstrip slot handoff
-MV_DT_VALUE(kDurationFilmstripHideSec, 1.5f);      // fullscreen filmstrip auto-hide
+MV_DT_VALUE(kDurationFilmstripHideSec, 3.0f);      // 静止 3s 自动收起
+MV_DT_VALUE(kDurationFilmstripRevealSec, 0.25f);   // 鼠标移动升起/收起动画
 MV_DT_VALUE(kDurationToastMs, 1000);
 MV_DT_VALUE(kDurationSelectionHighlightMs, 1000);
 MV_DT_VALUE(kDurationImageDebounceMs, 250);
