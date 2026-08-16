@@ -162,6 +162,25 @@ if(BUILD_TESTING)
     )
     add_test(NAME renderer_state.unit COMMAND renderer_state_tests)
 
+    mv_add_unit_test(renderer_tests
+        tests/renderer_tests.cpp
+        src/renderer.cpp
+    )
+    target_link_libraries(renderer_tests PRIVATE
+        d2d1
+        dwrite
+        windowscodecs
+        d3d11
+        dxgi
+        dxguid
+        ole32
+        comctl32
+        uxtheme
+        dwmapi
+        user32
+    )
+    add_test(NAME renderer.unit COMMAND renderer_tests)
+
     mv_add_unit_test(design_tokens_tests
         tests/design_tokens_tests.cpp
     )

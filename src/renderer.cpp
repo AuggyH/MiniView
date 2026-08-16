@@ -18,6 +18,19 @@ namespace {
     constexpr float OVERLAY_PAD = dt::kSpaceMdDip;
     constexpr float OVERLAY_FONT_SIZE = dt::kFontSizeXlDip;
 
+    // Bounded caches (linear search). The brush and text-format caches are
+    // small and hot; the rounded-geometry cache is size-keyed and is also
+    // cleared on resize/device loss. A full cache is cleared wholesale —
+    // callers hold ComPtr copies while drawing, so a mid-frame clear is safe.
+    constexpr size_t kSolidBrushCacheMax = 256;
+    constexpr size_t kTextFormatCacheMax = 64;
+    constexpr size_t kRoundedGeometryCacheMax = 128;
+
+    bool same_color(D2D1_COLOR_F left, D2D1_COLOR_F right) {
+        return left.r == right.r && left.g == right.g
+            && left.b == right.b && left.a == right.a;
+    }
+
     D2D1_RECT_F to_d2d_rect(ComicRenderRect rect) {
         return {rect.left, rect.top, rect.right, rect.bottom};
     }
@@ -164,7 +177,85 @@ bool Renderer::create_text_resources() {
     return true;
 }
 
+ComPtr<ID2D1SolidColorBrush> Renderer::get_solid_brush(
+    const D2D1_COLOR_F& color) {
+    if (!m_d2d_context) return nullptr;
+    for (const auto& entry : m_solid_brushes) {
+        if (same_color(entry.color, color)) return entry.brush;
+    }
+    if (m_solid_brushes.size() >= kSolidBrushCacheMax) {
+        m_solid_brushes.clear();
+    }
+    ComPtr<ID2D1SolidColorBrush> brush;
+    if (FAILED(m_d2d_context->CreateSolidColorBrush(color, &brush))) {
+        return nullptr;
+    }
+    m_solid_brushes.push_back({color, brush});
+    return brush;
+}
+
+ComPtr<IDWriteTextFormat> Renderer::get_text_format(
+    const wchar_t* family, float size, DWRITE_FONT_WEIGHT weight,
+    DWRITE_FONT_STYLE style, DWRITE_FONT_STRETCH stretch,
+    const wchar_t* locale) {
+    if (!m_dwrite_factory || !family || !locale) return nullptr;
+    for (const auto& entry : m_text_formats) {
+        if (entry.family == family && entry.size == size
+            && entry.weight == weight && entry.style == style
+            && entry.stretch == stretch && entry.locale == locale) {
+            // The mutable layout fields below are the only ones call sites
+            // change after creation; reset them so the shared object behaves
+            // exactly like a freshly created format.
+            entry.format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            entry.format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            entry.format->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+            return entry.format;
+        }
+    }
+    if (m_text_formats.size() >= kTextFormatCacheMax) {
+        m_text_formats.clear();
+    }
+    ComPtr<IDWriteTextFormat> format;
+    if (FAILED(m_dwrite_factory->CreateTextFormat(
+            family, nullptr, weight, style, stretch, size, locale,
+            &format)) || !format) {
+        return nullptr;
+    }
+    m_text_formats.push_back(
+        {family, size, weight, style, stretch, locale, format});
+    return format;
+}
+
+ComPtr<ID2D1RoundedRectangleGeometry> Renderer::get_rounded_geometry(
+    float width, float height, float radius) {
+    if (!m_d2d_factory) return nullptr;
+    for (const auto& entry : m_rounded_geometries) {
+        if (entry.width == width && entry.height == height
+            && entry.radius == radius) {
+            return entry.geometry;
+        }
+    }
+    if (m_rounded_geometries.size() >= kRoundedGeometryCacheMax) {
+        m_rounded_geometries.clear();
+    }
+    // Geometries are cached at the origin and placed with LayerParameters'
+    // maskTransform, so entries are keyed by size only and stay valid for
+    // any item position.
+    const D2D1_ROUNDED_RECT rounded = {
+        {0.0f, 0.0f, width, height}, radius, radius};
+    ComPtr<ID2D1RoundedRectangleGeometry> geometry;
+    if (FAILED(m_d2d_factory->CreateRoundedRectangleGeometry(
+            &rounded, &geometry)) || !geometry) {
+        return nullptr;
+    }
+    m_rounded_geometries.push_back({width, height, radius, geometry});
+    return geometry;
+}
+
 void Renderer::discard_device_resources() {
+    m_solid_brushes.clear();
+    m_text_formats.clear();
+    m_rounded_geometries.clear();
     m_overlay_brush.Reset();
     m_text_format.Reset();
     m_dwrite_factory.Reset();
@@ -191,6 +282,12 @@ void Renderer::discard_device_resources() {
 bool Renderer::resize(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) return false;
     m_target_size = {width, height};
+
+    // Size-keyed rounded geometries are cached at the origin and reused via
+    // LayerParameters maskTransform. Clear on every resize so entries can
+    // never be stale after a target-size change (safer than keying by the
+    // full target size; entries are cheap to recreate).
+    m_rounded_geometries.clear();
 
     update_fit_scale();
 
@@ -381,9 +478,7 @@ void Renderer::ensure_image_scaled() {
 
 void Renderer::draw_hint(const std::wstring& text) {
     if (!m_d2d_context || !m_text_format) return;
-    ComPtr<ID2D1SolidColorBrush> brush;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorHintText), &brush);
+    auto brush = get_solid_brush(dt::d2d(dt::kColorHintText));
     D2D1_RECT_F rc = {0, 0,
         static_cast<float>(m_target_size.width),
         static_cast<float>(m_target_size.height)};
@@ -401,23 +496,18 @@ void Renderer::draw_status_message(const std::wstring& text) {
 
     const float dpi_scale = m_dpi_y / 96.0f;
     const float available_width = std::max(1.0f, content_width() - dt::kSpace2xlDip * dpi_scale);
-    const float width = std::min(520.0f * dpi_scale, available_width);
+    const float width = std::min(dt::kStatusMessageMaxWidthDip * dpi_scale, available_width);
     const float height = dt::kSize44Dip * dpi_scale;
     const float left = (content_width() - width) * 0.5f;
     const float top = m_content_top + dt::kSpaceMdDip * dpi_scale;
     const D2D1_RECT_F bounds = {left, top, left + width, top + height};
     const auto rounded = D2D1::RoundedRect(
-        bounds, 6.0f * dpi_scale, 6.0f * dpi_scale);
+        bounds, dt::kStatusMessageCornerRadiusDip * dpi_scale,
+        dt::kStatusMessageCornerRadiusDip * dpi_scale);
 
-    ComPtr<ID2D1SolidColorBrush> background;
-    ComPtr<ID2D1SolidColorBrush> border;
-    ComPtr<ID2D1SolidColorBrush> foreground;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorStatusErrorBg), &background);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorStatusErrorBorder), &border);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorStatusErrorText), &foreground);
+    auto background = get_solid_brush(dt::d2d(dt::kColorStatusErrorBg));
+    auto border = get_solid_brush(dt::d2d(dt::kColorStatusErrorBorder));
+    auto foreground = get_solid_brush(dt::d2d(dt::kColorStatusErrorText));
     if (!background || !border || !foreground) return;
 
     m_d2d_context->FillRoundedRectangle(rounded, background.Get());
@@ -440,7 +530,7 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
     float label_w = layout::kPanelLabelColumnWidthDip * dpi_s;
     float gap = dt::kSpace10Dip * dpi_s;         // label–value gap
     float item_spacing = dt::kSpaceSmDip * dpi_s;
-    float card_w = std::min(600.0f * dpi_s, m_target_size.width - dt::kSpace40Dip * dpi_s);
+    float card_w = std::min(dt::kInfoCardMaxWidthDip * dpi_s, m_target_size.width - dt::kSpace40Dip * dpi_s);
     float value_w = card_w - pad * 2 - label_w - gap;
     float min_h = font_size * dpi_s * 1.6f;
     int   max_lines = 3;
@@ -464,12 +554,11 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
 
     float card_x = (m_target_size.width - card_w) * 0.5f;
     float card_y = (m_target_size.height - card_h) * 0.5f;
-    float radius = 8.0f * dpi_s;
+    float radius = dt::kInfoCardCornerRadiusDip * dpi_s;
 
     // ── Card background ──
-    ComPtr<ID2D1SolidColorBrush> bg, border;
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoCardBg), &bg);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoCardBorder), &border);
+    auto bg = get_solid_brush(dt::d2d(dt::kColorInfoCardBg));
+    auto border = get_solid_brush(dt::d2d(dt::kColorInfoCardBorder));
 
     D2D1_RECT_F rc = {card_x, card_y, card_x + card_w, card_y + card_h};
     D2D1_ROUNDED_RECT rr = {rc, radius, radius};
@@ -477,10 +566,9 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
     m_d2d_context->DrawRoundedRectangle(&rr, border.Get(), 1.0f * dpi_s);
 
     // ── Brushes ──
-    ComPtr<ID2D1SolidColorBrush> label_brush, value_brush, dim_brush;
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoLabel), &label_brush);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoValue), &value_brush);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorInfoDim), &dim_brush);
+    auto label_brush = get_solid_brush(dt::d2d(dt::kColorInfoLabel));
+    auto value_brush = get_solid_brush(dt::d2d(dt::kColorInfoValue));
+    auto dim_brush = get_solid_brush(dt::d2d(dt::kColorInfoDim));
 
     // ── Pass 2: draw items ──
     float cur_y = card_y + pad;
@@ -504,12 +592,11 @@ void Renderer::draw_info_card(const std::vector<std::pair<std::wstring, std::wst
     }
 
     // ── Hint: press Esc or click to dismiss ──
-    ComPtr<IDWriteTextFormat> hint_fmt;
     float hint_size = dt::kFontSizeXsDip * dpi_s;
-    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        hint_size, L"en-US", &hint_fmt);
-    hint_fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    auto hint_fmt = get_text_format(dt::kFontFamilyUi, hint_size,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, L"en-US");
+    if (hint_fmt) hint_fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     std::wstring hint = L"\u6309 I \u5173\u95ED";  // 按 I 关闭
     D2D1_RECT_F hr = {card_x, card_y + card_h + dt::kSpaceXsDip * dpi_s,
                       card_x + card_w, card_y + card_h + dt::kSpace20Dip * dpi_s};
@@ -535,9 +622,7 @@ void Renderer::draw_overlay(float bottom_inset) {
     D2D1_RECT_F layout = {x, y, x + max_w, y + OVERLAY_FONT_SIZE + 4.0f};
 
     // Shadow
-    ComPtr<ID2D1SolidColorBrush> shadow;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorOverlayShadow), &shadow);
+    auto shadow = get_solid_brush(dt::d2d(dt::kColorOverlayShadow));
     D2D1_RECT_F sl = {x + 1.0f, y + 1.0f, x + max_w + 1.0f, y + OVERLAY_FONT_SIZE + 5.0f};
     m_d2d_context->DrawText(text.c_str(), static_cast<uint32_t>(text.size()),
         m_text_format.Get(), &sl, shadow.Get());
@@ -609,8 +694,7 @@ void Renderer::draw_grid_placeholder(float x, float y, float w, float h, D2D1_CO
     D2D1_RECT_F rc = {x, y, x + w, y + h};
     D2D1_ROUNDED_RECT rr = {rc, radius, radius};
 
-    ComPtr<ID2D1SolidColorBrush> brush;
-    m_d2d_context->CreateSolidColorBrush(color, &brush);
+    auto brush = get_solid_brush(color);
     m_d2d_context->FillRoundedRectangle(&rr, brush.Get());
 }
 
@@ -628,11 +712,10 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     float oy = y + (h - dh) / 2.0f;
     D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
 
-    // Rounded corner clip
+    // Rounded corner clip (geometry cached at the origin, positioned via
+    // the layer mask transform).
     float radius = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
-    D2D1_ROUNDED_RECT rr = {{x, y, x + w, y + h}, radius, radius};
-    ComPtr<ID2D1RoundedRectangleGeometry> geo;
-    m_d2d_factory->CreateRoundedRectangleGeometry(&rr, &geo);
+    auto geo = get_rounded_geometry(w, h, radius);
 
     if (square) {
         D2D1_RECT_F clip = {x, y, x + w, y + h};
@@ -642,7 +725,8 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
     m_d2d_context->PushLayer(
         D2D1::LayerParameters(D2D1::InfiniteRect(), geo.Get(),
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            D2D1::IdentityMatrix(), 1.0f, nullptr, D2D1_LAYER_OPTIONS_NONE),
+            D2D1::Matrix3x2F::Translation(x, y), 1.0f, nullptr,
+            D2D1_LAYER_OPTIONS_NONE),
         nullptr);
     m_d2d_context->DrawBitmap(thumb, &dest, 1.0f,
         D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
@@ -655,20 +739,17 @@ void Renderer::draw_grid_thumbnail(float x, float y, float w, float h, ID2D1Bitm
 
 void Renderer::draw_favourite_badge(float x, float y, float size) {
     if (!m_d2d_context || !m_dwrite_factory || size <= 0.0f) return;
-    ComPtr<ID2D1SolidColorBrush> chip, heart;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorFavouriteChip), &chip);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorFavouriteHeart), &heart);
+    auto chip = get_solid_brush(dt::d2d(dt::kColorFavouriteChip));
+    auto heart = get_solid_brush(dt::d2d(dt::kColorFavouriteHeart));
     const D2D1_RECT_F rect = D2D1::RectF(x, y, x + size, y + size);
-    const float radius = size * 0.3f;
+    const float radius = size * dt::kFavouriteBadgeRadiusFraction;
     m_d2d_context->FillRoundedRectangle(
         D2D1::RoundedRect(rect, radius, radius), chip.Get());
     m_d2d_context->DrawRoundedRectangle(
         D2D1::RoundedRect(rect, radius, radius), heart.Get(), 1.0f);
     const std::wstring glyph = L"\u2665";
     const float dpi_s = m_dpi_y > 0.0f ? m_dpi_y / 96.0f : 1.0f;
-    const float fs = size * 0.55f / dpi_s;
+    const float fs = size * dt::kFavouriteBadgeGlyphSizeFraction / dpi_s;
     const float gw = measure_text(glyph, fs * dpi_s);
     const float gh = label_height(glyph, gw + 4.0f, fs, 1);
     draw_text_line(x + (size - gw) * 0.5f, y + (size - gh) * 0.5f,
@@ -696,12 +777,10 @@ void Renderer::draw_comic_bitmap(
         return;
     }
 
-    const D2D1_ROUNDED_RECT rounded = {
-        destination, corner_radius, corner_radius};
-    ComPtr<ID2D1RoundedRectangleGeometry> geometry;
-    const HRESULT result = m_d2d_factory->CreateRoundedRectangleGeometry(
-        &rounded, &geometry);
-    if (FAILED(result) || !geometry) {
+    const float width = destination.right - destination.left;
+    const float height = destination.bottom - destination.top;
+    auto geometry = get_rounded_geometry(width, height, corner_radius);
+    if (!geometry) {
         m_d2d_context->DrawBitmap(
             bitmap, &destination, 1.0f,
             D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
@@ -712,7 +791,9 @@ void Renderer::draw_comic_bitmap(
         D2D1::LayerParameters(
             D2D1::InfiniteRect(), geometry.Get(),
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            D2D1::IdentityMatrix(), 1.0f, nullptr,
+            D2D1::Matrix3x2F::Translation(
+                destination.left, destination.top),
+            1.0f, nullptr,
             D2D1_LAYER_OPTIONS_NONE),
         nullptr);
     m_d2d_context->DrawBitmap(
@@ -735,11 +816,9 @@ void Renderer::draw_comic_card_visual(
         || destination.bottom <= destination.top) return;
 
     const bool failed = visual == ComicPageVisual::Error;
-    ComPtr<ID2D1SolidColorBrush> background;
-    m_d2d_context->CreateSolidColorBrush(
+    auto background = get_solid_brush(
         failed ? dt::d2d(dt::kColorComicErrorBg)
-               : dt::d2d(dt::kColorComicPlaceholderBg),
-        &background);
+               : dt::d2d(dt::kColorComicPlaceholderBg));
     if (!background) return;
 
     if (metrics.corner_radius > 0.0f) {
@@ -750,11 +829,9 @@ void Renderer::draw_comic_card_visual(
         m_d2d_context->FillRectangle(&destination, background.Get());
     }
 
-    ComPtr<ID2D1SolidColorBrush> border;
-    m_d2d_context->CreateSolidColorBrush(
+    auto border = get_solid_brush(
         failed ? dt::d2d(dt::kColorComicErrorBorder)
-               : dt::d2d(dt::kColorComicPlaceholderBorder),
-        &border);
+               : dt::d2d(dt::kColorComicPlaceholderBorder));
     if (border) {
         if (metrics.corner_radius > 0.0f) {
             const D2D1_ROUNDED_RECT rounded = {
@@ -768,14 +845,10 @@ void Renderer::draw_comic_card_visual(
     }
     if (!failed || !m_dwrite_factory) return;
 
-    ComPtr<ID2D1SolidColorBrush> text;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorComicErrorText), &text);
-    ComPtr<IDWriteTextFormat> format;
-    m_dwrite_factory->CreateTextFormat(
-        dt::kFontFamilyUi, nullptr, dt::kFontWeightNormal,
-        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        metrics.error_font_size, L"zh-CN", &format);
+    auto text = get_solid_brush(dt::d2d(dt::kColorComicErrorText));
+    auto format = get_text_format(
+        dt::kFontFamilyUi, metrics.error_font_size, dt::kFontWeightNormal,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, L"zh-CN");
     if (!format) return;
     format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -816,10 +889,7 @@ void Renderer::draw_comic_pages(
     if (plan.viewport.empty()) return;
 
     const D2D1_RECT_F viewport_rect = to_d2d_rect(plan.viewport);
-    ComPtr<ID2D1SolidColorBrush> background;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorCanvas),
-        &background);
+    auto background = get_solid_brush(dt::d2d(dt::kColorCanvas));
     if (background) {
         m_d2d_context->FillRectangle(&viewport_rect, background.Get());
     }
@@ -854,16 +924,14 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         &viewport, D2D1_ANTIALIAS_MODE_ALIASED);
 
     if (layout.scrollbar.visible) {
-        ComPtr<ID2D1SolidColorBrush> track_brush;
-        ComPtr<ID2D1SolidColorBrush> thumb_brush;
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorComicScrollbarTrack), &track_brush);
+        auto track_brush = get_solid_brush(
+            dt::d2d(dt::kColorComicScrollbarTrack));
         const D2D1_COLOR_F thumb_color = layout.scrollbar.dragging
             ? dt::d2d(dt::kColorComicScrollbarThumbActive)
             : layout.scrollbar.hovered
                 ? dt::d2d(dt::kColorComicScrollbarThumbHover)
                 : dt::d2d(dt::kColorComicScrollbarThumbIdle);
-        m_d2d_context->CreateSolidColorBrush(thumb_color, &thumb_brush);
+        auto thumb_brush = get_solid_brush(thumb_color);
         if (track_brush) {
             const D2D1_ROUNDED_RECT track = {
                 to_d2d_rect(layout.scrollbar.track),
@@ -890,19 +958,13 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         }
 
         const D2D1_RECT_F bounds = to_d2d_rect(overlay.bounds);
-        ComPtr<ID2D1SolidColorBrush> background;
-        ComPtr<ID2D1SolidColorBrush> border;
-        ComPtr<ID2D1SolidColorBrush> text;
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::with_alpha(dt::kColorComicOverlayBg, background_alpha)),
-            &background);
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorComicOverlayBorder), &border);
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorComicOverlayText), &text);
+        auto background = get_solid_brush(
+            dt::d2d(dt::with_alpha(dt::kColorComicOverlayBg, background_alpha)));
+        auto border = get_solid_brush(dt::d2d(dt::kColorComicOverlayBorder));
+        auto text = get_solid_brush(dt::d2d(dt::kColorComicOverlayText));
         const float radius = std::min(
             overlay.bounds.height() * 0.28f,
-            8.0f * layout.metrics.dpi_scale);
+            dt::kComicOverlayCornerRadiusMaxDip * layout.metrics.dpi_scale);
         const D2D1_ROUNDED_RECT rounded = {bounds, radius, radius};
         if (background) {
             m_d2d_context->FillRoundedRectangle(&rounded, background.Get());
@@ -914,11 +976,9 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         }
         if (!text) return;
 
-        ComPtr<IDWriteTextFormat> format;
-        m_dwrite_factory->CreateTextFormat(
-            dt::kFontFamilyUi, nullptr, dt::kFontWeightNormal,
-            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-            font_size, L"zh-CN", &format);
+        auto format = get_text_format(
+            dt::kFontFamilyUi, font_size, dt::kFontWeightNormal,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, L"zh-CN");
         if (!format) return;
         format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -960,16 +1020,11 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         const D2D1_ELLIPSE anchor_dot = {
             anchor, layout.metrics.autoscroll_anchor_radius,
             layout.metrics.autoscroll_anchor_radius};
-        ComPtr<ID2D1SolidColorBrush> zone;
-        ComPtr<ID2D1SolidColorBrush> ring;
-        ComPtr<ID2D1SolidColorBrush> arrow;
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorAutoscrollZone), &zone);
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorAutoscrollRing), &ring);
+        auto zone = get_solid_brush(dt::d2d(dt::kColorAutoscrollZone));
+        auto ring = get_solid_brush(dt::d2d(dt::kColorAutoscrollRing));
         const float arrow_alpha = 0.72f + 0.24f * layout.autoscroll.intensity;
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::with_alpha(dt::kColorAutoscrollArrow, arrow_alpha)), &arrow);
+        auto arrow = get_solid_brush(
+            dt::d2d(dt::with_alpha(dt::kColorAutoscrollArrow, arrow_alpha)));
         if (zone) {
             m_d2d_context->FillEllipse(&dead_zone, zone.Get());
             m_d2d_context->FillEllipse(&anchor_dot, zone.Get());
@@ -1023,20 +1078,15 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
     // Page-width drag slider (explicit mouse-direct width control).
     if (layout.width_slider.visible) {
         const ComicWidthSliderLayout& slider = layout.width_slider;
-        ComPtr<ID2D1SolidColorBrush> track;
-        ComPtr<ID2D1SolidColorBrush> thumb;
-        ComPtr<ID2D1SolidColorBrush> label;
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorWidthSliderTrack), &track);
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorWidthSliderThumb), &thumb);
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorTextDim), &label);
+        auto track = get_solid_brush(dt::d2d(dt::kColorWidthSliderTrack));
+        auto thumb = get_solid_brush(dt::d2d(dt::kColorWidthSliderThumb));
+        auto label = get_solid_brush(dt::d2d(dt::kColorTextDim));
+        const float slider_radius = dt::kComicWidthSliderTrackRadiusPx;
         m_d2d_context->FillRoundedRectangle(
             D2D1::RoundedRect(
                 D2D1::RectF(slider.track.left, slider.track.top,
                     slider.track.right, slider.track.bottom),
-                2.0f, 2.0f),
+                slider_radius, slider_radius),
             track.Get());
         const D2D1_ELLIPSE knob = {
             {slider.thumb_x, slider.thumb_y},
@@ -1059,9 +1109,7 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
         const float dpi_s = m_dpi_y / 96.0f;
         const float fs = dt::kFontSizeSmDip;
         const float tw2 = measure_text(text, fs * dpi_s);
-        ComPtr<ID2D1SolidColorBrush> cruise_br;
-        m_d2d_context->CreateSolidColorBrush(
-            dt::d2d(dt::kColorCruiseIndicator), &cruise_br);
+        auto cruise_br = get_solid_brush(dt::d2d(dt::kColorCruiseIndicator));
         const float th2 = label_height(text, tw2 + dt::kSpaceXsDip, fs, 1);
         draw_text_line(
             layout.viewport.right - layout.metrics.edge_margin
@@ -1076,11 +1124,10 @@ void Renderer::draw_comic_controls(const ComicControlsRenderInput& input) {
 
 void Renderer::draw_selection_border(D2D1_RECT_F rc, float alpha) {
     if (!m_d2d_context) return;
-    ComPtr<ID2D1SolidColorBrush> br;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::with_alpha(dt::kColorSelectionAccent, alpha)), &br);
+    auto br = get_solid_brush(
+        dt::d2d(dt::with_alpha(dt::kColorSelectionAccent, alpha)));
     float r = layout::kThumbCornerRadiusDip * m_dpi_y / 96.0f;
-    float sw = 2.0f * m_dpi_y / 96.0f;
+    float sw = dt::kSelectionBorderWidthDip * m_dpi_y / 96.0f;
     float outer_r = r + sw;
     D2D1_ROUNDED_RECT rr = {rc, outer_r, outer_r};
     m_d2d_context->DrawRoundedRectangle(&rr, br.Get(), sw);
@@ -1089,12 +1136,11 @@ void Renderer::draw_selection_border(D2D1_RECT_F rc, float alpha) {
 void Renderer::draw_label(float x, float y, float w, const std::wstring& text, float font_size,
     float cr, float cg, float cb) {
     if (!m_dwrite_factory || !m_d2d_context || text.empty()) return;
-    ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
-    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        fs, L"en-US", &tf);
-    tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    auto tf = get_text_format(dt::kFontFamilyUi, fs,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, L"en-US");
+    if (tf) tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
     float max_h = fs * 3.0f;
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
@@ -1104,19 +1150,17 @@ void Renderer::draw_label(float x, float y, float w, const std::wstring& text, f
     ComPtr<IDWriteInlineObject> ellipsis;
     m_dwrite_factory->CreateEllipsisTrimmingSign(tf.Get(), &ellipsis);
     layout->SetTrimming(&trim, ellipsis.Get());
-    ComPtr<ID2D1SolidColorBrush> br;
-    m_d2d_context->CreateSolidColorBrush(D2D1::ColorF(cr, cg, cb, 1.0f), &br);
+    auto br = get_solid_brush(D2D1::ColorF(cr, cg, cb, 1.0f));
     D2D1_POINT_2F pt = {x, y};
     m_d2d_context->DrawTextLayout(pt, layout.Get(), br.Get());
 }
 
 float Renderer::label_height(const std::wstring& text, float w, float font_size, int max_lines) {
     if (!m_dwrite_factory || text.empty()) return 0;
-    ComPtr<IDWriteTextFormat> tf;
     float fs = font_size * m_dpi_y / 96.0f;
-    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        fs, L"en-US", &tf);
+    auto tf = get_text_format(dt::kFontFamilyUi, fs,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, L"en-US");
     ComPtr<IDWriteTextLayout> layout;
     float max_h = (max_lines > 0) ? fs * 1.4f * max_lines : 1000.0f;
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
@@ -1157,19 +1201,16 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
     m_d2d_context->PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE_ALIASED);
 
     // Panel background (fixed, not scrolled)
-    ComPtr<ID2D1SolidColorBrush> bg;
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelBg), &bg);
+    auto bg = get_solid_brush(dt::d2d(dt::kColorPanelBg));
     D2D1_RECT_F rc = {x, y_off, x + w, y_off + h};
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
     // Divider line
-    ComPtr<ID2D1SolidColorBrush> line;
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelDivider), &line);
+    auto line = get_solid_brush(dt::d2d(dt::kColorPanelDivider));
     m_d2d_context->DrawLine({x, y_off}, {x, y_off + h}, line.Get(), 1.0f);
 
-    ComPtr<ID2D1SolidColorBrush> label_br, value_br;
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelLabel), &label_br);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelValue), &value_br);
+    auto label_br = get_solid_brush(dt::d2d(dt::kColorPanelLabel));
+    auto value_br = get_solid_brush(dt::d2d(dt::kColorPanelValue));
 
     float content_w = w - pad * 2;
 
@@ -1182,14 +1223,13 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
         float oy = y;
         D2D1_RECT_F dest = {ox, oy, ox + dw, oy + dh};
         {
-            float pr = 4.0f * dpi_s;
-            D2D1_ROUNDED_RECT prr = {{ox, oy, ox + dw, oy + dh}, pr, pr};
-            ComPtr<ID2D1RoundedRectangleGeometry> pgeo;
-            m_d2d_factory->CreateRoundedRectangleGeometry(&prr, &pgeo);
+            float pr = dt::kPanelPreviewCornerRadiusDip * dpi_s;
+            auto pgeo = get_rounded_geometry(dw, dh, pr);
             m_d2d_context->PushLayer(
                 D2D1::LayerParameters(D2D1::InfiniteRect(), pgeo.Get(),
                     D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                    D2D1::IdentityMatrix(), 1.0f, nullptr, D2D1_LAYER_OPTIONS_NONE),
+                    D2D1::Matrix3x2F::Translation(ox, oy), 1.0f, nullptr,
+                    D2D1_LAYER_OPTIONS_NONE),
                 nullptr);
             m_d2d_context->DrawBitmap(preview, &dest, 1.0f,
                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, nullptr);
@@ -1218,9 +1258,10 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                 float hw = std::min(vw + dt::kSpaceSmDip * dpi_s, val_w);
                 float hx = x + pad + lw + cgap - dt::kSpaceXsDip * dpi_s;
                 D2D1_RECT_F hr = {hx, y, hx + hw + dt::kSpaceXsDip * dpi_s, y2};
-                D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
-                ComPtr<ID2D1SolidColorBrush> sel_br;
-                m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSelection), &sel_br);
+                D2D1_ROUNDED_RECT hrr = {
+                    hr, dt::kPanelSelectionCornerRadiusDip * dpi_s,
+                    dt::kPanelSelectionCornerRadiusDip * dpi_s};
+                auto sel_br = get_solid_brush(dt::d2d(dt::kColorPanelSelection));
                 m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
                 draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), dt::kFontSizeXsDip, nullptr, 10);
             }
@@ -1233,14 +1274,12 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
         float title_pad = dt::kSpaceMdDip * dpi_s;
         y += title_pad;
         // Horizontal divider
-        ComPtr<ID2D1SolidColorBrush> div_br;
-        m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelDivider), &div_br);
+        auto div_br = get_solid_brush(dt::d2d(dt::kColorPanelDivider));
         m_d2d_context->DrawLine({x + pad, y}, {x + pad + content_w, y}, div_br.Get(), 1.0f);
         y += title_pad;
         // Section title
         {
-            ComPtr<ID2D1SolidColorBrush> title_br;
-            m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSectionTitle), &title_br);
+            auto title_br = get_solid_brush(dt::d2d(dt::kColorPanelSectionTitle));
             float ty = draw_text_line(x + pad, y, content_w, L"\u751F\u6210\u4FE1\u606F",
                                       title_br.Get(), dt::kFontSizeMdDip);
             y = ty + title_pad;
@@ -1264,9 +1303,10 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                     float hw = std::min(vw + dt::kSpaceSmDip * dpi_s, val_w);
                     float hx = x + pad + lw + cgap - dt::kSpaceXsDip * dpi_s;
                     D2D1_RECT_F hr = {hx, y, hx + hw + dt::kSpaceXsDip * dpi_s, y2};
-                    D2D1_ROUNDED_RECT hrr = {hr, 2.0f * dpi_s, 2.0f * dpi_s};
-                    ComPtr<ID2D1SolidColorBrush> sel_br;
-                    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorPanelSelection), &sel_br);
+                    D2D1_ROUNDED_RECT hrr = {
+                        hr, dt::kPanelSelectionCornerRadiusDip * dpi_s,
+                        dt::kPanelSelectionCornerRadiusDip * dpi_s};
+                    auto sel_br = get_solid_brush(dt::d2d(dt::kColorPanelSelection));
                     m_d2d_context->FillRoundedRectangle(&hrr, sel_br.Get());
                     draw_text_line(x + pad + lw + cgap, y, val_w, value, value_br.Get(), dt::kFontSizeXsDip, nullptr, 10);
                 }
@@ -1287,11 +1327,10 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
 
         if (constraints.maximum_text_width > 0.0f
             && constraints.maximum_text_height > 0.0f) {
-            ComPtr<IDWriteTextFormat> toast_format;
-            m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-                dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL, dt::kFontSizeSmDip * dpi_s, L"zh-CN",
-                &toast_format);
+            auto toast_format = get_text_format(dt::kFontFamilyUi,
+                dt::kFontSizeSmDip * dpi_s, dt::kFontWeightNormal,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                L"zh-CN");
             if (toast_format) {
                 toast_format->SetWordWrapping(
                     DWRITE_WORD_WRAPPING_EMERGENCY_BREAK);
@@ -1338,12 +1377,10 @@ float Renderer::draw_side_panel(float x, float y_off, float w, float h,
                         ? DWRITE_TEXT_ALIGNMENT_CENTER
                         : DWRITE_TEXT_ALIGNMENT_LEADING);
 
-                    ComPtr<ID2D1SolidColorBrush> toast_bg;
-                    ComPtr<ID2D1SolidColorBrush> toast_txt;
-                    m_d2d_context->CreateSolidColorBrush(
-                        dt::d2d(dt::kColorPanelToastBg), &toast_bg);
-                    m_d2d_context->CreateSolidColorBrush(
-                        dt::d2d(dt::kColorPanelToastText), &toast_txt);
+                    auto toast_bg = get_solid_brush(
+                        dt::d2d(dt::kColorPanelToastBg));
+                    auto toast_txt = get_solid_brush(
+                        dt::d2d(dt::kColorPanelToastText));
                     if (toast_bg && toast_txt) {
                         const D2D1_RECT_F bounds = {
                             layout.bounds.left, layout.bounds.top,
@@ -1386,22 +1423,22 @@ void Renderer::draw_scrollbar(float x, float y, float w, float h,
     if (!m_d2d_context || total <= 0 || view >= total) return;
 
     float ratio = view / total;
-    float thumb_h = std::max(28.0f, h * ratio);
+    float thumb_h = std::max(dt::kScrollbarMinThumbPx, h * ratio);
     float range = total - view;
     float pct = (range > 0) ? std::min(1.0f, pos / range) : 0.0f;
     float thumb_y = y + (h - thumb_h) * pct;
 
-    float inner_w  = active ? w - 2.0f : w - 6.0f;  // wider when active
+    float inner_w  = active
+        ? w - dt::kScrollbarActiveInsetPx
+        : w - dt::kScrollbarIdleInsetPx;  // wider when active
     float offset_x = (w - inner_w) / 2.0f;
 
-    ComPtr<ID2D1SolidColorBrush> thumb;
-    m_d2d_context->CreateSolidColorBrush(
+    auto thumb = get_solid_brush(
         dt::d2d(active ? dt::kColorScrollbarThumbActive
-                       : dt::kColorScrollbarThumbIdle),
-        &thumb);
+                       : dt::kColorScrollbarThumbIdle));
 
     D2D1_RECT_F tr = {x + offset_x, thumb_y, x + offset_x + inner_w, thumb_y + thumb_h};
-    float radius = inner_w * 0.4f;
+    float radius = inner_w * dt::kScrollbarThumbRadiusFraction;
     D2D1_ROUNDED_RECT rr = {tr, radius, radius};
     m_d2d_context->FillRoundedRectangle(&rr, thumb.Get());
 }
@@ -1516,15 +1553,13 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
 
         if (item.bitmap) {
             // Rounded-corner masked bitmap (same pattern as grid thumbnails).
-            D2D1_ROUNDED_RECT rr = {rc, radius, radius};
-            ComPtr<ID2D1RoundedRectangleGeometry> geo;
-            if (m_d2d_factory
-                && SUCCEEDED(m_d2d_factory->CreateRoundedRectangleGeometry(
-                    &rr, &geo))) {
+            auto geo = get_rounded_geometry(item.width, item.height, radius);
+            if (geo) {
                 m_d2d_context->PushLayer(
                     D2D1::LayerParameters(D2D1::InfiniteRect(), geo.Get(),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                        D2D1::IdentityMatrix(), 1.0f, nullptr,
+                        D2D1::Matrix3x2F::Translation(rc.left, rc.top),
+                        1.0f, nullptr,
                         D2D1_LAYER_OPTIONS_NONE),
                     nullptr);
                 m_d2d_context->DrawBitmap(item.bitmap, &rc, 1.0f,
@@ -1540,8 +1575,7 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
             if (std::max({fill.r, fill.g, fill.b}) < 0.18f)
                 fill = dt::d2d(dt::kColorPlaceholderMin);
             D2D1_ROUNDED_RECT rr = {rc, radius, radius};
-            ComPtr<ID2D1SolidColorBrush> brush;
-            m_d2d_context->CreateSolidColorBrush(fill, &brush);
+            auto brush = get_solid_brush(fill);
             m_d2d_context->FillRoundedRectangle(&rr, brush.Get());
         }
     }
@@ -1563,15 +1597,13 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
             x + item.left, y + item.top,
             x + item.left + item.width, y + item.top + item.height};
         if (item.bitmap) {
-            D2D1_ROUNDED_RECT rr = {rc, radius, radius};
-            ComPtr<ID2D1RoundedRectangleGeometry> geo;
-            if (m_d2d_factory
-                && SUCCEEDED(m_d2d_factory->CreateRoundedRectangleGeometry(
-                    &rr, &geo))) {
+            auto geo = get_rounded_geometry(item.width, item.height, radius);
+            if (geo) {
                 m_d2d_context->PushLayer(
                     D2D1::LayerParameters(D2D1::InfiniteRect(), geo.Get(),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                        D2D1::IdentityMatrix(), 1.0f, nullptr,
+                        D2D1::Matrix3x2F::Translation(rc.left, rc.top),
+                        1.0f, nullptr,
                         D2D1_LAYER_OPTIONS_NONE),
                     nullptr);
                 m_d2d_context->DrawBitmap(item.bitmap, &rc, 1.0f,
@@ -1586,8 +1618,7 @@ void Renderer::draw_filmstrip(float x, float y, float w, float h,
             if (std::max({fill.r, fill.g, fill.b}) < 0.18f)
                 fill = dt::d2d(dt::kColorPlaceholderMin);
             D2D1_ROUNDED_RECT rr = {rc, radius, radius};
-            ComPtr<ID2D1SolidColorBrush> brush;
-            m_d2d_context->CreateSolidColorBrush(fill, &brush);
+            auto brush = get_solid_brush(fill);
             m_d2d_context->FillRoundedRectangle(&rr, brush.Get());
         }
         if (border_alpha > 0.0f) {
@@ -1635,12 +1666,10 @@ void Renderer::draw_filmstrip_arrow(float cx, float cy, const wchar_t* glyph,
     float dpi_scale)
 {
     if (!m_d2d_context || !m_dwrite_factory) return;
-    ComPtr<IDWriteTextFormat> tf;
-    if (FAILED(m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-            dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, dt::kFontSizeMdDip * dpi_scale, L"en-US", &tf))) {
-        return;
-    }
+    auto tf = get_text_format(dt::kFontFamilyUi,
+        dt::kFontSizeMdDip * dpi_scale, dt::kFontWeightNormal,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, L"en-US");
+    if (!tf) return;
     tf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     ComPtr<IDWriteTextLayout> layout;
@@ -1649,9 +1678,7 @@ void Renderer::draw_filmstrip_arrow(float cx, float cy, const wchar_t* glyph,
             dt::kSpaceXlDip * dpi_scale, &layout))) {
         return;
     }
-    ComPtr<ID2D1SolidColorBrush> brush;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorFilmstripArrow), &brush);
+    auto brush = get_solid_brush(dt::d2d(dt::kColorFilmstripArrow));
     m_d2d_context->DrawTextLayout(
         D2D1::Point2F(cx - dt::kSpaceMdDip * dpi_scale,
             cy - dt::kSpaceMdDip * dpi_scale),
@@ -1667,10 +1694,9 @@ float Renderer::draw_text_line(float x, float y, float w,
     IDWriteTextFormat* fmt = m_text_format.Get();
     ComPtr<IDWriteTextFormat> sized_fmt;
     if (font_size > 0.0f && m_dwrite_factory) {
-        m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-            dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            font_size * m_dpi_y / 96.0f, L"en-US", &sized_fmt);
+        sized_fmt = get_text_format(dt::kFontFamilyUi,
+            font_size * m_dpi_y / 96.0f, dt::kFontWeightNormal,
+            DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, L"en-US");
         if (sized_fmt) fmt = sized_fmt.Get();
     }
 
@@ -1708,10 +1734,9 @@ float Renderer::draw_text_line(float x, float y, float w,
 
 float Renderer::measure_text(const std::wstring& text, float font_size) {
     if (!m_dwrite_factory) return 0;
-    ComPtr<IDWriteTextFormat> tf;
-    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        font_size, L"en-US", &tf);
+    auto tf = get_text_format(dt::kFontFamilyUi, font_size,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, L"en-US");
     ComPtr<IDWriteTextLayout> layout;
     m_dwrite_factory->CreateTextLayout(text.c_str(), static_cast<uint32_t>(text.size()),
         tf.Get(), 2000.0f, 30.0f, &layout);
@@ -1724,34 +1749,33 @@ void Renderer::draw_toolbar(float w, const std::vector<std::wstring>& items, int
     if (!m_d2d_context || !m_dwrite_factory) return;
 
     float h = dt::dip(dt::kSize28Dip, m_dpi_y);
-    ComPtr<ID2D1SolidColorBrush> bg, text_brush, hover_bg;
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarBg), &bg);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarText), &text_brush);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorToolbarHoverBg), &hover_bg);
+    auto bg = get_solid_brush(dt::d2d(dt::kColorToolbarBg));
+    auto text_brush = get_solid_brush(dt::d2d(dt::kColorToolbarText));
+    auto hover_bg = get_solid_brush(dt::d2d(dt::kColorToolbarHoverBg));
 
     D2D1_RECT_F rc = {0, y, w, y + h};
     m_d2d_context->FillRectangle(&rc, bg.Get());
 
-    ComPtr<IDWriteTextFormat> tf;
-    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        dt::dip(dt::kFontSizeLgDip, m_dpi_y), L"en-US", &tf);
+    auto tf = get_text_format(dt::kFontFamilyUi,
+        dt::dip(dt::kFontSizeLgDip, m_dpi_y), dt::kFontWeightNormal,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, L"en-US");
 
-    float x = 12.0f;
+    float x = dt::kToolbarPadXPx;
     for (int i = 0; i < static_cast<int>(items.size()); ++i) {
         ComPtr<IDWriteTextLayout> layout;
         m_dwrite_factory->CreateTextLayout(items[i].c_str(),
             static_cast<uint32_t>(items[i].size()), tf.Get(), 200.0f, 30.0f, &layout);
         DWRITE_TEXT_METRICS m;
         layout->GetMetrics(&m);
-        float iw = m.width + 24.0f;
+        float iw = m.width + 2.0f * dt::kToolbarPadXPx;
 
         if (i == active_idx) {
-            D2D1_RECT_F hr = {x, y + 2, x + iw, y + h - 2};
+            D2D1_RECT_F hr = {x, y + dt::kToolbarItemInsetYPx,
+                               x + iw, y + h - dt::kToolbarItemInsetYPx};
             m_d2d_context->FillRectangle(&hr, hover_bg.Get());
         }
 
-        D2D1_POINT_2F pt = {x + 12.0f, y + (h - m.height) / 2.0f};
+        D2D1_POINT_2F pt = {x + dt::kToolbarPadXPx, y + (h - m.height) / 2.0f};
         m_d2d_context->DrawTextLayout(pt, layout.Get(), text_brush.Get());
         x += iw;
     }
@@ -1770,27 +1794,23 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
     // ── No background — fully immersive, clip keeps content below ──
 
     // ── Brushes ──
-    ComPtr<ID2D1SolidColorBrush> title_br, menu_br, menu_hover_bg;
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorTitleText), &title_br);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorTitleMenuText), &menu_br);
-    m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorTitleMenuHoverBg), &menu_hover_bg);
+    auto title_br = get_solid_brush(dt::d2d(dt::kColorTitleText));
+    auto menu_br = get_solid_brush(dt::d2d(dt::kColorTitleMenuText));
+    auto menu_hover_bg = get_solid_brush(dt::d2d(dt::kColorTitleMenuHoverBg));
 
     // ── Title text (left) ──
-    ComPtr<IDWriteTextFormat> tf;
     float fs = layout::kTitleBarMenuFontSizeDip * dpi_s;
-    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-        dt::kFontWeightBold, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        fs, L"en-US", &tf);
+    auto tf = get_text_format(dt::kFontFamilyUi, fs, dt::kFontWeightBold,
+        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, L"en-US");
     tf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
     float title_w = layout::kTitleBarTitleWidthDip * dpi_s;
     D2D1_RECT_F trc = {pad, 0, pad + title_w, h};
     m_d2d_context->DrawText(L"MinView", 7, tf.Get(), &trc, title_br.Get());
 
     // ── Menu items (after title) ──
-    ComPtr<IDWriteTextFormat> mtf;
-    m_dwrite_factory->CreateTextFormat(dt::kFontFamilyUi, nullptr,
-        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-        fs, L"en-US", &mtf);
+    auto mtf = get_text_format(dt::kFontFamilyUi, fs,
+        dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, L"en-US");
     float mx = pad + title_w + layout::kTitleBarTitleGapDip * dpi_s;
     for (int i = 0; i < static_cast<int>(menu_items.size()); ++i) {
         ComPtr<IDWriteTextLayout> layout;
@@ -1802,10 +1822,16 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
 
         // Hover highlight
         if (i == active_menu) {
-            D2D1_RECT_F hr = {mx - dt::kSpaceXsDip * dpi_s, 2.0f * dpi_s,
-                              mx + mw - dt::kSpaceXsDip * dpi_s, h - 2.0f * dpi_s};
+            D2D1_RECT_F hr = {
+                mx - dt::kSpaceXsDip * dpi_s,
+                dt::kTitleBarMenuHoverInsetYDip * dpi_s,
+                mx + mw - dt::kSpaceXsDip * dpi_s,
+                h - dt::kTitleBarMenuHoverInsetYDip * dpi_s};
             m_d2d_context->FillRoundedRectangle(
-                D2D1::RoundedRect(hr, 4.0f * dpi_s, 4.0f * dpi_s), menu_hover_bg.Get());
+                D2D1::RoundedRect(
+                    hr, dt::kTitleBarMenuHoverRadiusDip * dpi_s,
+                    dt::kTitleBarMenuHoverRadiusDip * dpi_s),
+                menu_hover_bg.Get());
         }
 
         D2D1_POINT_2F pt = {mx + dt::kSpaceXsDip * dpi_s, (h - m.height) * 0.5f};
@@ -1819,24 +1845,19 @@ void Renderer::draw_title_bar(float w, int hover_btn, int press_btn,
         bool press = (press_btn == id);
         bool is_close = (id == 2);
         if (hover) {
-            ComPtr<ID2D1SolidColorBrush> bb;
             float a = press ? 0.7f : 0.35f;
-            m_d2d_context->CreateSolidColorBrush(
-                dt::d2d(dt::with_alpha(
-                    is_close ? dt::kColorWindowButtonCloseHover
-                             : dt::kColorWindowButtonHover,
-                    a)),
-                &bb);
+            auto bb = get_solid_brush(dt::d2d(dt::with_alpha(
+                is_close ? dt::kColorWindowButtonCloseHover
+                         : dt::kColorWindowButtonHover,
+                a)));
             D2D1_RECT_F br = {bx, 0, bx + btn_w, h};
             m_d2d_context->FillRectangle(&br, bb.Get());
         }
-        ComPtr<ID2D1SolidColorBrush> sb;
-        m_d2d_context->CreateSolidColorBrush(dt::d2d(dt::kColorWindowButtonSymbol), &sb);
-        ComPtr<IDWriteTextFormat> stf;
+        auto sb = get_solid_brush(dt::d2d(dt::kColorWindowButtonSymbol));
         float sfs = dt::kFontSizeXsDip * dpi_s;
-        m_dwrite_factory->CreateTextFormat(dt::kFontFamilySymbols, nullptr,
-            dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-            sfs, L"en-US", &stf);
+        auto stf = get_text_format(dt::kFontFamilySymbols, sfs,
+            dt::kFontWeightNormal, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, L"en-US");
         stf->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         stf->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         D2D1_RECT_F sr = {bx, 0, bx + btn_w, h};
@@ -1859,9 +1880,8 @@ void Renderer::draw_fade_overlay(float t, bool forward) {
     const float et = transition_ease(s);
     const float alpha = forward ? et : (1.0f - et);
     if (alpha <= 0.0f) return;
-    ComPtr<ID2D1SolidColorBrush> br;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::with_alpha(dt::kColorCanvas, std::clamp(alpha, 0.0f, 1.0f))), &br);
+    auto br = get_solid_brush(
+        dt::d2d(dt::with_alpha(dt::kColorCanvas, std::clamp(alpha, 0.0f, 1.0f))));
     D2D1_RECT_F rc = {0, 0, static_cast<float>(m_target_size.width),
                       static_cast<float>(m_target_size.height)};
     m_d2d_context->FillRectangle(&rc, br.Get());
@@ -1962,15 +1982,10 @@ void Renderer::draw_breadcrumb(const NavBreadcrumbRenderInput& input) {
     const float dpi_s = input.dpi_scale > 0.0f ? input.dpi_scale : m_dpi_y / 96.0f;
     const float fs = layout::kNavFontSizeDip;
 
-    ComPtr<ID2D1SolidColorBrush> text_br, hover_br, dim_br, line_br;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorTitleText), &text_br);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorBreadcrumbHover), &hover_br);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorTextDim), &dim_br);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorBreadcrumbLine), &line_br);
+    auto text_br = get_solid_brush(dt::d2d(dt::kColorTitleText));
+    auto hover_br = get_solid_brush(dt::d2d(dt::kColorBreadcrumbHover));
+    auto dim_br = get_solid_brush(dt::d2d(dt::kColorTextDim));
+    auto line_br = get_solid_brush(dt::d2d(dt::kColorBreadcrumbLine));
 
     for (int i = 0; i < static_cast<int>(input.layout->items.size()); ++i) {
         const auto& item = input.layout->items[i];
@@ -2003,28 +2018,16 @@ void Renderer::draw_nav_panel(const NavPanelRenderInput& input) {
     const float fs = layout::kNavFontSizeDip;
     const float small_fs = layout::kNavSmallFontSizeDip;
 
-    ComPtr<ID2D1SolidColorBrush> bg_br, line_br, text_br, dim_br,
-        bright_br, hover_bg, sel_bg, accent_br, badge_br, error_br;
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorToolbarBg), &bg_br);       // #1c1c21
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorNavLine), &line_br);     // #292931
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorTitleText), &text_br);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorNavDim), &dim_br);      // #80808c
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorNavBright), &bright_br);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorNavHoverBg), &hover_bg);    // #26262e
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorToolbarHoverBg), &sel_bg);      // #2e2e38
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorNavAccent), &accent_br);   // #4A90E2
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorNavBadge), &badge_br);
-    m_d2d_context->CreateSolidColorBrush(
-        dt::d2d(dt::kColorNavError), &error_br);    // #b08080
+    auto bg_br = get_solid_brush(dt::d2d(dt::kColorToolbarBg));       // #1c1c21
+    auto line_br = get_solid_brush(dt::d2d(dt::kColorNavLine));     // #292931
+    auto text_br = get_solid_brush(dt::d2d(dt::kColorTitleText));
+    auto dim_br = get_solid_brush(dt::d2d(dt::kColorNavDim));      // #80808c
+    auto bright_br = get_solid_brush(dt::d2d(dt::kColorNavBright));
+    auto hover_bg = get_solid_brush(dt::d2d(dt::kColorNavHoverBg));    // #26262e
+    auto sel_bg = get_solid_brush(dt::d2d(dt::kColorToolbarHoverBg));      // #2e2e38
+    auto accent_br = get_solid_brush(dt::d2d(dt::kColorNavAccent));   // #4A90E2
+    auto badge_br = get_solid_brush(dt::d2d(dt::kColorNavBadge));
+    auto error_br = get_solid_brush(dt::d2d(dt::kColorNavError));    // #b08080
 
     // Panel background + right edge
     m_d2d_context->FillRectangle(

@@ -72,7 +72,37 @@ MV_DT_DIP(kSize96Dip,  96.0f);
 MV_DT_DIP(kSize240Dip, 240.0f);
 MV_DT_DIP(kSize480Dip, 480.0f);
 
+// ── Component visual constants (Stage 2 renderer hardening) ──
+// Values are DIP unless the name says otherwise; all migrated from
+// renderer.cpp magic numbers without changing the pixel values.
+MV_DT_DIP(kStatusMessageMaxWidthDip,    520.0f);
+MV_DT_DIP(kStatusMessageCornerRadiusDip,  6.0f);
+MV_DT_DIP(kInfoCardMaxWidthDip,         600.0f);
+MV_DT_DIP(kInfoCardCornerRadiusDip,       8.0f);
+MV_DT_DIP(kTitleBarMenuHoverRadiusDip,    4.0f);
+MV_DT_DIP(kTitleBarMenuHoverInsetYDip,    2.0f);
+MV_DT_DIP(kSelectionBorderWidthDip,       2.0f);
+MV_DT_DIP(kPanelPreviewCornerRadiusDip,   4.0f);
+MV_DT_DIP(kPanelSelectionCornerRadiusDip, 2.0f);
+MV_DT_DIP(kComicOverlayCornerRadiusMaxDip, 8.0f);
+
 #undef MV_DT_DIP
+
+// Physical-pixel component constants from renderer.cpp. These were already
+// used as raw physical px by the renderer (not DPI-scaled), so they keep
+// their exact values and the _Px suffix to prevent accidental DPI scaling.
+#define MV_DT_PX(name, value)                                       \
+    inline constexpr float name = (value);                          \
+    static_assert(name == (value), "design token value changed: " #name)
+
+MV_DT_PX(kToolbarPadXPx,               12.0f);
+MV_DT_PX(kToolbarItemInsetYPx,          2.0f);
+MV_DT_PX(kScrollbarMinThumbPx,         28.0f);
+MV_DT_PX(kScrollbarActiveInsetPx,       2.0f);
+MV_DT_PX(kScrollbarIdleInsetPx,         6.0f);
+MV_DT_PX(kComicWidthSliderTrackRadiusPx, 2.0f);
+
+#undef MV_DT_PX
 
 // ── Phase 4: layout geometry tokens (merged from layout.h) ──
 // Values that already exist as Phase 2 kSpace/kSize/font tokens are reused
@@ -241,6 +271,9 @@ MV_DT_VALUE(kDurationImageDebounceMs, 250);
 MV_DT_VALUE(kDurationScrollPauseMs, 80);
 MV_DT_VALUE(kDurationRenderRetryMs, 120);
 MV_DT_VALUE(kAnimationFrameMs, 16);                // WM_TIMER safety net
+MV_DT_VALUE(kScrollbarThumbRadiusFraction, 0.4f);
+MV_DT_VALUE(kFavouriteBadgeRadiusFraction, 0.3f);
+MV_DT_VALUE(kFavouriteBadgeGlyphSizeFraction, 0.55f);
 
 #undef MV_DT_VALUE
 

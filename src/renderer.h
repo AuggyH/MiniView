@@ -139,6 +139,12 @@ public:
     ID2D1Bitmap1* image_bitmap() const { return m_image_bitmap.Get(); }
     ID2D1Bitmap1* placeholder_bitmap() const { return m_placeholder_bitmap.Get(); }
 
+    // Test seam for device-loss recovery verification: release all
+    // device-scoped resources exactly like a real device-loss path.
+    void discard_device_resources_for_testing() {
+        discard_device_resources();
+    }
+
     bool is_valid() const { return m_d2d_context != nullptr; }
     uint64_t device_generation() const { return m_device_generation; }
 
@@ -156,7 +162,45 @@ private:
     void draw_filmstrip_arrow(float cx, float cy, const wchar_t* glyph,
         float dpi_scale);
 
+    // ── Device-scoped render resource caches ──────────────────
+    // Solid brushes, text formats, and rounded-rectangle geometries were
+    // created per frame/per item. They are immutable once configured (the
+    // text-format helper resets the few mutable layout fields before it
+    // returns), so caching them is pixel-identical while removing the
+    // per-frame D2D allocation churn.
+    ComPtr<ID2D1SolidColorBrush> get_solid_brush(const D2D1_COLOR_F& color);
+    ComPtr<IDWriteTextFormat> get_text_format(
+        const wchar_t* family, float size,
+        DWRITE_FONT_WEIGHT weight, DWRITE_FONT_STYLE style,
+        DWRITE_FONT_STRETCH stretch, const wchar_t* locale);
+    ComPtr<ID2D1RoundedRectangleGeometry> get_rounded_geometry(
+        float width, float height, float radius);
+
+    struct SolidBrushCacheEntry {
+        D2D1_COLOR_F color{};
+        ComPtr<ID2D1SolidColorBrush> brush;
+    };
+    struct TextFormatCacheEntry {
+        std::wstring family;
+        float size = 0.0f;
+        DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+        DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
+        DWRITE_FONT_STRETCH stretch = DWRITE_FONT_STRETCH_NORMAL;
+        std::wstring locale;
+        ComPtr<IDWriteTextFormat> format;
+    };
+    struct RoundedGeometryCacheEntry {
+        float width = 0.0f;
+        float height = 0.0f;
+        float radius = 0.0f;
+        ComPtr<ID2D1RoundedRectangleGeometry> geometry;
+    };
+
     HWND m_hwnd = nullptr;
+
+    std::vector<SolidBrushCacheEntry>      m_solid_brushes;
+    std::vector<TextFormatCacheEntry>      m_text_formats;
+    std::vector<RoundedGeometryCacheEntry> m_rounded_geometries;
 
     ComPtr<ID3D11Device>           m_d3d_device;
     ComPtr<ID3D11DeviceContext>    m_d3d_context;
