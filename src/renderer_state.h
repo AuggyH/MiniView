@@ -36,22 +36,40 @@ inline bool renderer_generation_changed(uint64_t cached, uint64_t current) {
     return cached != current;
 }
 
-// Quartic ease-out E(s) = 1 - (1-s)^4 — measured from macOS Quick Look
-// screen recordings (60fps frame analysis, 2026-08-16): open progress fits
-// this curve best with ~250ms total. Used by the grid->image ENTRY
-// (the filmstrip handoff uses the same interpolator).
+// Entry geometry, Quick Look-copied rhythm: reach ~90% size in the first
+// 32% of the run, then settle to 100% with a quartic ease-out tail.
+// The image stays fully opaque throughout.
 inline float transition_ease(float t) {
     const float s = std::clamp(t, 0.0f, 1.0f);
-    const float u = 1.0f - s;
-    return 1.0f - u * u * u * u;
+    const float fast_end = dt::kTransitionEntryFastFraction;
+    if (s < fast_end) {
+        return dt::kTransitionEntryFastReach * (s / fast_end);
+    }
+    const float u = (s - fast_end) / (1.0f - fast_end);
+    const float tail = 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u) * (1.0f - u);
+    return dt::kTransitionEntryFastReach
+        + (1.0f - dt::kTransitionEntryFastReach) * tail;
 }
 
-// Symmetric ease-in-out (smoothstep) for the image->grid EXIT geometry:
-// the image stays fully opaque and shrinks with visible motion through the
-// middle, landing softly in the cell (E(0.25)=0.156, E(0.5)=0.5).
+// Exit geometry, Quick Look-copied rhythm: hold the fitted rect for the
+// first 60% (background veil reveals the grid), then collapse into the
+// cell over the final 40% with a quartic ease-out. Fully opaque.
 inline float transition_ease_exit(float t) {
     const float s = std::clamp(t, 0.0f, 1.0f);
-    return s * s * (3.0f - 2.0f * s);
+    const float hold_end = dt::kTransitionExitHoldFraction;
+    if (s < hold_end) return 0.0f;
+    const float u = (s - hold_end) / (1.0f - hold_end);
+    const float one_minus = 1.0f - u;
+    return 1.0f - one_minus * one_minus * one_minus * one_minus;
+}
+
+// Exit veil: symmetric ease-in-out over the hold phase, fully revealing
+// the grid exactly when the image starts collapsing.
+inline float transition_veil_exit(float t) {
+    const float s = std::clamp(t, 0.0f, 1.0f);
+    const float hold_end = dt::kTransitionExitHoldFraction;
+    const float u = std::clamp(s / hold_end, 0.0f, 1.0f);
+    return u * u * (3.0f - 2.0f * u);
 }
 
 struct ComicRenderRect {

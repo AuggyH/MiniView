@@ -4703,13 +4703,11 @@ void App::reverse_transition() {
     m_window.invalidate();
 }
 
-// Draws the transition overlay for the current composition. The entry
-// (forward) layers a grid snapshot, the solid background veil fading in,
-// the full image growing inside the interpolated rect, and the zooming
-// thumbnail. The exit shrinks the fully opaque image from the fitted rect
-// into the cell with symmetric ease-in-out while the veil reveals the grid
-// underneath. A reversed run rewinds the same composition via p, so both
-// render paths (image and grid) share this exact geometry.
+// Draws the transition overlay for the current composition. Entry: reach
+// ~90% size fast, then settle to 100% (opaque, Quick Look rhythm). Exit:
+// keep the fitted rect fully opaque for the first 60% while the veil
+// reveals the grid, then collapse into the cell over the final 40%.
+// A reversed run rewinds the same composition via p.
 void App::draw_transition_overlay() {
     if (!m_animating) return;
     const float p = m_anim_reversed ? (1.0f - m_anim_t) : m_anim_t;

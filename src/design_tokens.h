@@ -263,6 +263,9 @@ MV_DT_GDI_COLOR(kColorFallbackTextGdi,     128, 128, 128);
     static_assert(name == (value), "design token value changed: " #name)
 
 MV_DT_VALUE(kDurationTransitionSec, 0.25f);        // grid <-> image transition (Quick Look 实测 233-267ms)
+MV_DT_VALUE(kTransitionEntryFastFraction, 0.32f);  // 打开: 前 32% 时间冲到 90% 尺寸
+MV_DT_VALUE(kTransitionEntryFastReach, 0.90f);     // 打开: 快速阶段终点尺寸
+MV_DT_VALUE(kTransitionExitHoldFraction, 0.60f);   // 关闭: 前 60% 保持全尺寸, 背景揭示网格
 MV_DT_VALUE(kDurationFilmstripHandoffSec, 0.30f);  // filmstrip slot handoff
 MV_DT_VALUE(kDurationFilmstripHideSec, 3.0f);      // 静止 3s 自动收起
 MV_DT_VALUE(kDurationFilmstripRevealSec, 0.25f);   // 鼠标移动升起/收起动画
