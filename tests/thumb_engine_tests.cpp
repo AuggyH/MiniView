@@ -261,6 +261,12 @@ void test_path_snapshot_reuse() {
         "worker must decode the snapshot path (width)");
     expect(engine.orig_height(0) == 6,
         "worker must decode the snapshot path (height)");
+    {
+        std::lock_guard lock(engine.pool()->mutex);
+        const auto color = engine.pool()->thumbs[0].dominant_color;
+        expect(color.b > color.r && color.b > color.g,
+            "worker must extract the snapshot's dominant blue color");
+    }
 
     engine.stop();
     expect(!engine.running(), "stop() must clear the running flag");

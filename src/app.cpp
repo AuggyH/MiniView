@@ -5257,15 +5257,16 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
 
     float dpi_scale = static_cast<float>(GetDpiForWindow(m_window.handle())) / 96.0f;
     int effective_cell = std::max(1, static_cast<int>(m_thumb_cell * m_thumb_zoom));
-    // 尺寸未齐之前使用方形骨架布局(行高/列宽固定), 避免 justified 在
-    // 维度逐项到达时对已可见行产生垂直+水平双向漂移; 全部尺寸就绪后
-    // 一次性切换到用户布局(方形或 justified)。
-    bool all_dims_ready = true;
-    for (const auto& dim : m_grid_dims) {
-        if (dim.first == 0 || dim.second == 0) {
-            all_dims_ready = false;
-            break;
-        }
+    // 历史修复(5e93d5e)的方案: 首帧布局时对缺尺寸的项同步 probe 真实宽高,
+    // 让骨架屏从第一帧就按真实比例布局, 后续缩略图到达不再引起漂移。
+    // 后台维度预读作为加速仍然保留, 这里只补漏。
+    for (int i = 0; i < total; ++i) {
+        if (m_grid_dims[static_cast<size_t>(i)].first != 0) continue;
+        try {
+            if (auto info = m_decoder.probe(m_index.path_at(i))) {
+                m_grid_dims[static_cast<size_t>(i)] = {info->width, info->height};
+            }
+        } catch (...) {}
     }
     GridLayoutInput input;
     input.item_count = total;
@@ -5274,7 +5275,7 @@ void App::rebuild_grid_layout(int grid_area_width, GridRebuildReason reason) {
     input.gap_h = m_thumb_gap_h;
     input.gap_v = m_thumb_gap_v;
     input.pad = m_thumb_pad;
-    input.square = all_dims_ready ? m_thumb_square : true;
+    input.square = m_thumb_square;
     input.show_labels = m_show_labels;
     input.dpi_scale = dpi_scale;
     input.dims = m_grid_dims;
