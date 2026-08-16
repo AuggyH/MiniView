@@ -1226,6 +1226,21 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
 
+        // 在胶片条悬停带内滚动时, 立即唤起/保持胶片条, 再进入滑动逻辑;
+        // 避免"先滚了, 之后才慢慢升起"的滞后感。
+        if (filmstrip_showable() && !m_animating) {
+            const float dpi_s =
+                static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+            const float zone_h = layout::kFilmstripHoverZoneDip * dpi_s;
+            const int target_h = static_cast<int>(m_renderer.target_size().height);
+            if (wheel_pt.y >= target_h - static_cast<int>(zone_h)) {
+                if (!m_filmstrip_revealed) {
+                    reveal_filmstrip();
+                }
+                note_filmstrip_interaction();
+            }
+        }
+
         // Shift+wheel: horizontal filmstrip scroll while hovering the strip;
         // no-op elsewhere in large-image mode (NAVIGATION_DESIGN 2.1.3).
         // The plain wheel below keeps its existing semantics untouched.
