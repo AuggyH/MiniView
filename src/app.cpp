@@ -1533,8 +1533,10 @@ LRESULT App::handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         // Filmstrip: any mouse movement in large-image mode (windowed AND
         // fullscreen) raises the strip from the bottom (animated); 3s of
-        // stillness auto-hides it.
-        if (filmstrip_showable()) {
+        // stillness auto-hides it. Ignore motion while the grid->image
+        // transition is running — the post-transition auto-rise owns that
+        // window, so the reveal animation is never consumed invisibly.
+        if (!m_animating && filmstrip_showable()) {
             if (!m_filmstrip_revealed && !m_filmstrip_reveal_animating) {
                 reveal_filmstrip();
                 m_window.invalidate();
@@ -4287,6 +4289,12 @@ void App::advance_transition_animation() {
             KillTimer(m_window.handle(), 4);
             m_anim_timer = 0;
         }
+        // 进入大图模式: 转场完成后胶片条自动从底部升起(曲线/时长同转场);
+        // 3s 静止后按反向动画收起。转场期间不消费这次升起, 避免"闪现/卡住"。
+        if (m_anim_forward && !m_grid_mode && filmstrip_showable()) {
+            reveal_filmstrip();
+            m_window.invalidate();
+        }
     } else {
         // Keep frames flowing until the transition finishes.
         m_window.invalidate();
@@ -4695,7 +4703,7 @@ void App::update_filmstrip_reveal() {
 }
 
 void App::reveal_filmstrip() {
-    if (!filmstrip_showable()) return;
+    if (m_animating || !filmstrip_showable()) return;
     cancel_filmstrip_hide();
     m_filmstrip_reveal_forward = true;
     // Flip the raw clock so the current visual position continues smoothly.
