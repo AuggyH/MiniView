@@ -60,3 +60,24 @@ jobs:
           path: build/Release/MinView.exe
           if-no-files-found: error
           retention-days: 7
+
+  debug-build-and-test:
+    name: Windows / debug-build-and-test
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 配置 Debug 构建
+        run: >-
+          cmake -S . -B build -A x64
+          -DBUILD_TESTING=ON
+          -DMINVIEW_WARNINGS_AS_ERRORS=ON
+          -DCMAKE_BUILD_TYPE=Debug
+
+      - name: 编译 Debug
+        run: cmake --build build --config Debug -- /m
+
+      - name: 运行 Debug 自动化测试
+        run: ctest --test-dir build -C Debug --output-on-failure

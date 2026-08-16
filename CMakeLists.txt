@@ -145,6 +145,22 @@ if(BUILD_TESTING)
     target_link_libraries(decoder_tests PRIVATE windowscodecs ole32)
     add_test(NAME decoder.unit COMMAND decoder_tests)
 
+    mv_add_unit_test(pipeline_tests
+        tests/pipeline_tests.cpp
+        src/indexer.cpp
+        src/decoder.cpp
+    )
+    target_compile_definitions(pipeline_tests PRIVATE
+        MINVIEW_SOURCE_DIR=L"${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(pipeline_tests PRIVATE
+        windowscodecs
+        ole32
+        shlwapi
+        shell32
+    )
+    add_test(NAME pipeline.integration COMMAND pipeline_tests)
+
     mv_add_unit_test(metadata_tests
         tests/metadata_tests.cpp
         src/metadata.cpp
